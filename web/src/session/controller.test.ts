@@ -610,6 +610,15 @@ describe('RoundController two phase start', () => {
     expect(track.stop).toHaveBeenCalled();
   });
 
+  it('dispose_frees_the_preloaded_room', async () => {
+    const h = harness();
+    h.xr.preload = vi.fn(async () => {});
+    h.xr.dispose = vi.fn();
+    await h.ctl.prepare({ kind: 'new', req: h.req });
+    await h.ctl.dispose();
+    expect(h.xr.dispose).toHaveBeenCalledTimes(1);
+  });
+
   it('prepare_twice_is_refused', async () => {
     const h = harness();
     await h.ctl.prepare({ kind: 'new', req: h.req });

@@ -491,6 +491,7 @@ export class RoundController {
     this.releaseMic();
     await this.panel?.stopAll();
     this.socket?.close();
+    this.deps.xr.dispose?.();
   }
 
   // ---------- wiring ----------
