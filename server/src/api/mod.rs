@@ -1,6 +1,7 @@
 //! REST API (docs/protocol.md, REST).
 
 pub mod content;
+pub mod diag;
 pub mod llm_gate;
 pub mod me;
 pub mod report;
@@ -37,4 +38,5 @@ pub fn routes(state: &AppState) -> Router<AppState> {
     Router::new()
         .route("/api/content/catalog", get(content::catalog))
         .merge(with_identity)
+        .merge(diag::routes(state))
 }
