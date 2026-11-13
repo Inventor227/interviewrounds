@@ -108,6 +108,9 @@ export class Sheet {
       widthCm: SHEET.w,
       heightCm: SHEET.h,
       kit: null,
+      // The kit's fixed parts (lanes, agenda, slots) are part of the board texture; the tray and
+      // bin are their own meshes, and the code panel stands on its own.
+      decor: this.kit,
       layerFactory: (w, h) => this.makeCanvas(w, h),
     });
     this.texture = canvasTexture(canvas, true);
@@ -149,12 +152,13 @@ export class Sheet {
 
   /** Call every frame; uploads only what changed. */
   update(board: Board, st: SheetState): void {
-    const overlays = st.overlays ?? [];
+    // Gestures on the code panel are drawn by the panel, not on the sheet.
+    const overlays = (st.overlays ?? []).filter((o) => !(o.kind === 'kit' && o.draw.surface === 'panel'));
     if (this.view.draw(board, { highlight: null, overlays, drawLive: false })) {
       this.texture.needsUpdate = true;
       this.stats.boardUploads += 1;
     }
-    this.bin.setHot(overlays.some((o) => (o.kind === 'drag' || o.kind === 'tray') && o.overBin));
+    this.bin.setHot((st.overlays ?? []).some((o) => ((o.kind === 'drag' || o.kind === 'tray') && o.overBin) || (o.kind === 'kit' && o.draw.overBin === true)));
     this.drawGesture(board, overlays, st.rings ?? []);
     this.placeShadows(st.pointers ?? []);
     this.placeHovers(board, st.hovers ?? [], overlays);

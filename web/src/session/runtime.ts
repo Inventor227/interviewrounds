@@ -134,6 +134,10 @@ export function createRoundRuntime({ preview }: RuntimeOptions): RoundController
 
   // ---------- the room socket: board sync and pointing ----------
 
+  // Round time as the server counts it (no pauses), carried forward locally between snapshots.
+  let clock = { elapsed: 0, at: 0, running: false };
+  const roundClock = () => clock.elapsed + (clock.running ? (performance.now() - clock.at) / 1000 : 0);
+
   const wireSocket = () => {
     if (!socket) return;
     if (store && !sync) {
@@ -141,6 +145,9 @@ export function createRoundRuntime({ preview }: RuntimeOptions): RoundController
       cleanups.push(() => sync?.dispose());
     }
     cleanups.push(
+      socket.on('round.state', (d) => {
+        clock = { elapsed: d.elapsed_s, at: performance.now(), running: d.status === 'live' };
+      }),
       socket.on('avatar.point_at', (d) => {
         const item = store?.board.items.find((i) => i.id === d.item_id);
         if (!item || !sheetToWorld || !('x' in item)) return;
@@ -170,22 +177,27 @@ export function createRoundRuntime({ preview }: RuntimeOptions): RoundController
   }
 
   async function loadBoard(a: XRApp, res: CreateSessionRes): Promise<void> {
-    const [{ createBoardXR }, { BoardStore }, { emptyBoard }, { HLD_KIT }, { sheetToWorld: toWorld }] = await Promise.all([
+    const kitName = res.round.board_kit;
+    if (!kitName) return;
+    const [{ createBoardXR }, { BoardStore }, { emptyBoard }, { sheetToWorld: toWorld }] = await Promise.all([
       import('../board/boardXR'),
       import('../board/ops'),
       import('../board/model'),
-      import('../board/kits'),
       import('../board/sheetMath'),
     ]);
     if (disposed) return;
-    // The same empty board the server starts the round with.
-    const s = new BoardStore(emptyBoard({ id: res.session_id, kit: 'hld' }));
+    // The same empty board the server starts the round with: the kit, plus an empty code or meeting section.
+    const start = emptyBoard({ id: res.session_id, kit: kitName });
+    if (kitName === 'coding') start.code = { language: 'python', lines: [], approach: [], complexity: { time: null, space: null }, trace: [] };
+    if (kitName === 'meeting') start.meeting = { agenda: [], shown: [], parked: [] };
+    const s = new BoardStore(start);
     store = s;
     if (preview) relay = new RelayPointer();
     board = createBoardXR(a, {
       store: s,
       dominantHand: settings?.dominant_hand ?? 'right',
-      kit: HLD_KIT,
+      // The kit follows the board's round type; the round clock stamps traces and agenda ticks.
+      now_s: roundClock,
       send: (op) => {
         sync?.send(op);
         active();
@@ -317,7 +329,7 @@ export function createRoundRuntime({ preview }: RuntimeOptions): RoundController
         a.sounds.setVolume(settings.sfx_volume);
       }
 
-      const hasBoard = res.round.board_kit === 'hld';
+      const hasBoard = !!res.round.board_kit;
       a.room.setWallboardVisible(hasBoard);
 
       // Seats follow the desk; people follow the seats. The paper placeholder gives way to the

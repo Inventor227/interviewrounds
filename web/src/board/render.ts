@@ -5,8 +5,8 @@
 import type { Board, BoardEdge, BoardItem, ComponentType, GhostOp } from '../shared/types';
 import type { Overlay } from './input';
 import type { GhostRing } from './ghosts';
-import type { Kit } from './kits';
-import { center, COMPONENT_NAMES, edgeMid, findItem, hasTab, itemRect, tabCenter, type Pt, type Rect } from './model';
+import type { Kit, TrayMake } from './kits';
+import { center, classLayout, COMPONENT_NAMES, edgeMid, findItem, hasTab, itemRect, tabCenter, type Pt, type Rect } from './model';
 
 export const ACCENT = '#1F4E79';
 const PAPER = '#FAF8F3';
@@ -58,6 +58,8 @@ export interface RenderView {
    * tab); 'mouse' draws them smaller. Hit areas are hand sized either way.
    */
   targets?: 'hand' | 'mouse';
+  /** The kit whose fixed parts (lanes, ladder, agenda, slots) are drawn under the items. */
+  kit?: Kit | null;
 }
 
 const TARGET_SIZES = {
@@ -69,7 +71,7 @@ type Ctx = CanvasRenderingContext2D;
 
 // ---------- small drawing helpers (all in pixels) ----------
 
-function roundRect(ctx: Ctx, x: number, y: number, w: number, h: number, r: number): void {
+export function roundRect(ctx: Ctx, x: number, y: number, w: number, h: number, r: number): void {
   const rr = Math.max(0, Math.min(r, w / 2, h / 2));
   ctx.beginPath();
   ctx.moveTo(x + rr, y);
@@ -80,11 +82,14 @@ function roundRect(ctx: Ctx, x: number, y: number, w: number, h: number, r: numb
   ctx.closePath();
 }
 
-const font = (px: number, weight = 400, style = '') => `${style ? style + ' ' : ''}${weight} ${Math.max(1, Math.round(px * 10) / 10)}px ${FONT}`;
+export const font = (px: number, weight = 400, style = '') => `${style ? style + ' ' : ''}${weight} ${Math.max(1, Math.round(px * 10) / 10)}px ${FONT}`;
 
 const wrapCache = new Map<string, string[]>();
 /** Bumped when web fonts finish loading: text measured with a fallback font is stale. */
 let fontEpoch = 0;
+
+/** Changes when web fonts finish loading (surfaces that cache their own canvas repaint then). */
+export const fontsEpoch = (): number => fontEpoch;
 
 /** Forget text measured so far and make BoardViews repaint (fonts changed). */
 export function onFontsChanged(): void {
@@ -129,14 +134,14 @@ function wrapUncached(ctx: Ctx, text: string, maxW: number, maxLines: number): s
   return lines.map((l) => (ctx.measureText(l).width > maxW ? ellipsize(ctx, l, maxW) : l));
 }
 
-function ellipsize(ctx: Ctx, text: string, maxW: number): string {
+export function ellipsize(ctx: Ctx, text: string, maxW: number): string {
   if (ctx.measureText(text).width <= maxW) return text;
   let s = text;
   while (s.length > 1 && ctx.measureText(`${s}…`).width > maxW) s = s.slice(0, -1);
   return `${s.trimEnd()}…`;
 }
 
-function withAlpha(hex: string, a: number): string {
+export function withAlpha(hex: string, a: number): string {
   const n = parseInt(hex.slice(1), 16);
   return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${a})`;
 }
@@ -420,25 +425,33 @@ function drawComponent(p: Pen, it: Extract<BoardItem, { kind: 'component' }>, li
   }
 }
 
+export const REL_WORDS: Record<string, string> = { uses: 'uses', has_a: 'has a', is_a: 'is a', implements: 'implements' };
+
+/** One member as written on a class card: `- levels: List<Level>`, `+ park(v: Vehicle): Ticket`. */
+export function memberText(m: Extract<BoardItem, { kind: 'class' }>['fields'][number], method: boolean): string {
+  if (method) {
+    const params = (m.params ?? []).map((q) => (q.type ? `${q.name}: ${q.type}` : q.name)).join(', ');
+    return `${m.vis} ${m.name}(${params})${m.returns ? `: ${m.returns}` : ''}`;
+  }
+  return `${m.vis} ${m.name}${m.type ? `: ${m.type}` : ''}`;
+}
+
 function drawClass(p: Pen, it: Extract<BoardItem, { kind: 'class' }>, lifted: boolean): void {
   const { ctx, k } = p;
   const r = itemRect(it);
-  cardBody(p, r, { lifted, radius: 0.4 });
-  const pad = 0.45;
-  let y = r.y + pad;
-  ctx.textAlign = 'center';
-  ctx.fillStyle = MUTED;
-  if (it.class_kind !== 'class') {
-    ctx.font = font(0.5 * k, 500, 'italic');
-    y += 0.5;
-    ctx.fillText(`«${it.class_kind}»`, (r.x + r.w / 2) * k, y * k);
-  }
-  ctx.font = font(LABEL_CM * k, 650, it.class_kind === 'abstract' ? 'italic' : '');
-  ctx.fillStyle = TEXT;
-  y += LABEL_CM;
-  ctx.fillText(ellipsize(ctx, it.label ?? 'Unnamed', (r.w - 2 * pad) * k), (r.x + r.w / 2) * k, y * k);
+  const lay = classLayout(it);
+  cardBody(p, r, { lifted, radius: 0.4, fill: it.class_kind === 'interface' ? '#F6F8FB' : undefined });
+  const pad = 0.5;
+  // Header: kind badge, then the name.
   ctx.textAlign = 'left';
-  ctx.font = font(0.55 * k, 450);
+  if (it.class_kind !== 'class') {
+    ctx.font = font(0.5 * k, 600);
+    ctx.fillStyle = MUTED;
+    ctx.fillText(it.class_kind.toUpperCase(), (r.x + pad) * k, (r.y + 0.95) * k);
+  }
+  ctx.font = font(0.85 * k, 700, it.class_kind === 'abstract' ? 'italic' : '');
+  ctx.fillStyle = it.label ? TEXT : MUTED;
+  ctx.fillText(ellipsize(ctx, it.label ?? 'Unnamed class', (r.w - 2 * pad) * k), (r.x + pad) * k, (r.y + (it.class_kind !== 'class' ? 2.05 : 1.75)) * k);
   const rule = (yy: number) => {
     ctx.beginPath();
     ctx.moveTo(r.x * k, yy * k);
@@ -447,20 +460,17 @@ function drawClass(p: Pen, it: Extract<BoardItem, { kind: 'class' }>, lifted: bo
     ctx.lineWidth = Math.max(1, 0.04 * k);
     ctx.stroke();
   };
-  y += 0.45;
-  for (const section of [it.fields, it.methods]) {
-    rule(y);
-    y += 0.25;
-    for (const m of section) {
-      y += 0.72;
-      if (y > r.y + r.h - 0.2) break;
-      const params = m.params ? `(${m.params.map((q) => (q.type ? `${q.name}: ${q.type}` : q.name)).join(', ')})` : '';
-      const ty = m.params ? m.returns : m.type;
-      ctx.fillStyle = TEXT;
-      ctx.fillText(ellipsize(ctx, `${m.vis} ${m.name}${params}${ty ? `: ${ty}` : ''}`, (r.w - 2 * pad) * k), (r.x + pad) * k, y * k);
-    }
-    y += 0.3;
+  rule(lay.fieldsTop - 0.15);
+  rule(lay.methodsTop - 0.3);
+  ctx.font = font(0.65 * k, 500);
+  for (const row of lay.rows) {
+    ctx.fillStyle = TEXT;
+    ctx.fillText(ellipsize(ctx, memberText(row.member, row.section === 'methods'), (row.rect.w - 0.4) * k), (row.rect.x + 0.2) * k, (row.rect.y + row.rect.h / 2 + 0.24) * k);
   }
+  ctx.font = font(0.55 * k, 500, 'italic');
+  ctx.fillStyle = MUTED;
+  if (!it.fields.length) ctx.fillText('fields', (r.x + pad) * k, (lay.fieldsTop + 1.0) * k);
+  if (!it.methods.length) ctx.fillText('methods', (r.x + pad) * k, (lay.methodsTop + 1.0) * k);
 }
 
 function drawSticky(p: Pen, it: Extract<BoardItem, { kind: 'sticky' }>, lifted: boolean): void {
@@ -629,6 +639,51 @@ function exitPoint(r: Rect, tx: number, ty: number, gap: number): Pt {
   return [cx + dx * s, cy + dy * s];
 }
 
+/** UML ends: uses (open arrow), has a (filled diamond at the owner), is a and implements (hollow triangle). */
+function relationMarker(p: Pen, rel: string, start: Pt, end: Pt, color: string): void {
+  const { ctx, k } = p;
+  const tri = (tip: Pt, from: Pt, len: number, half: number) => {
+    const a = Math.atan2(tip[1] - from[1], tip[0] - from[0]);
+    const bx = tip[0] - len * Math.cos(a);
+    const by = tip[1] - len * Math.sin(a);
+    return { t: tip, l: [bx + half * Math.sin(a), by - half * Math.cos(a)] as Pt, r: [bx - half * Math.sin(a), by + half * Math.cos(a)] as Pt, b: [bx, by] as Pt, a };
+  };
+  ctx.save();
+  ctx.strokeStyle = color;
+  ctx.lineWidth = Math.max(1.2, 0.1 * k);
+  ctx.lineJoin = 'round';
+  if (rel === 'uses') {
+    const { t, l, r } = tri(end, start, 0.8, 0.4);
+    ctx.beginPath();
+    ctx.moveTo(l[0] * k, l[1] * k);
+    ctx.lineTo(t[0] * k, t[1] * k);
+    ctx.lineTo(r[0] * k, r[1] * k);
+    ctx.stroke();
+  } else if (rel === 'has_a') {
+    const { t, l, r, b, a } = tri(start, end, 0.7, 0.35);
+    const back: Pt = [b[0] - 0.7 * Math.cos(a), b[1] - 0.7 * Math.sin(a)];
+    ctx.beginPath();
+    ctx.moveTo(t[0] * k, t[1] * k);
+    ctx.lineTo(l[0] * k, l[1] * k);
+    ctx.lineTo(back[0] * k, back[1] * k);
+    ctx.lineTo(r[0] * k, r[1] * k);
+    ctx.closePath();
+    ctx.fillStyle = color;
+    ctx.fill();
+  } else {
+    const { t, l, r } = tri(end, start, 1.0, 0.55);
+    ctx.beginPath();
+    ctx.moveTo(t[0] * k, t[1] * k);
+    ctx.lineTo(l[0] * k, l[1] * k);
+    ctx.lineTo(r[0] * k, r[1] * k);
+    ctx.closePath();
+    ctx.fillStyle = CARD;
+    ctx.fill();
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
 function arrowHead(p: Pen, tip: Pt, from: Pt, color: string): void {
   const { ctx, k } = p;
   const ang = Math.atan2(tip[1] - from[1], tip[0] - from[0]);
@@ -685,18 +740,23 @@ function drawEdge(p: Pen, board: Board, e: Pick<BoardEdge, 'from' | 'to' | 'dir'
   ctx.strokeStyle = color;
   ctx.lineWidth = Math.max(1.2, 0.1 * k);
   ctx.lineCap = 'round';
-  if (p.ghost || e.rel === 'implements') ctx.setLineDash([0.45 * k, 0.3 * k]);
+  if (p.ghost || e.rel === 'implements' || e.rel === 'uses') ctx.setLineDash([0.45 * k, 0.3 * k]);
   ctx.beginPath();
   ctx.moveTo(start[0] * k, start[1] * k);
   ctx.lineTo(end[0] * k, end[1] * k);
   ctx.stroke();
   ctx.setLineDash([]);
-  if (e.dir === '->' || e.dir === '<->') arrowHead(p, end, start, color);
-  if (e.dir === '<->') arrowHead(p, start, end, color);
+  if (e.rel) relationMarker(p, e.rel, start, end, color);
+  else {
+    if (e.dir === '->' || e.dir === '<->') arrowHead(p, end, start, color);
+    if (e.dir === '<->') arrowHead(p, start, end, color);
+  }
   ctx.restore();
   const mid = edgeMid(board, e) ?? [(start[0] + end[0]) / 2, (start[1] + end[1]) / 2];
-  if (e.label) {
-    labelPill(p, e.label, mid, { color: p.ghost ? ACCENT : undefined, dashed: p.ghost });
+  if (e.label || e.rel) {
+    // Class relations show their word on the chip (tap it to change the relation).
+    const text = [e.rel ? REL_WORDS[e.rel] : null, e.label].filter(Boolean).join(', ');
+    labelPill(p, text, mid, { color: p.ghost ? ACCENT : undefined, dashed: p.ghost });
   } else if (!p.ghost) {
     // The chip you tap to change the direction.
     ctx.beginPath();
@@ -805,6 +865,7 @@ export function renderBoard(ctx: Ctx, board0: Board, view: RenderView): void {
   const skipped = (id: string) => skipIds.has(id);
   ctx.save();
   if (view.paper !== false) renderPaper(ctx, board, k);
+  view.kit?.renderSheet?.(ctx, board, k);
 
   for (const it of board.items) if (it.kind === 'group' && !skipped(it.id)) drawItem(pen, it);
   for (const e of board.edges) if (!skipped(e.from) && !skipped(e.to)) drawEdge(pen, board, e);
@@ -953,13 +1014,9 @@ export function renderKit(ctx: Ctx, kit: Kit, pxPerCm: number, state: { binHot?:
   const pen: Pen = { ctx, k, ghost: false, focus: null };
   ctx.save();
   for (const s of kit.tray) {
-    const color = TYPE_COLORS[s.type];
     cardBody(pen, s, { radius: 0.45 });
     const b = s.h - 0.7;
-    roundRect(ctx, (s.x + 0.35) * k, (s.y + 0.35) * k, b * k, b * k, 0.25 * k);
-    ctx.fillStyle = withAlpha(color, 0.12);
-    ctx.fill();
-    drawIcon(ctx, s.type, (s.x + 0.35 + b / 2) * k, (s.y + s.h / 2) * k, b * 0.64 * k, color);
+    trayBadge(ctx, s.make, s.x + 0.35, s.y + 0.35, b, k);
     ctx.font = font(0.62 * k, 600);
     ctx.fillStyle = TEXT;
     ctx.textAlign = 'left';
@@ -969,6 +1026,96 @@ export function renderKit(ctx: Ctx, kit: Kit, pxPerCm: number, state: { binHot?:
   }
   ctx.restore();
   if (state.bin !== false) renderBin(ctx, kit, k, state.binHot === true);
+}
+
+/** The small picture at the left of a tray slot. */
+function trayBadge(ctx: Ctx, make: TrayMake, x: number, y: number, b: number, k: number): void {
+  const color = make.kind === 'component' ? TYPE_COLORS[make.type] : make.kind === 'chip' ? '#5B4BA0' : make.kind === 'metric' ? '#2E7D4F' : '#1F4E79';
+  roundRect(ctx, x * k, y * k, b * k, b * k, 0.25 * k);
+  ctx.fillStyle = make.kind === 'sticky' ? '#F2C94C' : withAlpha(color, 0.12);
+  ctx.fill();
+  const cx = (x + b / 2) * k;
+  const cy = (y + b / 2) * k;
+  if (make.kind === 'component') {
+    drawIcon(ctx, make.type, cx, cy, b * 0.64 * k, color);
+    return;
+  }
+  ctx.save();
+  ctx.strokeStyle = color;
+  ctx.fillStyle = color;
+  ctx.lineWidth = Math.max(1, 0.08 * k);
+  if (make.kind === 'class') {
+    // A tiny class box: header and two sections.
+    const w = b * 0.62;
+    const h = b * 0.7;
+    ctx.strokeRect(cx - (w / 2) * k, cy - (h / 2) * k, w * k, h * k);
+    ctx.beginPath();
+    ctx.moveTo(cx - (w / 2) * k, cy - (h / 6) * k);
+    ctx.lineTo(cx + (w / 2) * k, cy - (h / 6) * k);
+    ctx.moveTo(cx - (w / 2) * k, cy + (h / 6) * k);
+    ctx.lineTo(cx + (w / 2) * k, cy + (h / 6) * k);
+    ctx.stroke();
+  } else if (make.kind === 'chip') {
+    ctx.font = font(0.5 * k, 700);
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('O', cx, cy);
+    ctx.textBaseline = 'alphabetic';
+    ctx.textAlign = 'left';
+  } else if (make.kind === 'metric') {
+    ctx.beginPath();
+    ctx.moveTo(cx - 0.45 * b * k, cy + 0.25 * b * k);
+    ctx.lineTo(cx - 0.1 * b * k, cy - 0.05 * b * k);
+    ctx.lineTo(cx + 0.1 * b * k, cy + 0.1 * b * k);
+    ctx.lineTo(cx + 0.45 * b * k, cy - 0.3 * b * k);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+/** What a tray slot makes, drawn with its top-left at (x, y) (the live tray card). */
+function drawMade(pen: Pen, make: TrayMake, name: string, x: number, y: number, w: number, h: number): void {
+  const { ctx, k } = pen;
+  switch (make.kind) {
+    case 'component':
+      drawComponent(pen, { id: '_tray', kind: 'component', type: make.type, label: null, x, y, w, h }, true);
+      return;
+    case 'class':
+      drawClass(pen, { id: '_tray', kind: 'class', label: null, class_kind: make.class_kind, fields: [], methods: [], x, y, w, h }, true);
+      return;
+    case 'sticky':
+      drawSticky(pen, { id: '_tray', kind: 'sticky', lane: null, text: '', votes: 0, quad: null, x, y }, true);
+      return;
+    case 'metric':
+      drawMetric(pen, { id: '_tray', kind: 'metric', role: make.role, label: null, x, y }, true);
+      return;
+    case 'chip':
+      cardBody(pen, { x, y, w, h }, { radius: h / 2, lifted: true, edge: '#5B4BA0' });
+      ctx.font = font(0.8 * k, 700);
+      ctx.fillStyle = '#5B4BA0';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(name, (x + w / 2) * k, (y + h / 2 + 0.05) * k);
+      ctx.textBaseline = 'alphabetic';
+      ctx.textAlign = 'left';
+      return;
+  }
+}
+
+/** Size of the live card for a tray make. */
+function trayCardSize(make: TrayMake, kit: Kit | null): { w: number; h: number } {
+  switch (make.kind) {
+    case 'component':
+      return kit?.card ?? { w: 8, h: 5 };
+    case 'class':
+      return { w: 14, h: 7 };
+    case 'sticky':
+      return { w: 7, h: 7 };
+    case 'metric':
+      return { w: 10, h: 4 };
+    case 'chip':
+      return { w: 6, h: 2.4 };
+  }
 }
 
 /** The bin; red while something is held over it. */
@@ -1023,15 +1170,16 @@ export function renderOverlay(ctx: Ctx, board: Board, overlay: Overlay, kit: Kit
       return;
     }
     case 'tray': {
-      const w = kit?.card.w ?? 8;
-      const h = kit?.card.h ?? 5;
-      const it: BoardItem = { id: '_tray', kind: 'component', type: overlay.type, label: null, x: overlay.x - w / 2, y: overlay.y - h / 2, w, h };
+      const { w, h } = trayCardSize(overlay.slot.make, kit);
       ctx.save();
-      ctx.globalAlpha = overlay.onSheet ? 0.9 : 0.5;
-      drawComponent(pen, it, true);
+      ctx.globalAlpha = overlay.onSheet ? 0.9 : 0.6;
+      drawMade(pen, overlay.slot.make, overlay.slot.name, overlay.x - w / 2, overlay.y - h / 2, w, h);
       ctx.restore();
       return;
     }
+    case 'kit':
+      overlay.draw.draw(ctx, board, k);
+      return;
     default:
       return;
   }
@@ -1078,9 +1226,10 @@ export function overlayBounds(board: Board, o: Overlay, kit: Kit | null): Rect |
       if (target) rs.push(itemRect(target));
       return grow(union(rs)!);
     }
+    case 'kit':
+      return grow(o.draw.bounds);
     case 'tray': {
-      const w = kit?.card.w ?? 8;
-      const h = kit?.card.h ?? 5;
+      const { w, h } = trayCardSize(o.slot.make, kit);
       const rs = [{ x: o.x - w / 2, y: o.y - h / 2, w, h }];
       if (kit) rs.push(kit.bin);
       return grow(union(rs)!);
@@ -1103,6 +1252,8 @@ export interface BoardViewOptions {
   dpr?: number;
   /** Tab and chip drawing size (hit areas are hand sized either way). */
   targets?: 'hand' | 'mouse';
+  /** The kit whose fixed parts are drawn with the board (default: kit). The XR sheet passes it with kit null. */
+  decor?: Kit | null;
   /** Makes the offscreen layers; null draws everything every time. */
   layerFactory?: (w: number, h: number) => Layer | null;
 }
@@ -1182,7 +1333,9 @@ export function overlayKey(o: Overlay): string {
     case 'connect':
       return `connect:${o.from}:${o.x}:${o.y}:${o.target}`;
     case 'tray':
-      return `tray:${o.type}:${o.x}:${o.y}:${o.onSheet}:${o.overBin}`;
+      return `tray:${o.slot.name}:${o.x}:${o.y}:${o.onSheet}:${o.overBin}`;
+    case 'kit':
+      return `kit:${o.hand}:${o.draw.key}`;
   }
 }
 
@@ -1213,7 +1366,7 @@ export class BoardView {
     readonly canvas: HTMLCanvasElement,
     opts: BoardViewOptions,
   ) {
-    this.opts = { dpr: 1, kit: null, targets: 'hand', layerFactory: defaultLayer, ...opts };
+    this.opts = { dpr: 1, kit: null, targets: 'hand', layerFactory: defaultLayer, decor: opts.decor === undefined ? (opts.kit ?? null) : opts.decor, ...opts };
     this.size();
   }
 
@@ -1258,7 +1411,10 @@ export class BoardView {
     const { pxPerCm: k, originCm, targets } = this.opts;
     c.save();
     c.translate(-originCm.x * k, -originCm.y * k);
-    renderBoard(c, board, { pxPerCm: k, paper: false, highlight: highlight ?? undefined, hide, targets });
+    const decor = this.opts.decor ?? null;
+    renderBoard(c, board, { pxPerCm: k, paper: false, highlight: highlight ?? undefined, hide, targets, kit: decor });
+    // The code panel, when this view shows it (the 2D view; XR has its own panel mesh).
+    if (this.opts.kit?.panel && this.opts.kit.renderPanel) this.opts.kit.renderPanel(c, board, k);
     c.restore();
   }
 
@@ -1279,7 +1435,7 @@ export class BoardView {
     const highlight = state.highlight ?? null;
     const rings = state.rings ?? [];
     const drawLive = state.drawLive !== false;
-    const key = `${highlight ?? ''}|${drawLive ? overlays.map(overlayKey).join('|') : overlays.flatMap((o) => (o.kind === 'drag' ? [o.id] : [])).sort().join('|')}|${drawLive ? ringKey(rings) : ''}|${fontEpoch}`;
+    const key = `${highlight ?? ''}|${drawLive ? overlays.map(overlayKey).join('|') : overlays.flatMap((o) => (o.kind === 'drag' ? [o.id] : [])).sort().join('|')}|${drawLive ? ringKey(rings) : ''}|${fontEpoch}|${this.opts.kit?.panelKey?.(board) ?? ''}`;
     if (board === this.lastBoard && key === this.lastKey) return false;
     this.lastBoard = board;
     this.lastKey = key;
@@ -1289,7 +1445,7 @@ export class BoardView {
     const { pxPerCm: k, originCm, dpr, kit, targets } = this.opts;
     // Every dragged item (one per hand) is left out of the board layer and drawn live.
     const dragIds = overlays.flatMap((o) => (o.kind === 'drag' ? [o.id] : [])).sort();
-    const binHot = overlays.some((o) => (o.kind === 'drag' || o.kind === 'tray') && o.overBin);
+    const binHot = overlays.some((o) => ((o.kind === 'drag' || o.kind === 'tray') && o.overBin) || (o.kind === 'kit' && o.draw.overBin === true));
 
     // Static layer: once per size and framing.
     const sk = `${this.canvas.width}x${this.canvas.height}:${k}:${dpr}:${originCm.x},${originCm.y}:${board.size.w}x${board.size.h}:${kit ? `${kit.id}:${kit.tray.length}:${kit.bin.x},${kit.bin.y}` : '-'}`;
@@ -1304,7 +1460,7 @@ export class BoardView {
     }
 
     // Board layer: only when the committed board, highlight or dragged item changes.
-    const bk = `${highlight ?? ''}|${dragIds.join(',')}|${fontEpoch}`;
+    const bk = `${highlight ?? ''}|${dragIds.join(',')}|${fontEpoch}|${this.opts.kit?.panelKey?.(board) ?? ''}`;
     let full = false;
     if (board !== this.boardOf || bk !== this.boardKey) {
       const bc = this.staticLayer ? this.layerCtx(this.boardLayer) : null;

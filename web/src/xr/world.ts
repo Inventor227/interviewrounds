@@ -53,6 +53,8 @@ export interface XRAppOptions {
   placementFallbackMs?: number;
   /** True while the user is speaking: UI sounds are skipped so they never reach the microphone. */
   isUserSpeaking?: () => boolean;
+  /** Raise the rate to 90 Hz when frames show headroom (default true). The device check sets rates itself. */
+  adaptiveRate?: boolean;
 }
 
 export interface RenderStats {
@@ -570,12 +572,13 @@ export async function createXRApp(root: HTMLElement, opts: XRAppOptions): Promis
     const s = renderer.xr.getSession() as RateSession | null;
     // Start at 72 Hz (the WebXR default on Quest); 90 only after measured headroom with the full scene.
     const rates = s?.supportedFrameRates ? Array.from(s.supportedFrameRates) : [];
-    governor = new FrameRateGovernor(rates.map((r) => Math.round(r)));
+    governor = opts.adaptiveRate === false ? null : new FrameRateGovernor(rates.map((r) => Math.round(r)));
     targetFps = s?.frameRate ? Math.round(s.frameRate) : 72;
     if (s?.updateTargetFrameRate && rates.some((r) => Math.round(r) === 72)) {
+      const g = governor;
       s.updateTargetFrameRate(72)
         .then(() => {
-          if (governor?.rate === 72) targetFps = 72;
+          if (g ? governor?.rate === 72 : renderer.xr.isPresenting) targetFps = 72;
         })
         .catch(() => {});
     }

@@ -309,6 +309,10 @@ function Form(props: { me: Me }) {
           }}
         />
       </section>
+
+      <p class="field-hint" data-test="diag-link">
+        About this headset: <a href="/diag">device check</a> for the mic, hands and frame rate.
+      </p>
     </>
   );
 }

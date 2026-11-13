@@ -2359,6 +2359,98 @@ textarea {
   }
 }
 
+/* ---------- Device check (/diag) ---------- */
+.diag-step {
+  display: grid;
+  gap: var(--space-3);
+  margin-top: var(--space-5);
+}
+.diag-step .section-title {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin: 0;
+  font-size: 1.35rem;
+}
+.diag-n {
+  display: inline-grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--accent-ink);
+  font-size: 1rem;
+  flex: none;
+}
+.diag-kv {
+  display: grid;
+  gap: var(--space-1);
+  margin: 0;
+  font-size: 1.05rem;
+}
+.diag-kv > div {
+  display: grid;
+  grid-template-columns: minmax(150px, 34%) 1fr;
+  gap: var(--space-3);
+  padding: var(--space-2) 0;
+  border-top: 1px solid var(--line);
+}
+.diag-kv dt {
+  color: var(--muted);
+}
+.diag-kv dd {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+  font-weight: 600;
+}
+.diag-meter {
+  position: relative;
+  height: 40px;
+  border-radius: var(--radius-sm);
+  background: var(--line);
+  overflow: hidden;
+}
+.diag-meter > div {
+  height: 100%;
+  background: var(--good);
+  transition: width 80ms linear;
+}
+.diag-meter > span {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  font-weight: 600;
+}
+.diag-step textarea,
+.diag-step input[type='password'] {
+  width: 100%;
+  font: inherit;
+  padding: var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--ink);
+}
+.diag-json pre {
+  max-height: 320px;
+  overflow: auto;
+  font-size: 0.8rem;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+/* The XR canvas: needed for the session, never seen in the page. */
+.diag-stage {
+  position: fixed;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  opacity: 0;
+  pointer-events: none;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

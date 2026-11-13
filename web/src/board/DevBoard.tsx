@@ -6,13 +6,21 @@ import type { BoardOp } from '../shared/types';
 import { ghostRect, GhostLayer } from './ghosts';
 import { parseLabelCommand, parseLabelStatement, VOICE_FOCUS_MS, voiceLabel } from './grammar';
 import { BoardInput } from './input';
-import { HLD_KIT } from './kits';
-import { COMPONENT_NAMES, emptyBoard, IdGen } from './model';
+import type { BoardKit } from '../shared/types';
+import { kitForRound } from './kits/index';
+import { sampleStartBoard } from './kits/samples';
+import { COMPONENT_NAMES, IdGen } from './model';
 import { MouseAdapter } from './mouse';
 import { BoardStore } from './ops';
 import { BoardView } from './render';
 
-const kit = HLD_KIT;
+const KIT_NAMES: BoardKit[] = ['hld', 'lld', 'coding', 'pm', 'meeting'];
+
+/** ?kit=lld|coding|pm|meeting picks the round's kit (default: system design). */
+function kitName(): BoardKit {
+  const k = typeof location !== 'undefined' ? new URLSearchParams(location.search).get('kit') : null;
+  return KIT_NAMES.includes(k as BoardKit) ? (k as BoardKit) : 'hld';
+}
 
 function describe(op: BoardOp, accepted: boolean): string {
   if (!accepted) return 'That change was not allowed.';
@@ -48,6 +56,14 @@ export interface DevBoardHandle {
   ghostRect(opId: string): { x: number; y: number; w: number; h: number } | null;
   /** The board, tray and bin rendered offscreen at `pxPerCm`, as a PNG data URL. */
   snapshot(pxPerCm?: number): string;
+  /** Applies an op as the Scribe would send it (src scribe), for scripted runs. */
+  scribe(op: { op: string; args: unknown }): boolean;
+  /** The kit in use. */
+  kit: string;
+  /** A tray slot by name (board cm), or null. */
+  traySlot(name: string): { x: number; y: number; w: number; h: number } | null;
+  /** The code panel (board cm), when the kit has one. */
+  panel: { x: number; y: number; w: number; h: number } | null;
 }
 
 declare global {
@@ -69,7 +85,9 @@ export function DevBoard() {
     const host = stage.current;
     if (!canvas || !host) return;
     const ids = new IdGen('d');
-    const store = new BoardStore(emptyBoard({ id: 'dev', question: 'Design a URL shortener' }));
+    const name = kitName();
+    const kit = kitForRound(name);
+    const store = new BoardStore(sampleStartBoard(name));
     const view = new BoardView(canvas, {
       pxPerCm: 10,
       originCm: { x: kit.view.x, y: kit.view.y },
@@ -157,6 +175,12 @@ export function DevBoard() {
       ghostRect(opId) {
         const g = store.board.ghosts.find((x) => x.op_id === opId);
         return g ? ghostRect(store.board, g) : null;
+      },
+      kit: name,
+      traySlot: (slotName) => kit.tray.find((s) => s.name === slotName) ?? null,
+      panel: kit.panel ?? null,
+      scribe(op) {
+        return store.apply({ op_id: ids.next('op'), src: 'scribe', ...op } as BoardOp).accepted;
       },
       snapshot(px = 20) {
         const c = document.createElement('canvas');
