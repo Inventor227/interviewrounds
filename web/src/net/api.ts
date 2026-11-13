@@ -38,8 +38,24 @@ export const BOARD_IMAGE_MAX_BYTES = 2 * 1024 * 1024;
 
 type Body = { json: unknown } | { raw: Blob; type: string } | undefined;
 
-async function request<T>(method: string, path: string, body?: Body): Promise<T> {
-  const headers: Record<string, string> = { accept: 'application/json' };
+/** Where a development build keeps the key that unlocks the fake voice (this tab only). */
+export const DEV_KEY_STORE = 'ir_dev_key';
+
+/**
+ * Development only: the key for `voice: "fake"` sessions (typed turns, no voice minutes). Tooling puts
+ * it in sessionStorage. Production builds never read it unless built with VITE_ALLOW_DEV_KEY=1.
+ */
+export function devKey(): string | null {
+  if (!import.meta.env.DEV && import.meta.env.VITE_ALLOW_DEV_KEY !== '1') return null;
+  try {
+    return globalThis.sessionStorage?.getItem(DEV_KEY_STORE) || null;
+  } catch {
+    return null;
+  }
+}
+
+async function request<T>(method: string, path: string, body?: Body, extra?: Record<string, string>): Promise<T> {
+  const headers: Record<string, string> = { accept: 'application/json', ...extra };
   let payload: BodyInit | undefined;
   if (body && 'json' in body) {
     headers['content-type'] = 'application/json';
@@ -90,7 +106,11 @@ const withRole = (path: string, role?: Role) => (role ? `${path}?role=${enc(role
 export const api = {
   catalog: () => get<Catalog>('/api/content/catalog'),
 
-  createSession: (req: CreateSessionReq) => post<CreateSessionRes>('/api/sessions', req),
+  createSession: (req: CreateSessionReq) => {
+    // The fake voice is a development path: the server wants the dev key with it.
+    const key = req.voice === 'fake' ? devKey() : null;
+    return request<CreateSessionRes>('POST', '/api/sessions', { json: req }, key ? { 'x-dev-key': key } : undefined);
+  },
   joinPanelist: (sessionId: string, panelistId: string, body: { opening_line?: string } = {}) =>
     post<JoinPanelistRes>(`/api/sessions/${enc(sessionId)}/panelists/${enc(panelistId)}/join`, body),
   resumeSession: (sessionId: string) => post<CreateSessionRes>(`/api/sessions/${enc(sessionId)}/resume`),

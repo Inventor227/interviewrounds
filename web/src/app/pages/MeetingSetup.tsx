@@ -25,7 +25,7 @@ import { CapNotice } from '../components/CapNotice';
 import { capFromError, capFromMe, loadCatalog, loadMe, toApiError, useAsync } from '../components/data';
 import { ReadyPanel, useHeadset, useMic, type Mic, type XrState } from '../components/Ready';
 import { Disclosure, ErrorState, Loading, Monogram, Page, Segmented } from '../components/Ui';
-import { isFake } from '../fake/mode';
+import { voiceChoice } from '../voiceChoice';
 
 const MAX_PEOPLE = 3;
 const MAX_FACTS = 8;
@@ -344,7 +344,7 @@ function Prepared(props: {
             length: props.draft.length,
             level: props.me?.settings.default_level ?? 'mid',
             style,
-            voice: isFake() ? 'fake' : 'fish',
+            voice: voiceChoice(),
           },
         }}
       />
