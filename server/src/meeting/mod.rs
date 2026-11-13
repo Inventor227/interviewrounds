@@ -9,11 +9,13 @@
 //! - `live`: the attendee prompts and the per-turn note each attendee sees (only its own hidden state).
 
 pub mod prepare;
+pub mod state;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 pub use prepare::{PREPARE_MODEL, prepare};
+pub use state::{MeetingState, Outcome};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
