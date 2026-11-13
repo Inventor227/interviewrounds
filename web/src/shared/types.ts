@@ -713,6 +713,16 @@ export interface CreateSessionRes {
   floor: string;
   panel_mode: PanelMode;
   limits: Limits;
+  /** The round's timing (RoundPublic strips it); absent from older servers. */
+  timing?: SessionTiming;
+}
+
+/** `timing` in CreateSessionRes: silence_wait_seconds is already scaled by level. */
+export interface SessionTiming {
+  silence_wait_seconds: number;
+  interrupt_after_seconds: number;
+  target_minutes: number;
+  hard_stop_minutes: number;
 }
 
 export interface JoinPanelistRes {
@@ -741,7 +751,7 @@ export interface Settings {
   practice_mode: boolean;
 }
 
-export const LIMIT_REASONS = ['guest_daily_limit', 'guest_full_used', 'judge_budget_reached', 'build_budget_reached', 'free_rounds_used'] as const;
+export const LIMIT_REASONS = ['guest_daily_limit', 'guest_full_used', 'judge_budget_reached', 'build_budget_reached', 'free_rounds_used', 'model_budget_reached'] as const;
 export type LimitReason = (typeof LIMIT_REASONS)[number];
 
 /** me.schema.json#/$defs/limits; also `limits` in CreateSessionRes. null counts mean no limit. */
@@ -840,6 +850,10 @@ export interface ClientMsgMap {
   };
   'head.samples': { samples: HeadSample[] };
   'voice.state': { panelist_id: string; mode: VoiceMode; at_ms: number };
+  /** The first words of a reply as the voice played them (telemetry). */
+  'voice.spoken': { panelist_id: string; text_prefix: string };
+  /** The item the user last touched or created, debounced (telemetry; the latest wins). */
+  'board.focus': { item_id: string | null };
   'ui.event': { kind: 'pause' | 'resume' | 'end' | 'hint' | 'skip_onboarding'; reason?: string };
   ping: Record<string, never>;
 }
@@ -855,6 +869,23 @@ export interface RoundStatePayload {
   brief: { question: string; lines: string[] };
   /** panelist_id holding the floor. */
   floor: string;
+  /** True once per phase boundary: the browser sends `[event: time_check]`. Absent from older servers. */
+  time_check_due?: boolean;
+}
+
+/** One pick of the headset card: the candidate's own words behind a strength or a fix. */
+export interface CardPick {
+  title: string;
+  evidence_id: string;
+  quote: string;
+  t_start_sec: number;
+}
+
+/** The quick card sent with `report.progress {stage: "card"}` a few seconds after the round ends. */
+export interface HeadsetCard {
+  one_line: string;
+  top_strength: CardPick | null;
+  top_fix: CardPick | null;
 }
 
 /** Server to client payloads, keyed by message type. */
@@ -867,7 +898,8 @@ export interface ServerMsgMap {
   'avatar.point_at': { panelist_id: string; item_id: string };
   'round.ending': { closing_line: string };
   'round.ended': { reason: EndReason };
-  'report.progress': { stage: 'metrics' | 'scoring' | 'done'; pct: number };
+  /** pct is 0 to 100; `card` comes with stage "card". */
+  'report.progress': { stage: 'metrics' | 'scoring' | 'card' | 'done'; pct: number; card?: HeadsetCard };
   'report.ready': { session_id: string };
   /** `op_rejected` carries the op_id. */
   error: { code: string; message: string; op_id?: string };
