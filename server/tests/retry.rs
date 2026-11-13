@@ -549,6 +549,35 @@ async fn retry_says_goodbye_at_120_s_with_no_model() {
     );
 }
 
+#[tokio::test]
+async fn retry_goodbye_comes_when_the_time_check_is_missed() {
+    let app = live::test_app(Options {
+        timing: goodbye_timing(),
+        ..Options::default()
+    })
+    .await;
+    let base = app.serve().await;
+    let (child, token, mut ws) = live_retry(&app, &base).await;
+    let streamed = app.llm.requests.lock().unwrap().len();
+
+    // Past 120 s and no app event for 5 s more: the server asks the browser to end.
+    jump(&app, &child, 126).await;
+    let ending = frame_of(&mut ws, "round.ending", Duration::from_secs(3))
+        .await
+        .expect("round.ending");
+    assert_eq!(ending["d"]["closing_line"], ir_server::retry::CLOSING_LINE);
+    // The browser's [event: ending] gets the app's line, word for word.
+    let (status, said) = turn_text(&app, &token, &child, "[event: ending]").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(said, ir_server::retry::CLOSING_LINE);
+    let ended = frame_of(&mut ws, "round.ended", Duration::from_secs(4))
+        .await
+        .expect("round.ended");
+    assert_eq!(ended["d"]["reason"], "completed");
+    assert_eq!(app.llm.requests.lock().unwrap().len(), streamed);
+    assert_eq!(ended_as(&app, &child).await.1.as_deref(), Some("completed"));
+}
+
 /// Any round: once end_round came with the closing line, the browser's [event: ending] gets nothing.
 #[tokio::test]
 async fn app_event_after_end_round_gets_no_second_goodbye() {

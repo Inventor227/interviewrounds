@@ -778,6 +778,9 @@ fn closing_spoken(st: &SessionState, from: usize) -> bool {
         })
 }
 
+/// How long an armed closing line waits for an app event to answer before the server asks the browser to end.
+pub const CLOSING_NUDGE_MS: u64 = 5_000;
+
 /// The per-session loop: state ticks, time checks, saving, and the end conditions.
 async fn drive(app: AppState, hub: Arc<Hub>, handle: Arc<Mutex<SessionState>>) {
     let timing = app.timing.clone();
@@ -820,6 +823,22 @@ async fn drive(app: AppState, hub: Arc<Hub>, handle: Arc<Mutex<SessionState>>) {
                 st.speech_commits,
             )
         };
+        // The armed closing line found no app event to answer (the time check was missed): the server asks the
+        // browser to end, and its `[event: ending]` gets the line. The ending limit stops the round if even that
+        // never comes.
+        let overdue = {
+            let st = handle.lock().await;
+            st.closing_overdue(now, CLOSING_NUDGE_MS)
+                .map(|line| (line, st.turns.len()))
+        };
+        if let Some((line, turns)) = overdue
+            && !hub.is_ending().await
+        {
+            tracing::info!(session_id = %hub.session_id, "closing line overdue; asking the browser to end");
+            hub.request_end("completed", turns, false).await;
+            hub.emit(&app.db, "round.ending", json!({ "closing_line": line }))
+                .await;
+        }
         // A reply to the candidate's speech was committed without a playback report (Fish's next request
         // confirmed it): the Scribe catches up here.
         let scribe_due = hub

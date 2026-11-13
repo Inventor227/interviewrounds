@@ -1154,6 +1154,13 @@ impl SessionState {
         events
     }
 
+    /// The armed closing line, when no app event has come to say it for `grace_ms` of round time.
+    pub fn closing_overdue(&self, now: Instant, grace_ms: u64) -> Option<String> {
+        let (at_ms, _) = self.timed_close.as_ref()?;
+        let line = self.pending_close.as_ref()?;
+        (self.elapsed_ms(now) >= at_ms + grace_ms).then(|| line.clone())
+    }
+
     /// Arms the app's own closing line once the round clock reaches its time (once per round): the round moves to
     /// its last phase, so the next `round.state` asks for a time check, and the floor's next app event gets the
     /// line. True when it was armed now.

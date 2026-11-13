@@ -62,8 +62,9 @@ JSON; cookie `ir_id` identifies the device/user; all under same origin. A new gu
   word for word with no model call; the brief card holds the same line. At 120 s the server moves to the `close`
   phase, `round.state` asks for a time check, and the next app event (`[event: time_check]`, or any other marker)
   gets the fixed closing line "Thanks, that's time. Your before and after is on your report." word for word with no
-  model call; then `round.ending` and the round ends (`completed`) after the usual grace. Nothing waits on the
-  model's tools; the 150 s hard stop is only a backstop. Caps and guest limits are those of a quick round (a retry
+  model call; then `round.ending` and the round ends (`completed`) after the usual grace. If no app event comes
+  within 5 s of round time, the server sends `round.ending` itself and the browser's `[event: ending]` gets the line.
+  Nothing waits on the model's tools; the 150 s hard stop is only a backstop. Caps and guest limits are those of a quick round (a retry
   counts as one). Scoring is one `FAST_MODEL` call that scores the new answer 1 to 4 on the parent's weakest-moment
   competency, then appends `{session_id, at, before_score, after_score, note}` to the parent report's
   `weakest_moment.retries` (once per retry); the socket gets `report.progress` and `report.ready` as for a round (no
