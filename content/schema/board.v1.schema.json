@@ -253,7 +253,7 @@
       "properties": {
         "language": { "type": "string" },
         "lines": { "type": "array", "items": { "$ref": "#/$defs/code_line" } },
-        "approach": { "type": "array", "items": { "type": "string" } },
+        "approach": { "type": "array", "maxItems": 6, "items": { "type": "string", "maxLength": 120 } },
         "complexity": {
           "type": "object",
           "additionalProperties": false,
@@ -323,7 +323,7 @@
         "edge.create", "edge.delete", "edge.set_dir", "edge.set_rel", "edge.label",
         "group.create", "member.add", "member.move", "member.remove",
         "sticky.vote", "sticky.set_quad",
-        "code.insert", "code.edit", "code.move", "code.indent", "code.delete", "code.complexity", "code.trace",
+        "code.insert", "code.edit", "code.move", "code.indent", "code.delete", "code.complexity", "code.trace", "code.approach",
         "agenda.check", "present.show", "park.add", "undo"
       ]
     },
@@ -409,6 +409,9 @@
         { "if": { "type": "object", "required": ["op"], "properties": { "op": { "const": "code.trace" } } }, "then": { "type": "object", "properties": { "args": {
           "type": "object", "additionalProperties": false, "required": ["line", "t"],
           "properties": { "line": { "$ref": "#/$defs/id" }, "t": { "type": "number" } } } } } },
+        { "if": { "type": "object", "required": ["op"], "properties": { "op": { "const": "code.approach" } } }, "then": { "type": "object", "properties": { "args": {
+          "type": "object", "additionalProperties": false, "required": ["lines"],
+          "properties": { "lines": { "type": "array", "maxItems": 6, "items": { "type": "string", "maxLength": 120 }, "description": "Replaces code.approach." } } } } } },
         { "if": { "type": "object", "required": ["op"], "properties": { "op": { "const": "agenda.check" } } }, "then": { "type": "object", "properties": { "args": {
           "type": "object", "additionalProperties": false, "required": ["id", "done", "t"],
           "properties": { "id": { "$ref": "#/$defs/id" }, "done": { "type": "boolean" }, "t": { "type": ["number", "null"] } } } } } },
@@ -470,11 +473,12 @@
         "t": { "type": "number", "description": "Seconds since round start." },
         "rev": { "type": "integer", "minimum": 0, "description": "Board rev after this op (unchanged when not accepted)." },
         "src": { "$ref": "#/$defs/src" },
-        "op": { "$ref": "#/$defs/op_name" },
+        "op": { "type": "string", "minLength": 1, "description": "Any op name as received; a known one when accepted." },
         "args": { "type": "object" },
-        "accepted": { "type": "boolean", "description": "False when the op was rejected or a ghost was dismissed." }
+        "accepted": { "type": "boolean", "description": "False when the op was rejected (including schema-invalid args) or a ghost was dismissed." }
       },
-      "allOf": [{ "$ref": "#/$defs/op_args" }]
+      "if": { "type": "object", "required": ["accepted"], "properties": { "accepted": { "const": true } } },
+      "then": { "type": "object", "properties": { "op": { "$ref": "#/$defs/op_name" } }, "allOf": [{ "$ref": "#/$defs/op_args" }] }
     },
     "ops_fixture": {
       "description": "content/fixtures/board-ops/*.json: apply ops to start in order; the result must deep-equal expected.",
@@ -485,6 +489,23 @@
         "name": { "type": "string" },
         "start": { "$ref": "#" },
         "ops": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/board_op" } },
+        "expected": { "$ref": "#" }
+      }
+    },
+    "undo_fixture": {
+      "description": "content/fixtures/board-undo/*.json: the current board is start with the accepted log entries applied (undo entries by the undo rule); applying undo to it must give expected.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "start", "log", "undo", "expected"],
+      "properties": {
+        "name": { "type": "string" },
+        "start": { "$ref": "#", "description": "The round's start board." },
+        "log": { "type": "array", "items": { "$ref": "#/$defs/op_log_entry" } },
+        "undo": {
+          "type": "object",
+          "$ref": "#/$defs/board_op",
+          "properties": { "op": { "const": "undo" } }
+        },
         "expected": { "$ref": "#" }
       }
     }
