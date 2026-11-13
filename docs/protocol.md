@@ -30,6 +30,9 @@ JSON; cookie `ir_id` identifies the device/user; all under same origin.
 - `PUT /api/me/settings` `Settings`; `POST /api/me/onboarding-done`; `DELETE /api/me`
 - `POST /api/meetings/prepare` `MeetingSetup` → `{meeting_plan_id, plan:MeetingPlan}`
 - `POST /api/shares` `{session_id, include_transcript}` → `{slug, url}`; `DELETE /api/shares/{slug}`
+  `POST /api/shares` is an upsert per session: a session has at most one live public link, and a new POST for a
+  session that already has one replaces it (the old slug stops working). The web app still deletes the old slug
+  before posting a change, so either side alone keeps a single live link.
 - `GET /s/{slug}` server-rendered scorecard; `GET /auth/google/start`, `/auth/google/callback`, `POST /auth/logout`
 - `POST /v1/chat/completions` Fish custom LLM (bearer `FISH_LLM_SECRET`, or the session `client_token` when the session's
   voice is `fake`); OpenAI chat format in, SSE `chat.completion.chunk` out
