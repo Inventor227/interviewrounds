@@ -167,9 +167,11 @@ fn test_app_with(
         .connect_lazy(url)
         .unwrap();
     let cfg = common::test_config(url, &common::temp_dir("public"));
+    // Most tests check the commit itself, so replies to speech are committed at once unless a test opts in.
     let mut opts = OrchestratorOptions {
         first_text_timeout: Duration::from_millis(300),
         retry_first_text_timeout: Duration::from_millis(300),
+        confirm_speech_turns: false,
         ..OrchestratorOptions::default()
     };
     tune(&mut opts);
@@ -1624,4 +1626,142 @@ async fn dev_voice_spike_page_needs_the_dev_key() {
         .await
         .unwrap();
     assert_eq!(res.status(), StatusCode::NOT_FOUND);
+}
+
+// ---------- speculative replies ----------
+
+#[tokio::test]
+async fn speculative_replies_wait_for_the_voice_platform() {
+    let llm = ScriptedLlm::new(vec![
+        reply("Go ahead."),
+        reply("Assigned seating."),
+        reply("Okay. Next?"),
+    ]);
+    let (app, state) = test_app_with(llm.clone(), |o| o.confirm_speech_turns = true);
+    state
+        .registry
+        .insert(new_state("s1", "sde.system_design.short", VoiceKind::Fish));
+
+    // A draft on an interim transcript: answered, but not recorded.
+    let r1 = post_chat(
+        &app,
+        SECRET,
+        chat_body(
+            "s1",
+            "p1",
+            json!([{"role": "user", "content": "So first,"}]),
+        ),
+    )
+    .await;
+    assert_eq!(r1.text(), "Go ahead.");
+    assert!(
+        state
+            .registry
+            .get("s1")
+            .unwrap()
+            .lock()
+            .await
+            .history
+            .is_empty()
+    );
+
+    // The finished utterance: Fish never played "Go ahead.", so that draft is dropped.
+    let r2 = post_chat(
+        &app,
+        SECRET,
+        chat_body(
+            "s1",
+            "p1",
+            json!([{"role": "user", "content": "So first, are the seats assigned?"}]),
+        ),
+    )
+    .await;
+    assert_eq!(r2.text(), "Assigned seating.");
+    // The model never saw the dropped draft.
+    assert_eq!(
+        user_texts(&llm.request(1).messages),
+        vec!["So first, are the seats assigned?"]
+    );
+
+    // The browser reports playback: the reply is committed at once.
+    {
+        let st = state.registry.get("s1").unwrap();
+        let mut st = st.lock().await;
+        assert!(st.history.is_empty());
+        assert!(st.confirm_spoken("p1", "Assigned", Instant::now()));
+        assert_eq!(
+            user_texts(&st.history),
+            vec!["So first, are the seats assigned?"]
+        );
+        assert!(st.provisional.is_empty());
+    }
+
+    // The next request also carries it; nothing is recorded twice.
+    post_chat(
+        &app,
+        SECRET,
+        chat_body(
+            "s1",
+            "p1",
+            json!([
+                {"role": "user", "content": "So first, are the seats assigned?"},
+                {"role": "assistant", "content": "Assigned seating."},
+                {"role": "user", "content": "Got it."}
+            ]),
+        ),
+    )
+    .await;
+    let st = state.registry.get("s1").unwrap();
+    let st = st.lock().await;
+    assert_eq!(
+        user_texts(&st.history),
+        vec!["So first, are the seats assigned?"]
+    );
+    assert_eq!(st.provisional.len(), 1, "the newest reply waits in turn");
+    let speakers: Vec<&str> = st.turns.iter().map(|t| t.speaker.as_str()).collect();
+    assert_eq!(speakers, vec!["candidate", "p1"]);
+}
+
+#[tokio::test]
+async fn director_calls_of_an_unplayed_reply_are_dropped() {
+    let llm = ScriptedLlm::with_creates(
+        vec![reply("Let's move on."), reply("Okay.")],
+        vec![
+            director_reply(json!([
+                {"type": "tool_use", "id": "toolu_d1", "name": "next_phase", "input": {}}
+            ])),
+            director_reply(json!([])),
+        ],
+    );
+    let (app, state) = test_app_with(llm.clone(), |o| o.confirm_speech_turns = true);
+    let mut st = new_state("s1", "sde.system_design.short", VoiceKind::Fish);
+    st.live.tools = ToolsMode::Director;
+    state.registry.insert(st);
+
+    post_chat(
+        &app,
+        SECRET,
+        chat_body("s1", "p1", json!([{"role": "user", "content": "And"}])),
+    )
+    .await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    // The director answered while the reply was parked: nothing applied yet.
+    assert_eq!(state.registry.get("s1").unwrap().lock().await.phase_idx, 0);
+    post_chat(
+        &app,
+        SECRET,
+        chat_body(
+            "s1",
+            "p1",
+            json!([{"role": "user", "content": "And that is the API."}]),
+        ),
+    )
+    .await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let st = state.registry.get("s1").unwrap();
+    let st = st.lock().await;
+    assert_eq!(
+        st.phase_idx, 0,
+        "the unplayed transition never moved the phase"
+    );
 }

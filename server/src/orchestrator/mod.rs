@@ -109,6 +109,9 @@ pub struct OrchestratorOptions {
     pub turn_deadline: Duration,
     /// Spoken when no model produced anything, so Fish never gets an empty reply.
     pub hold_line: String,
+    /// Replies to speech wait for the voice platform to confirm them before they enter the history (speculative
+    /// drafts are often thrown away). Off only in tests of the commit itself.
+    pub confirm_speech_turns: bool,
 }
 
 impl Default for OrchestratorOptions {
@@ -120,6 +123,7 @@ impl Default for OrchestratorOptions {
             turn_wait: Duration::from_secs(6),
             turn_deadline: Duration::from_millis(8500),
             hold_line: "Sorry, give me a second.".into(),
+            confirm_speech_turns: true,
         }
     }
 }

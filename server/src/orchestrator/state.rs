@@ -176,16 +176,26 @@ pub struct Turn {
     pub heard: Option<String>,
 }
 
-/// A turn whose reply was streamed but cut off before it was committed (Fish dropped the request), or the hold line
-/// spoken while another turn ran. Kept out of the history until a later request shows Fish played it.
-#[derive(Clone, Debug, PartialEq)]
+/// A turn that was spoken (or streamed) but is not in the history yet, because the voice platform may not have
+/// played it: Fish starts speculative replies on interim transcripts and throws most of them away, a request can be
+/// cut off mid-stream, and the hold line can be spoken while another turn runs. It is committed once the voice
+/// platform shows it was played (its transcript in the next request, or the browser reporting playback), and
+/// dropped when the next request shows it was not.
+#[derive(Clone, Debug)]
 pub struct Provisional {
+    pub id: u64,
     pub panelist_id: String,
     pub input: UserInput,
-    /// The assistant content to record (the text so far).
+    /// The draft the reply was made from; None = draft again when committing.
+    pub draft: Option<TurnDraft>,
+    /// Tool round trips inside the turn (inline tools).
+    pub extra: Vec<Message>,
+    /// The assistant content to record.
     pub reply: Vec<ContentBlock>,
     /// What was streamed to the voice.
     pub spoken: String,
+    /// Tool calls to apply when the turn is committed (inline calls, then the director's when it finishes).
+    pub tool_calls: Vec<ToolCall>,
 }
 
 /// Everything a finished turn adds.
@@ -246,8 +256,11 @@ pub struct SessionState {
     pub events: broadcast::Sender<ServerEvent>,
     /// Serialises turns of one session; held across a whole streamed turn, separately from the state lock.
     pub turn_lock: Arc<Mutex<()>>,
-    /// Cut-off turns waiting for the next request to confirm them (oldest first).
+    /// Spoken turns waiting for the voice platform to confirm them (oldest first).
     pub provisional: Vec<Provisional>,
+    /// Ids of recently committed turns (a director that finishes after the commit applies its calls then).
+    pub recent_commits: std::collections::VecDeque<u64>,
+    pub next_turn_id: u64,
     /// Dev voice spike only: this many next replies are sent empty (to observe the voice platform).
     pub dev_empty_replies: u8,
 }
@@ -355,6 +368,8 @@ impl SessionState {
             events,
             turn_lock: Arc::new(Mutex::new(())),
             provisional: Vec::new(),
+            recent_commits: std::collections::VecDeque::new(),
+            next_turn_id: 1,
             dev_empty_replies: 0,
         })
     }
@@ -487,37 +502,45 @@ impl SessionState {
         }
     }
 
-    /// Settles parked turns against Fish's transcript (`fish_last`: its newest assistant message). A parked turn
-    /// whose line Fish has (all of it, or the start of it, which means the candidate cut in) is committed now, marked
-    /// interrupted when only part was played. One Fish does not have was a draft it threw away: it is dropped, and
-    /// its words come back in Fish's newer user message anyway.
-    pub fn resolve_provisional(&mut self, fish_last: Option<&str>, now: Instant) {
-        let parked = std::mem::take(&mut self.provisional);
-        let Some(fish) = fish_last else {
-            return;
-        };
-        // Only the newest parked turn can be Fish's newest assistant message; earlier ones were superseded.
-        let Some(p) = parked.into_iter().last() else {
-            return;
-        };
-        let heard = compare_spoken(&p.spoken, fish);
-        if heard == Heard::Unknown {
-            tracing::info!(session_id = %self.id, panelist_id = %p.panelist_id, "parked turn was never played; dropped");
-            return;
+    pub fn new_turn_id(&mut self) -> u64 {
+        let id = self.next_turn_id;
+        self.next_turn_id += 1;
+        id
+    }
+
+    /// Commits a turn now and remembers its id.
+    pub fn commit_now(&mut self, id: u64, commit: TurnCommit, now: Instant) -> Vec<ServerEvent> {
+        let events = self.commit_turn(commit, now);
+        self.recent_commits.push_back(id);
+        while self.recent_commits.len() > 32 {
+            self.recent_commits.pop_front();
         }
-        let draft = prompt::draft_turn(self, &p.panelist_id, &p.input, now);
-        self.commit_turn(
+        events
+    }
+
+    /// Parks a spoken turn until the voice platform confirms it.
+    pub fn park(&mut self, p: Provisional) {
+        self.provisional.push(p);
+    }
+
+    fn commit_parked(&mut self, p: Provisional, heard: Option<&str>, now: Instant) {
+        let draft = match p.draft {
+            Some(d) => d,
+            None => prompt::draft_turn(self, &p.panelist_id, &p.input, now),
+        };
+        self.commit_now(
+            p.id,
             TurnCommit {
                 draft,
-                extra: Vec::new(),
+                extra: p.extra,
                 reply: p.reply,
                 spoken: p.spoken.clone(),
-                tool_calls: Vec::new(),
+                tool_calls: p.tool_calls,
                 handover_line_used: false,
             },
             now,
         );
-        if heard == Heard::Part
+        if let Some(heard) = heard
             && let Some(turn) = self
                 .turns
                 .iter_mut()
@@ -525,9 +548,69 @@ impl SessionState {
                 .find(|t| t.speaker == p.panelist_id)
         {
             turn.interrupted = true;
-            turn.heard = Some(fish.trim().to_string());
+            turn.heard = Some(heard.trim().to_string());
         }
-        tracing::info!(session_id = %self.id, panelist_id = %p.panelist_id, interrupted = heard == Heard::Part, "parked turn committed");
+    }
+
+    /// Settles parked turns against Fish's transcript (`fish_last`: its newest assistant message). The newest parked
+    /// turn whose line Fish has (all of it, or the start of it, which means the candidate cut in) is committed now,
+    /// marked interrupted when only part was played. Turns Fish does not have were drafts it threw away: they are
+    /// dropped, and their words come back in Fish's newer user message anyway.
+    pub fn resolve_provisional(&mut self, fish_last: Option<&str>, now: Instant) {
+        let parked = std::mem::take(&mut self.provisional);
+        let n = parked.len();
+        let mut played = None;
+        if let Some(fish) = fish_last {
+            for p in parked.into_iter().rev() {
+                if played.is_none() && compare_spoken(&p.spoken, fish) != Heard::Unknown {
+                    played = Some(p);
+                }
+            }
+        }
+        let dropped = n - usize::from(played.is_some());
+        if dropped > 0 {
+            tracing::info!(session_id = %self.id, dropped, "unplayed replies dropped");
+        }
+        if let (Some(p), Some(fish)) = (played, fish_last) {
+            let part = compare_spoken(&p.spoken, fish) == Heard::Part;
+            tracing::info!(session_id = %self.id, panelist_id = %p.panelist_id, turn_id = p.id, interrupted = part, "played reply committed");
+            self.commit_parked(p, part.then_some(fish), now);
+        }
+    }
+
+    /// The browser reports that the voice started playing `heard` (the text so far) for `panelist_id`: the matching
+    /// parked turn is committed at once, so its tool calls reach the screen while it is spoken. Returns whether one
+    /// was found.
+    pub fn confirm_spoken(&mut self, panelist_id: &str, heard: &str, now: Instant) -> bool {
+        let Some(i) = self.provisional.iter().rposition(|p| {
+            p.panelist_id == panelist_id && compare_spoken(&p.spoken, heard) != Heard::Unknown
+        }) else {
+            return false;
+        };
+        // Older parked turns were superseded by this one.
+        let mut parked = std::mem::take(&mut self.provisional);
+        let p = parked.remove(i);
+        parked.drain(..i);
+        self.provisional = parked;
+        tracing::info!(session_id = %self.id, panelist_id = %panelist_id, turn_id = p.id, "reply confirmed by playback");
+        self.commit_parked(p, None, now);
+        true
+    }
+
+    /// The director finished for turn `id`: its calls ride with the parked turn, are applied now if the turn is
+    /// already committed, and are dropped if the turn was never played.
+    pub fn director_done(&mut self, id: u64, calls: Vec<ToolCall>) -> Vec<ServerEvent> {
+        if let Some(p) = self.provisional.iter_mut().find(|p| p.id == id) {
+            p.tool_calls.extend(calls);
+            return Vec::new();
+        }
+        if self.recent_commits.contains(&id) {
+            return self.apply_tool_calls(&calls);
+        }
+        if !calls.is_empty() {
+            tracing::info!(session_id = %self.id, turn_id = id, "director calls of an unplayed reply dropped");
+        }
+        Vec::new()
     }
 
     /// Applies tool calls (from the director) and broadcasts their events.

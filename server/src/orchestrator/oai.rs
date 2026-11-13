@@ -23,7 +23,7 @@ use tokio::sync::{Mutex, OwnedMutexGuard};
 use super::constant_time_eq;
 use super::director;
 use super::markers::{EventKind, UserInput, parse_user_turn};
-use super::prompt::prepare_live_turn;
+use super::prompt::{TurnDraft, prepare_live_turn};
 use super::speech_filter::SpeechFilter;
 use super::state::{Provisional, SessionState, ToolsMode, TurnCommit, VoiceKind};
 use super::tools::ToolCall;
@@ -338,6 +338,7 @@ struct TurnGuard {
     session_id: String,
     panelist: String,
     input: UserInput,
+    draft: Option<TurnDraft>,
     /// What was streamed to the voice so far.
     spoken: String,
     /// The assistant text so far, unfiltered.
@@ -355,16 +356,22 @@ impl Drop for TurnGuard {
         };
         let session = self.session.clone();
         let turn = self.turn.take();
-        let provisional = Provisional {
+        let mut provisional = Provisional {
+            id: 0,
             panelist_id: self.panelist.clone(),
             input: self.input.clone(),
+            draft: self.draft.take(),
+            extra: Vec::new(),
             reply: vec![ContentBlock::text(self.said.trim().to_string())],
             spoken: self.spoken.trim().to_string(),
+            tool_calls: Vec::new(),
         };
         tracing::info!(session_id = %self.session_id, panelist_id = %self.panelist, spoken_chars = provisional.spoken.len(), "turn cut off after speech; parked");
         handle.spawn(async move {
             let _turn = turn;
-            session.lock().await.provisional.push(provisional);
+            let mut st = session.lock().await;
+            provisional.id = st.new_turn_id();
+            st.park(provisional);
         });
     }
 }
@@ -395,11 +402,16 @@ fn turn_stream(
             {
                 let mut st = session.lock().await;
                 let panelist_id = st.resolve_panelist(panelist_req.as_deref());
-                st.provisional.push(Provisional {
+                let id = st.new_turn_id();
+                st.park(Provisional {
+                    id,
                     panelist_id,
                     input: input.clone(),
+                    draft: None,
+                    extra: Vec::new(),
                     reply: vec![ContentBlock::text(opts.hold_line.clone())],
                     spoken: opts.hold_line.clone(),
+                    tool_calls: Vec::new(),
                 });
             }
             yield Ok(chunks.content(&opts.hold_line));
@@ -440,6 +452,7 @@ fn turn_stream(
             session_id: session_id.clone(),
             panelist: panelist.clone(),
             input: input.clone(),
+            draft: Some(draft.clone()),
             spoken: String::new(),
             said: String::new(),
             done: false,
@@ -458,7 +471,9 @@ fn turn_stream(
                 draft.warned_two_minutes = false;
                 {
                     let mut st = session.lock().await;
-                    st.commit_turn(
+                    let id = st.new_turn_id();
+                    st.commit_now(
+                        id,
                         TurnCommit {
                             draft,
                             extra: Vec::new(),
@@ -649,29 +664,47 @@ fn turn_stream(
             yield Ok(chunks.content(&spoken));
         }
 
-        // Commit before the final chunk, so a client that leaves right after the text still gets a history entry.
-        // The director request is built from the same state (history before this turn), then runs on its own.
-        let director_req = {
+        // Record the turn before the final chunk, so a client that leaves right after the text still has it. A turn
+        // that answers speech may be a speculative draft the voice platform never plays, so it is parked until the
+        // platform confirms it; a typed app event is final and is committed now. The director request is built from
+        // the same state (history before this turn) and runs on its own.
+        let speech = input.speech().is_some();
+        let (turn_id, director_req) = {
             let mut st = session.lock().await;
+            let id = st.new_turn_id();
             let director_req = (live.tools == ToolsMode::Director && !silent_failure)
                 .then(|| director::build_request(&st, &panelist, &draft, &spoken, &live.fast_model));
-            st.commit_turn(
-                TurnCommit {
-                    draft,
+            if speech && opts.confirm_speech_turns {
+                st.park(Provisional {
+                    id,
+                    panelist_id: panelist.clone(),
+                    input: input.clone(),
+                    draft: Some(draft),
                     extra,
                     reply,
                     spoken: spoken.clone(),
                     tool_calls,
-                    handover_line_used: false,
-                },
-                Instant::now(),
-            );
-            director_req
+                });
+            } else {
+                st.commit_now(
+                    id,
+                    TurnCommit {
+                        draft,
+                        extra,
+                        reply,
+                        spoken: spoken.clone(),
+                        tool_calls,
+                        handover_line_used: false,
+                    },
+                    Instant::now(),
+                );
+            }
+            (id, director_req)
         };
         guard.done = true;
         drop(guard);
         if let Some(dreq) = director_req {
-            tokio::spawn(run_director(app.clone(), session.clone(), session_id.clone(), panelist.clone(), dreq));
+            tokio::spawn(run_director(app.clone(), session.clone(), session_id.clone(), panelist.clone(), turn_id, dreq));
         }
         tracing::info!(
             session_id = %session_id,
@@ -700,6 +733,7 @@ async fn run_director(
     session: Arc<Mutex<SessionState>>,
     session_id: String,
     panelist: String,
+    turn_id: u64,
     req: MessagesRequest,
 ) {
     let started = Instant::now();
@@ -734,13 +768,12 @@ async fn run_director(
         session_id = %session_id,
         panelist_id = %panelist,
         model = %req.model,
+        turn_id,
         director_ms = ms,
         tools = ?names,
         cache_read_input_tokens = resp.usage.cache_read_input_tokens,
         input_tokens = resp.usage.input_tokens,
         "director"
     );
-    if !calls.is_empty() {
-        session.lock().await.apply_tool_calls(&calls);
-    }
+    session.lock().await.director_done(turn_id, calls);
 }
