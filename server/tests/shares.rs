@@ -301,17 +301,19 @@ async fn operator_can_revoke_any_link() {
     let slug = slug_of(&share(&app, &me, &id, true).await);
     let path = format!("/api/shares/{slug}");
 
-    // A wrong key is just another guest.
-    let res = app
-        .call_with(
-            Method::DELETE,
-            &path,
-            Some(&operator),
-            None,
-            &[("x-dev-key", "wrong")],
-        )
-        .await;
-    assert_eq!(res.status, StatusCode::NOT_FOUND);
+    // A wrong or empty key is just another guest.
+    for key in ["wrong", ""] {
+        let res = app
+            .call_with(
+                Method::DELETE,
+                &path,
+                Some(&operator),
+                None,
+                &[("x-dev-key", key)],
+            )
+            .await;
+        assert_eq!(res.status, StatusCode::NOT_FOUND, "key {key:?}");
+    }
     assert_eq!(get_raw(&app, &format!("/s/{slug}")).await.0, StatusCode::OK);
 
     let res = app

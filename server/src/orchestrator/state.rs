@@ -285,6 +285,10 @@ pub struct SessionState {
     /// What each panelist last streamed to the voice (filtered), to detect interruptions.
     pub last_agent_text: HashMap<String, String>,
     pub status: SessionStatus,
+    /// Bumped on every move into or out of a user pause: the voice release only acts on the pause it saw.
+    pub pause_epoch: u64,
+    /// When the current user pause began (wall clock, kept in the snapshot so a restart keeps the release time).
+    pub paused_wall: Option<chrono::DateTime<chrono::Utc>>,
     pub brief: Option<Brief>,
     pub closing_line: Option<String>,
     pub live: LiveSettings,
@@ -488,6 +492,8 @@ impl SessionState {
             hint_max_level: 0,
             last_agent_text: HashMap::new(),
             status: SessionStatus::Live,
+            pause_epoch: 0,
+            paused_wall: None,
             brief: None,
             closing_line: None,
             live,
@@ -559,6 +565,23 @@ impl SessionState {
         self.panelist(panelist_id)
             .map(|p| p.persona.display_name.clone())
             .unwrap_or_else(|| panelist_id.to_string())
+    }
+
+    /// The user paused (the headset came off, the page was hidden, the pause button): the status moves and a new
+    /// pause epoch starts. The caller stops the clock.
+    pub fn enter_pause(&mut self) {
+        self.status = SessionStatus::Paused;
+        self.pause_epoch += 1;
+        self.paused_wall = Some(chrono::Utc::now());
+    }
+
+    /// Out of a user pause (`ui.event resume`, `POST /resume`, an end): the pause epoch ends with it.
+    pub fn leave_pause(&mut self) {
+        if self.status == SessionStatus::Paused {
+            self.status = SessionStatus::Live;
+        }
+        self.pause_epoch += 1;
+        self.paused_wall = None;
     }
 
     /// Round time so far, pauses excluded.
@@ -1152,6 +1175,13 @@ impl SessionState {
             events.push(ev);
         }
         events
+    }
+
+    /// The armed closing line, when no app event has come to say it for `grace_ms` of round time.
+    pub fn closing_overdue(&self, now: Instant, grace_ms: u64) -> Option<String> {
+        let (at_ms, _) = self.timed_close.as_ref()?;
+        let line = self.pending_close.as_ref()?;
+        (self.elapsed_ms(now) >= at_ms + grace_ms).then(|| line.clone())
     }
 
     /// Arms the app's own closing line once the round clock reaches its time (once per round): the round moves to

@@ -509,7 +509,7 @@ async fn resume_keeps_state_and_mints_new_tokens() {
         assert!(
             st.pending_notes
                 .iter()
-                .any(|n| n.contains("connection dropped"))
+                .any(|n| n.contains("dropped connection"))
         );
     }
     assert_eq!(count(&app, "select count(*) from board_ops").await, 1);
@@ -970,7 +970,7 @@ async fn resume_only_within_the_window_and_three_times() {
         .await
         .pending_notes
         .iter()
-        .filter(|n| n.contains("connection dropped"))
+        .filter(|n| n.contains("dropped connection"))
         .count();
     assert_eq!(notes, 1);
 

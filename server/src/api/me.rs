@@ -257,32 +257,58 @@ pub async fn me(
     })))
 }
 
-/// A started round of this identity whose browser dropped less than the resume window ago:
-/// `{session_id, round_title, expires_at}`.
+/// A started round of this identity with no browser connected that can still be resumed:
+/// `{session_id, round_title, expires_at}`. A live round can be resumed for the offline window after the drop; a
+/// paused one until its pause budget runs out (resuming from a pause does not use up a resume).
 pub async fn resumable(app: &AppState, identity: Uuid) -> Result<Option<Value>, sqlx::Error> {
-    let rows: Vec<(Uuid, Option<String>, Option<DateTime<Utc>>)> = sqlx::query_as(
-        "select id, round_id, last_socket_at from sessions \
+    type Row = (
+        Uuid,
+        Option<String>,
+        String,
+        Option<DateTime<Utc>>,
+        Option<DateTime<Utc>>,
+        Option<f64>,
+    );
+    let rows: Vec<Row> = sqlx::query_as(
+        "select id, round_id, status, started_at, last_socket_at, (live_state->>'elapsed_ms')::float8 \
+         from sessions \
          where identity_id = $1 and status in ('live', 'paused') and started_at is not null \
-           and resume_count < 3 \
+           and (resume_count < 3 or status = 'paused') \
          order by started_at desc limit 5",
     )
     .bind(identity)
     .fetch_all(&app.db)
     .await?;
     let window = chrono::Duration::from_std(app.timing.offline_limit).unwrap_or_default();
+    let budget = chrono::Duration::from_std(app.timing.pause_limit).unwrap_or_default();
     let now = Utc::now();
-    for (id, round_id, last_socket_at) in rows {
-        let expires_at = match app.hubs.get(&id.to_string()) {
-            // In memory: dropped only when no socket is connected now.
-            Some(hub) => match hub.offline_for().await {
-                Some(gone) => now + window - chrono::Duration::from_std(gone).unwrap_or_default(),
-                None => continue,
-            },
-            // Not loaded (the server restarted): the last time a socket was seen.
-            None => match last_socket_at {
-                Some(t) => t + window,
-                None => continue,
-            },
+    for (id, round_id, status, started_at, last_socket_at, elapsed_ms) in rows {
+        let key = id.to_string();
+        let expires_at = match (app.hubs.get(&key), app.registry.get(&key)) {
+            // In memory: only when no socket is connected now.
+            (Some(hub), Some(handle)) => {
+                match crate::ws::resume_window_left(app, &hub, &handle).await {
+                    Some(left) => now + chrono::Duration::from_std(left).unwrap_or_default(),
+                    None => continue,
+                }
+            }
+            // Not loaded (the server restarted). The round time stood still since the pause or the drop, so the
+            // pause budget ends at start + round time + budget. Paused: that. Live: the offline window after the
+            // last socket, or the budget's end when it comes first.
+            _ => {
+                let Some(start) = started_at else { continue };
+                let budget_end = start
+                    + chrono::Duration::milliseconds(elapsed_ms.unwrap_or(0.0) as i64)
+                    + budget;
+                if status == "paused" {
+                    budget_end
+                } else {
+                    match last_socket_at {
+                        Some(t) => (t + window).min(budget_end),
+                        None => continue,
+                    }
+                }
+            }
         };
         if expires_at <= now {
             continue;

@@ -254,7 +254,7 @@ fn event_note(
             "Time check from the app: no boundary has passed; carry on.".into()
         }
         EventKind::Handover => "You now hold the floor. Your colleague just handed over to you; ask your first question in one or two sentences.".into(),
-        EventKind::Resume => "The call dropped and the candidate is back. Say \"Welcome back.\", one line about where you were, then a question.".into(),
+        EventKind::Resume => "The candidate is back after a pause or a dropped call. Say a short \"Welcome back.\", restate in one sentence where you were, then ask your next question.".into(),
         EventKind::SilenceCheck => format!(
             "The candidate has been quiet for about {} seconds, so check in once with a short line such as \"Want to think out loud?\", then wait.",
             state.round.silence_wait_seconds
