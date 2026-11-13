@@ -48,13 +48,21 @@ const fits = (f) =>
   Math.abs(f.canvas[1] - f.stage[1]) <= 1 &&
   Math.abs(f.aspect - f.stage[0] / f.stage[1]) < 0.01 &&
   Math.abs(f.buffer[0] / f.buffer[1] - f.stage[0] / f.stage[1]) < 0.02;
+// Resize the stage and fire a window resize (which runs IWSDK's handler first), then check the canvas follows.
+const resizeStage = (width) =>
+  page((w) => {
+    const stage = globalThis.__xrApp.world.renderer.domElement.parentElement;
+    stage.style.width = w;
+    window.dispatchEvent(new Event('resize'));
+  }, width);
 await sleep(2000);
 log.fit = [await fitCheck()];
-await viewport(900, 1000);
+await resizeStage('560px');
 await sleep(2500);
 log.fit.push(await fitCheck());
 await shot('preview-0-stage-after-resize');
-await viewport(1280, 720);
+await viewport(1100, 700);
+await resizeStage('');
 await sleep(2500);
 log.fit.push(await fitCheck());
 log.fitOk = log.fit.every(fits);

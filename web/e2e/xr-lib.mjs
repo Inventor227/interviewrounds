@@ -19,9 +19,17 @@ export async function page(fn, arg = null) {
 }
 `,
   );
-  const out = await iwsdk('browser', 'run', path.relative(process.env.EMU_APP_DIR, file), '--timeout', '25000');
-  const d = out && (out.data ?? out);
-  return d && 'result' in d ? d.result : d;
+  // The runtime frame can be swapped while XR starts; retry a few times when the handle went stale.
+  for (let attempt = 0; ; attempt++) {
+    try {
+      const out = await iwsdk('browser', 'run', path.relative(process.env.EMU_APP_DIR, file), '--timeout', '25000');
+      const d = out && (out.data ?? out);
+      return d && 'result' in d ? d.result : d;
+    } catch (e) {
+      if (attempt >= 3 || !/different document|Execution context was destroyed|frame was detached/i.test(e.message)) throw e;
+      await new Promise((r) => setTimeout(r, 2000));
+    }
+  }
 }
 
 /** Navigates the app page (or its runtime frame) to a same-origin path. */
