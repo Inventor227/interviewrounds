@@ -26,8 +26,8 @@ await waitReady();
 // No fallback override: the real 6 s timer runs.
 await go('/session/emu?offer=1&standins=1&seats=1');
 await waitApp();
-await call('xr', 'set-input-mode', { mode: 'controller' });
 await enterXR();
+await call('xr', 'set-input-mode', { mode: 'controller' });
 await call('xr', 'set-transform', { device: 'headset', position: HEAD, orientation: { pitch: -20, yaw: 0, roll: 0 } });
 await sleep(1500);
 await shot(`nodesk-1-controllers-hint`);
