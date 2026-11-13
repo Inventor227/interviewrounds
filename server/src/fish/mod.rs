@@ -60,6 +60,9 @@ pub struct FishSessionToken {
     /// the voice SDK checks some of it.
     #[serde(flatten)]
     pub extra: serde_json::Map<String, Value>,
+    /// The whole response as Fish sent it, passed to the browser as is (sessions API).
+    #[serde(skip)]
+    pub raw: Value,
 }
 
 /// `GET /v1/agent/sessions/{id}`, the parts we use.

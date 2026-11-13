@@ -6,22 +6,43 @@ this file exactly.
 
 ## REST
 
-JSON; cookie `ir_id` identifies the device/user; all under same origin.
+JSON; cookie `ir_id` identifies the device/user; all under same origin. A new guest (and its cookie) is made only by
+`GET /api/me` and `POST /api/sessions`; the other identity routes answer `401` without a known cookie.
 
 - `GET /api/content/catalog` → `{roles, rounds:[RoundPublic], meeting_templates, personas:[PersonaPublic]}`
 - `POST /api/sessions` `{mode:"interview"|"meeting", round_id?, meeting_plan_id?, length:"short"|"full",
   level:"junior"|"mid"|"senior"|"staff", style:"warm"|"neutral"|"tough", voice:"fish"|"fake", parent_session_id?}` →
-  `CreateSessionRes {session_id, client_token, ws_url, round:RoundPublic, panel:[Panelist], floor, panel_mode:"swap"|"joined", limits}`
-  where `Panelist {panelist_id, persona_id, display_name, title, avatar_id, seat:0|1|2, voice:{transport:"fish", fish:{session_token, livekit_url}}|{transport:"fake"}|{transport:"fish_pending"}}`
-- `POST /api/sessions/{id}/panelists/{pid}/join` `{opening_line?}` → `{voice}` (swap mode hand-over)
-- `POST /api/sessions/{id}/resume` → `CreateSessionRes` (same `session_id`, new tokens)
-- `POST /api/sessions/{id}/end` `{reason:"completed"|"user_ended"|"time_limit"|"disconnected"|"headset_removed"}` → 202
+  `CreateSessionRes {session_id, client_token, ws_url, round:RoundPublic, panel:[Panelist], floor, panel_mode:"swap"|"joined", limits,
+  timing:{silence_wait_seconds, interrupt_after_seconds, target_minutes, hard_stop_minutes}}`
+  where `Panelist {panelist_id, persona_id, display_name, title, avatar_id, seat:0|1|2, voice:{transport:"fish", fish:{session_id, token,
+  livekit_url, expires_at, max_duration_seconds, ...}}|{transport:"fake"}|{transport:"fish_pending"}}`. `fish` is Fish's session
+  response passed through unchanged (give all of it to the Fish SDK). `ws_url` is a path (`/ws/session/{id}`). `timing` comes from
+  the round (`RoundPublic` strips it): `silence_wait_seconds` is already scaled by level (junior 0.75x, mid 1x, senior and staff
+  1.5x) and `interrupt_after_seconds` is the floor persona's own value when it has one. `client_token` is 64 hex characters.
+  Swap mode mints a Fish token for the floor panelist only (`fish_pending` for the others); joined mode mints one for everyone.
+  A cap refusal is `429 {status, code, message, resets_at}` where `code` is a `Limits.reason` value and `resets_at` is a
+  date-time or `null`. `voice:"fake"` (browser speech, no Fish) is a development path: it needs the header
+  `X-Dev-Key: <DEV_KEY>`, else `403 {code: "dev_only"}`.
+- `POST /api/sessions/{id}/panelists/{pid}/join` `{opening_line?}` → `{voice}` (swap mode hand-over; `voice` as in `Panelist`).
+  The server adds the opening line to the shared history as that panelist's turn, gives it to the new Fish session as
+  `first_message`, moves the floor, and ends the previous panelist's Fish session. Joining a panelist that already has a
+  live voice returns that voice again (nothing new is minted or said). `409` in joined mode, and when the round ended
+  meanwhile.
+- `POST /api/sessions/{id}/resume` → `CreateSessionRes` (same `session_id`, new tokens). Allowed while the round is open
+  and either a socket is still connected or the last one dropped less than 3 minutes ago, at most 3 times per session.
+  Otherwise `409 {code}`: `session_ended` (also when the round ends while the new voice is being made), `resume_expired`
+  (past the 3 minutes) or `resume_limit`. The new voices are made first: if that fails (`503`) the old token and voices
+  keep working and the try does not count. Then earlier tokens stop working and their sockets close with `4401`; the
+  interviewer's next turn knows the candidate is back.
+- `POST /api/sessions/{id}/end` `{reason:"completed"|"user_ended"|"time_limit"|"disconnected"|"headset_removed"}` → 202. Ends
+  the round at once with this reason (also during the goodbye after `ui.event {kind: "end"}`).
 - `GET /api/sessions/{id}` → `{status:"created"|"live"|"paused"|"scoring"|"scored"|"failed"|"abandoned", report_ready}`
 - `GET /api/sessions/{id}/report` → `Report` (404 until ready)
 - `POST /api/sessions/{id}/board-image` (body `image/png`, ≤ 2 MB) → 204
 - `POST /api/sessions/{id}/retry` → `CreateSessionRes` (2-minute re-ask of the weakest moment)
 - `GET /api/me` → `{identity:{kind:"guest"|"user", name?, email?}, sign_in_available, settings, onboarding_done,
-  streak:{current, best, today_done}, daily:{round_id, title}, limits, entitlements}`
+  streak:{current, best, today_done}, daily:{round_id, title}, limits, entitlements, resumable:{session_id, round_title,
+  expires_at}|null}` (`resumable`: a started round whose browser dropped less than 3 minutes ago)
 - `GET /api/me/history?role=` → `[{session_id, round_id, title, started_at, headline}]` where `started_at` is a date-time
   and `headline: string` is the session report's `headline.summary`
 - `GET /api/me/skills?role=` → `{competencies:[{id, name, points:[{session_id, at, score}]}]}`
@@ -30,7 +51,9 @@ JSON; cookie `ir_id` identifies the device/user; all under same origin.
 - `POST /api/shares` `{session_id, include_transcript}` → `{slug, url}`; `DELETE /api/shares/{slug}`
 - `GET /s/{slug}` server-rendered scorecard; `GET /auth/google/start`, `/auth/google/callback`, `POST /auth/logout`
 - `POST /v1/chat/completions` Fish custom LLM (bearer `FISH_LLM_SECRET`, or the session `client_token` when the session's
-  voice is `fake`); OpenAI chat format in, SSE `chat.completion.chunk` out
+  voice is `fake`); OpenAI chat format in, SSE `chat.completion.chunk` out. Turns are served only while the round is `live`
+  (or ending, for the goodbye): else `409 {code: "session_not_live"}`. With the `client_token` a turn is at most 2,000
+  characters (`413 {code: "turn_too_long"}`) and a session at most 150 turns (`429 {code: "turn_limit"}`).
 - `GET /healthz`
 
 ## WebSocket
@@ -54,11 +77,16 @@ Sequencing and acks:
 - Only reliable frames are queued for replay: `board.op`, `board.ghost_reject`, `transcript.mark`, `ui.event`. After a
   reconnect the client sends `hello` first, then replays its unacked reliable frames with their original `seq`. It keeps
   at most 1000; if it has to evict one, it reports it to the app instead of dropping it silently.
-- `head.samples` and `voice.state` are telemetry: sent only while the socket is open, never queued or replayed. They
-  still take the next `seq`, so `seq` only grows in send order.
+- `head.samples`, `voice.state`, `voice.spoken` and `board.focus` are telemetry: sent only while the socket is open, never queued or
+  replayed. They still take the next `seq`, so `seq` only grows in send order.
+- The server acks only frames it has saved. When a frame cannot be saved it answers `error {code: "server_error"}`,
+  processes nothing after it, and closes with `1011`; the client reconnects and replays it. A client that sends nothing
+  (not even a ping) for 45 s is closed with `1001` (frames the server sends do not count). Beyond a burst of 1,000 frames
+  (the replay after `hello`), more than 60 frames a second close the socket with `1008`; replayed frames the server
+  already processed do not count. Messages are at most 256 KB.
 - Close codes. A server close with `1000` or `4001`-`4999` is final and the client does not reconnect: `4401` the
-  `client_token` is unknown or expired, `4404` no such session, `4409` the session has ended (also sent after
-  `round.ended`). Any other close (`1001`, `1006`, `1011`, `1012`, ...) is transient: the client reconnects with backoff
+  `client_token` is unknown or expired, `4404` no such session, `4409` the session has ended (sent once the report is
+  done, see below). Any other close (`1001`, `1006`, `1011`, `1012`, ...) is transient: the client reconnects with backoff
   0.5, 1, 2, 4 s (then every 4 s), and resets the backoff only after a frame arrives on the new connection. `4000` is the
   client's own close when no frame arrived for a whole ping interval (20 s).
 - Duplicates are ignored by `seq`: the server skips a client frame whose `seq` it already processed for that
@@ -67,14 +95,36 @@ Sequencing and acks:
 
 - Client → server: `hello {client_token, last_seq}` (first frame), `board.op {op_id, rev_base, src, op, args, at_ms}`,
   `transcript.mark {segment_id, panelist_id, first_at_ms, final_at_ms, text}`, `head.samples {samples:[{t_ms, yaw, pitch,
-  speaking, target}]}`, `voice.state {panelist_id, mode:"listening"|"thinking"|"speaking", at_ms}`,
+  speaking, target}]}`, `voice.state {panelist_id, mode:"listening"|"thinking"|"speaking", at_ms, latency?:{user_final_at_ms, thinking_at_ms,
+  first_text_at_ms}}` (the latency split once per turn, stored for the latency log), `voice.spoken {panelist_id,
+  text_prefix}` (the first words of a reply as the voice actually played them, about 60 characters, from the SDK's
+  playback-paced `agentResponseDelta`, once per reply: replies are kept in the interviewer's memory only once played),
   `ui.event {kind:"pause"|"resume"|"end"|"hint"|"skip_onboarding", reason?}`, `board.ghost_reject {op_id}` (dismiss a
-  Scribe suggestion), `ping`
-- Server → client: `round.state {status, phase_id, phase_index, phases, elapsed_s, remaining_s, phase_remaining_s, brief:{question, lines}, floor}`,
+  Scribe suggestion), `board.focus {item_id}` (`item_id` a string or null: the item the user last touched or created,
+  sent debounced; the latest wins and the Scribe uses it to resolve "that"), `ping`
+- Server → client: `round.state {status, phase_id, phase_index, phases:[{id, title?, minutes, uses_whiteboard}], elapsed_s,
+  remaining_s, phase_remaining_s, brief:{question, lines}, floor, time_check_due}`,
   `panel.hand_over {from, to, opening_line}`, `board.ack {op_id, rev}`, `board.ghosts {ghosts:[GhostOp]}`,
   `board.apply {op_id, rev, src, op, args}` (server-originated ops), `avatar.point_at {panelist_id, item_id}`,
   `round.ending {closing_line}`, `round.ended {reason}`, `report.progress {stage:"metrics"|"scoring"|"done", pct}`,
   `report.ready {session_id}`, `error {code, message, op_id?}` (`op_id` set for `op_rejected`), `pong`
+- `round.state` is a full snapshot and always has `seq: 0` (never buffered or replayed). The server sends one right after
+  `hello`, one on every change (status, phase, floor, brief), and one every second while the round is `live` or `paused`.
+  `elapsed_s` is round time without pauses; the clock also stops while no socket is connected and starts at the first
+  `hello` (status `created` until then). `time_check_due: true` is sent once per phase boundary, on the snapshot when the
+  current phase runs out of time, and again on the snapshot after a `hello` while that time check is still owed (no
+  `[event: time_check]` has reached the server since the boundary); it is `false` otherwise. On `true` the browser sends
+  `[event: time_check]`.
+- Ending. `ui.event {kind: "end", reason?}` starts the goodbye: the browser sends `[event: ending]`, and the round ends
+  3 s after the interviewer's closing line, or 20 s after the request, whichever comes first, with that `reason` (default
+  `user_ended`); `POST /end` ends it at once. The interviewer's `end_round` (`round.ending`) ends it the same way.
+  A round with no socket for 3 minutes ends with `round.ended {reason: "disconnected"}`; one past its `hard_stop_minutes`,
+  or with more than 10 minutes of pauses in total (user pauses and time offline), ends with `time_limit`.
+- After `round.ended` the socket stays open while the report is made: `report.progress`, then `report.ready` (or
+  `error {code: "report_failed"}`), then close `4409`; with no report within 120 s it closes `4409` anyway. A round with
+  nothing to score (`abandoned`) closes `4409` right after `round.ended`. Frames sent after the end are acked but not
+  stored. A reconnect
+  in that time is let in and replayed. On a server restart sockets close with `1012`.
 - Marker texts the browser sends into the voice session as a typed user turn: `[event: start]`, `[event: time_check]`,
   `[event: handover]`, `[event: resume]`, `[event: silence_check]`, `[event: ending]`, `[event: long_answer]` (sent when
   one candidate turn runs past the round's `interrupt_after_seconds`).
@@ -117,7 +167,7 @@ Derived from the schemas (the server strips prompt-only fields before sending):
   `attendees[].hidden` block removed (stance, concerns, patience, persona, avatar and voice stay on the server). The
   suggested objections the setup page shows are in each attendee's `likely_objections`, which stays.
 - `Limits {short_left_today: int|null, full_left: int|null, resets_at: date-time|null, reason: null|"guest_daily_limit"|
-  "guest_full_used"|"judge_budget_reached"|"build_budget_reached"|"free_rounds_used"}`: `null` counts mean no limit;
+  "guest_full_used"|"judge_budget_reached"|"build_budget_reached"|"free_rounds_used"|"model_budget_reached"}`: `null` counts mean no limit;
   a non-null `reason` means a new session is blocked.
 - `Entitlements {plan: "guest"|"free"|"sprint"|"pro", free_rounds_left: int|null, minutes_total: int|null,
   minutes_used: number|null, period_end: date-time|null}`.

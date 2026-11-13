@@ -2,6 +2,8 @@
 //! (run them through `plan/ops-tools/remote.sh <worktree> rust --pg -- cargo test`).
 #![allow(dead_code)]
 
+pub mod live;
+
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
@@ -18,7 +20,12 @@ pub fn database_url() -> String {
 }
 
 pub fn test_config(database_url: &str, public_dir: &Path) -> Config {
-    let env: HashMap<&str, String> = [
+    test_config_with(database_url, public_dir, &[])
+}
+
+/// The test config with some variables overridden or added.
+pub fn test_config_with(database_url: &str, public_dir: &Path, extra: &[(&str, &str)]) -> Config {
+    let mut env: HashMap<&str, String> = [
         ("DATABASE_URL", database_url.to_string()),
         ("APP_ORIGIN", "https://rounds.example.test".to_string()),
         ("PUBLIC_DIR", public_dir.display().to_string()),
@@ -31,6 +38,9 @@ pub fn test_config(database_url: &str, public_dir: &Path) -> Config {
     ]
     .into_iter()
     .collect();
+    for (k, v) in extra {
+        env.insert(k, v.to_string());
+    }
     Config::from_lookup(|k| env.get(k).cloned()).expect("test config")
 }
 
@@ -71,4 +81,22 @@ pub async fn body_bytes(res: Response<Body>) -> Vec<u8> {
 
 pub async fn body_json(res: Response<Body>) -> serde_json::Value {
     serde_json::from_slice(&body_bytes(res).await).expect("json body")
+}
+
+/// A new empty schema in the test database (migrated on first connect), so spend totals and counts are per test.
+/// A schema costs almost nothing, unlike a database per test, which would fill the throwaway Postgres's tmpfs.
+pub async fn fresh_database() -> String {
+    use sqlx::Connection;
+    let base = database_url();
+    let name = format!("t_{}", uuid::Uuid::new_v4().simple());
+    let mut conn = sqlx::PgConnection::connect(&base)
+        .await
+        .expect("connect to the test server");
+    // The name is a fresh uuid in hex: nothing from outside reaches the SQL.
+    sqlx::query(sqlx::AssertSqlSafe(format!("create schema {name}")))
+        .execute(&mut conn)
+        .await
+        .expect("create schema");
+    let sep = if base.contains('?') { '&' } else { '?' };
+    format!("{base}{sep}options=-c%20search_path%3D{name}")
 }

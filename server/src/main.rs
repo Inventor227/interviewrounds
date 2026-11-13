@@ -2,7 +2,9 @@ use std::process::ExitCode;
 use std::time::Duration;
 
 use anyhow::Context;
-use ir_server::{AppState, Config, db, router};
+use ir_server::content::Catalog;
+use ir_server::ws::CLOSE_RESTART;
+use ir_server::{AppState, Config, db, persist, router};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
@@ -50,16 +52,36 @@ async fn serve() -> anyhow::Result<()> {
         "starting"
     );
 
+    let catalog = Catalog::load(&config.content_dir).context("loading the content folder")?;
+    tracing::info!(
+        rounds = catalog.rounds.len(),
+        personas = catalog.personas.len(),
+        "content loaded"
+    );
     let pool = connect_with_retry(&config).await?;
     let port = config.port;
-    let app = router(AppState::new(pool, config));
+    let state = AppState::new(pool, config).with_catalog(catalog);
+    // Rounds left open by the previous process: those offline past the resume window end now. Their Fish
+    // settlement runs in the background (the janitor's first run starts at once).
+    if let Err(err) = persist::sweep_stale(&state).await {
+        tracing::warn!(error = %format!("{err:#}"), "startup sweep failed");
+    }
+    persist::spawn_janitor(state.clone(), state.timing.janitor);
+    let hubs = state.hubs.clone();
+    let app = router(state);
 
     let listener = TcpListener::bind(("0.0.0.0", port))
         .await
         .with_context(|| format!("binding port {port}"))?;
     tracing::info!(port, "listening");
     axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
+        .with_graceful_shutdown(async move {
+            shutdown_signal().await;
+            // Live sockets close as "restarting" so browsers reconnect to the next server (1000 would end
+            // the session on the client).
+            hubs.close_all(CLOSE_RESTART, "server restarting");
+            tokio::time::sleep(Duration::from_millis(300)).await;
+        })
         .await
         .context("serving")?;
     tracing::info!("stopped");

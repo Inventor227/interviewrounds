@@ -88,9 +88,14 @@ impl FishClient {
             .await
             .map_err(network)?;
         let res = check(res).await?;
-        res.json::<FishSessionToken>()
+        let raw: Value = res
+            .json()
             .await
-            .map_err(|e| FishError::Decode(e.to_string()))
+            .map_err(|e| FishError::Decode(e.to_string()))?;
+        let mut token: FishSessionToken =
+            serde_json::from_value(raw.clone()).map_err(|e| FishError::Decode(e.to_string()))?;
+        token.raw = raw;
+        Ok(token)
     }
 
     /// `POST /v1/agent/sessions/{id}/end` (204).
