@@ -14,7 +14,7 @@ use uuid::Uuid;
 
 use crate::app::AppState;
 use crate::board::{self, ApplyOutcome, Board, BoardKit, BoardSession, GhostOp};
-use crate::orchestrator::{Brief, SessionState, initial_brief};
+use crate::orchestrator::{Brief, Mode, SessionState, initial_brief};
 use crate::scribe::{Scribe, ScribeInput};
 use crate::usage::LLM_SESSION;
 use crate::ws::{Hub, error_frame};
@@ -53,7 +53,11 @@ pub fn start_board(st: &SessionState) -> Option<Board> {
     let brief = st
         .brief
         .clone()
-        .or_else(|| initial_brief(&st.question))
+        .or_else(|| {
+            (st.mode == Mode::Interview)
+                .then(|| initial_brief(&st.question))
+                .flatten()
+        })
         .unwrap_or_default();
     let question_id = st.question.get("id").and_then(Value::as_str);
     let language = st
