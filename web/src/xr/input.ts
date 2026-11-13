@@ -27,10 +27,12 @@ export interface ControllerState {
   busy: boolean;
   /** Thumbstick, -1..1 per axis; y is negative when pushed away (up). */
   stick: { x: number; y: number };
+  /** A finger rests on the trigger, or it is pulled. */
+  touched: boolean;
 }
 
 export function newController(hand: Side): ControllerState {
-  return { hand, tracked: false, tip: { x: 0, y: 0, z: 0 }, dir: { x: 0, y: 0, z: -1 }, pressed: false, busy: false, stick: { x: 0, y: 0 } };
+  return { hand, tracked: false, tip: { x: 0, y: 0, z: 0 }, dir: { x: 0, y: 0, z: -1 }, pressed: false, busy: false, stick: { x: 0, y: 0 }, touched: false };
 }
 
 /**
@@ -73,14 +75,16 @@ export const GAMEPAD = { trigger: 0, primary: 4, secondary: 5, stickX: 2, stickY
 export type ControllerButton = 'primary' | 'secondary';
 
 /** Reads what the room uses from a controller's gamepad. A missing gamepad reads as nothing pressed. */
-export function readGamepad(g: { buttons: readonly { pressed: boolean }[]; axes: readonly number[] } | null | undefined): {
+export function readGamepad(g: { buttons: readonly { pressed: boolean; touched?: boolean; value?: number }[]; axes: readonly number[] } | null | undefined): {
   trigger: boolean;
+  touched: boolean;
   primary: boolean;
   secondary: boolean;
   stick: { x: number; y: number };
 } {
   const b = (i: number) => !!g?.buttons[i]?.pressed;
-  return { trigger: b(GAMEPAD.trigger), primary: b(GAMEPAD.primary), secondary: b(GAMEPAD.secondary), stick: { x: g?.axes[GAMEPAD.stickX] ?? 0, y: g?.axes[GAMEPAD.stickY] ?? 0 } };
+  const t = g?.buttons[GAMEPAD.trigger];
+  return { trigger: b(GAMEPAD.trigger), touched: !!t && (t.pressed || !!t.touched || (t.value ?? 0) > 0), primary: b(GAMEPAD.primary), secondary: b(GAMEPAD.secondary), stick: { x: g?.axes[GAMEPAD.stickX] ?? 0, y: g?.axes[GAMEPAD.stickY] ?? 0 } };
 }
 
 /** Button presses (the moment a button goes down), per side. A button held when the controller appears does not count. */

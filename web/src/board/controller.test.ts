@@ -339,6 +339,44 @@ describe('controllers on the board', () => {
     expect(Math.abs(up.x_cm - 26)).toBeLessThan(0.6);
   });
 
+  it('an idle controller that happens to aim at the sheet shows no ray until it moves or its trigger is touched', () => {
+    const { port, store, xr } = setup();
+    port.triggerStroke('right', roughBox(20, 12, 10, 6, 0.4, 2), 'near');
+    const card = store.board.items[0] as { x: number; y: number; w: number; h: number };
+    const cursor = xr.sheet.cursor('left');
+    port.setController('right', null);
+    port.frame();
+    // The left controller appears, held still, its ray on the card: nothing shows, nothing is hovered.
+    port.controllerAimAt('left', card.x + card.w / 2, card.y + card.h / 2);
+    for (let i = 0; i < 40; i++) port.frame();
+    expect(cursor.dot.visible).toBe(false);
+    expect(cursor.line.visible).toBe(false);
+    expect(xr.hands!.pointers().filter((p) => p.hand === 'left')).toEqual([]);
+    expect(xr.input.hovers()).toEqual([]);
+    // It moves: the ray, the dot and the hover are there.
+    port.controllerAimAt('left', card.x + card.w / 2 + 1, card.y + card.h / 2);
+    port.frame();
+    expect(cursor.dot.visible).toBe(true);
+    expect(xr.input.hovers()).toHaveLength(1);
+    // Held still again for three seconds: gone.
+    for (let i = 0; i < 220; i++) port.frame();
+    expect(cursor.dot.visible).toBe(false);
+    expect(xr.input.hovers()).toEqual([]);
+    // A finger on the trigger wakes it without a move, and a pull from rest still presses at once.
+    const c = port.controllers().find((k) => k.hand === 'left')!;
+    port.setController('left', c.tip, c.dir, { touched: true });
+    port.frame();
+    expect(cursor.dot.visible).toBe(true);
+    port.setController('left', c.tip, c.dir);
+    for (let i = 0; i < 220; i++) port.frame();
+    expect(cursor.dot.visible).toBe(false);
+    port.select('left', 'start', 'controller');
+    port.frame();
+    expect(xr.input.holding('left')).toBe('pick');
+    expect(cursor.dot.visible).toBe(true);
+    port.select('left', 'end', 'controller');
+  });
+
   it('a tip that is touching stays the pointer a little above the band, then the ray takes over', () => {
     const { port, xr } = setup();
     const at = (h: number) => {
@@ -347,6 +385,7 @@ describe('controllers on the board', () => {
       return !!xr.hands!.pointers()[0]?.ray;
     };
     // Coming down from above: the ray until the tip is within 3 cm.
+    at(6);
     expect(at(3.6)).toBe(true);
     expect(at(2.5)).toBe(false);
     // Lifting a little past 3 cm keeps the touch; past the slack it is the ray again.
@@ -428,7 +467,7 @@ describe('controllers on the code panel', () => {
       const frame = xr.panel!.frame;
       const on = frame.localToWorld(panelPoint(rect, x, y, 0));
       const tip = frame.localToWorld(panelPoint(rect, x, y + 4, 25));
-      port.setController('right', { x: tip.x, y: tip.y, z: tip.z }, { x: on.x - tip.x, y: on.y - tip.y, z: on.z - tip.z });
+      port.setController('right', { x: tip.x, y: tip.y, z: tip.z }, { x: on.x - tip.x, y: on.y - tip.y, z: on.z - tip.z }, { touched: true });
     };
     const x = r1.x + r1.w / 2;
     for (let i = 0; i < 12; i++) {

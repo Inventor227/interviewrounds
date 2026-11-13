@@ -51,7 +51,7 @@ export async function createDevSheet(root: HTMLElement): Promise<DevSheetHandle>
       sessionMode: SessionMode.ImmersiveAR,
       referenceSpace: ReferenceSpaceType.LocalFloor,
       offer: 'once',
-      features: { handTracking: { required: true } },
+      features: { handTracking: true },
     },
     render: { ...base.render, near: 0.01, far: 50 },
   });
@@ -152,6 +152,7 @@ export async function createDevSheet(root: HTMLElement): Promise<DevSheetHandle>
           tip: { x: p.x, y: p.y, z: p.z },
           dir: { x: -2 * (q.x * q.z + q.w * q.y), y: -2 * (q.y * q.z - q.w * q.x), z: -(1 - 2 * (q.x * q.x + q.y * q.y)) },
           stick: pad.stick,
+          touched: pad.touched,
         });
         pads[src.handedness] = src.gamepad as unknown as HapticPad;
         buttons.update(src.handedness, pad, now);

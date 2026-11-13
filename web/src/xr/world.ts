@@ -1,6 +1,6 @@
 // The XR app: one IWSDK world for the round room, in passthrough (`ar`) or as a 2D preview in the page (`preview`).
 //
-// ar:      immersive-ar, hand tracking required, hit test and anchors optional, medium fixed foveation. 72 Hz,
+// ar:      immersive-ar; hand tracking, hit test and anchors asked for but optional (sessionFeatures.ts), medium fixed foveation. 72 Hz,
 //          raised to 90 only after the room and people are on screen and frames show headroom. Hands are the
 //          first-class input; held controllers do everything hands do (input.ts), and the room follows the user
 //          changing between them. Placement is explicit: place() asks "Touch your desk with one finger" (or with
@@ -43,6 +43,7 @@ import type { SeatPose } from './seats';
 import { createSounds, type Sounds } from './sound';
 import { DEFAULT_STANDINS, loadStandIn, placeStandIn, type StandIn } from './standin';
 import { SelectRelay, type SelectCallback } from './select';
+import { XR_FEATURES } from './sessionFeatures';
 import { RoundUI } from './ui';
 
 export type XRMode = 'ar' | 'preview';
@@ -207,7 +208,7 @@ export async function createXRApp(root: HTMLElement, opts: XRAppOptions): Promis
             // Tooling re-offers after every exit so a script can enter again.
             offer: opts.offer ? 'always' : 'none',
             // Plane and mesh detection stay off: they would add a permission prompt before the room appears.
-            features: { handTracking: { required: true }, hitTest: true, anchors: true },
+            features: { ...XR_FEATURES },
           },
           render: { near: 0.01, far: 50, ...base.render },
           features: { ...base.features, sceneUnderstanding: false },
@@ -342,6 +343,7 @@ export async function createXRApp(root: HTMLElement, opts: XRAppOptions): Promis
         c.dir.z = -(1 - 2 * (q.x * q.x + q.y * q.y));
         const pad = readGamepad(src.gamepad);
         c.pressed = pad.trigger;
+        c.touched = pad.touched;
         c.stick.x = pad.stick.x;
         c.stick.y = pad.stick.y;
         c.busy = world.input.xr.multiPointers[c.hand].getRayBusy();
@@ -380,6 +382,7 @@ export async function createXRApp(root: HTMLElement, opts: XRAppOptions): Promis
     for (const c of controllerStates) {
       if (!c.tracked) {
         c.pressed = false;
+        c.touched = false;
         c.busy = false;
         buttons.update(c.hand, null, now);
       }

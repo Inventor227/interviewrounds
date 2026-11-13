@@ -10,7 +10,7 @@
 import { OneEuroFilter } from './ink';
 import { DRAG_THRESHOLD_CM, type BoardPoint, type CancelReason, type PointerAdapter } from './input';
 import { SHEET, type Rect } from './model';
-import { CONTROLLER_NEAR_CM, CONTROLLER_NEAR_SLACK_CM, CONTROLLER_RAY_MAX_M, HAND_PROFILE, profileFor, type BoardPointer, type PointerKind, type PointerProfile } from './pointer';
+import { CONTROLLER_AWAKE_MS, CONTROLLER_NEAR_CM, CONTROLLER_NEAR_SLACK_CM, CONTROLLER_RAY_MAX_M, CONTROLLER_WAKE_MOVE_M, CONTROLLER_WAKE_TURN_COS, HAND_PROFILE, profileFor, type BoardPointer, type PointerKind, type PointerProfile } from './pointer';
 import type { BoardXRPort, SelectPhase, Vec3, XRControllerSample, XRHandSample } from './port';
 
 export const TRACKING_GRACE_MS = 300;
@@ -57,6 +57,8 @@ export interface HandAdapterOptions {
 /** What a side's input source gives this frame: the world point over the board (null: not on it). */
 interface Source {
   kind: PointerKind;
+  /** A controller's trigger is touched. */
+  touched?: boolean;
   far: boolean;
   raw: Vec3 | null;
   tip: Vec3;
@@ -80,6 +82,11 @@ interface HandTrack {
   dir: Vec3 | null;
   /** This frame's raw point (world), where a press starts. */
   raw: Vec3 | null;
+  /** A controller's pose when it last moved, and when: a ray shows only for a controller in use. */
+  restTip: Vec3 | null;
+  restDir: Vec3 | null;
+  movedAt: number;
+  awake: boolean;
   visible: boolean;
   /** Idle and within the hover band last frame (a leave is sent when that ends). */
   hovering: boolean;
@@ -106,6 +113,10 @@ const track = (): HandTrack => ({
   tip: null,
   dir: null,
   raw: null,
+  restTip: null,
+  restDir: null,
+  movedAt: -Infinity,
+  awake: true,
   visible: false,
   hovering: false,
   active: false,
@@ -170,6 +181,8 @@ export class HandAdapter implements PointerAdapter {
     for (const hand of ['left', 'right'] as const) {
       const t = this.hands[hand];
       if (!t.visible || !t.last || !(t.active || this.inZone(t.last))) continue;
+      // A controller that is only being held and happens to aim at the sheet shows nothing.
+      if (t.far && !t.active && !t.awake) continue;
       const p: HandPointer = { hand, ...t.last, pinched: t.active, kind: t.kind ?? 'hand' };
       if (t.far && t.tip && t.world) p.ray = { from: t.tip, to: t.world };
       out.push(p);
@@ -248,7 +261,7 @@ export class HandAdapter implements PointerAdapter {
     }
     const c = ctrls.find((k) => k.hand === hand);
     if (!c || !c.tracked) return null;
-    const base = { kind: 'controller' as const, tip: c.tip, dir: c.dir };
+    const base = { kind: 'controller' as const, tip: c.tip, dir: c.dir, touched: !!c.touched };
     // A gesture keeps the way it started: a stroke by touch stays on the tip, a stroke by ray stays on the ray.
     if (t.active && t.kind === 'controller') {
       if (!t.far) return { ...base, far: false, raw: c.tip };
@@ -264,6 +277,25 @@ export class HandAdapter implements PointerAdapter {
       if (hit && hit.dist <= CONTROLLER_RAY_MAX_M && this.inZone({ ...this.project(hit.point), h_cm: 0 })) return { ...base, far: true, raw: hit.point };
     }
     return { ...base, far: false, raw: null };
+  }
+
+  /** Notes when a controller last moved or had its trigger touched (see CONTROLLER_AWAKE_MS). */
+  private wake(t: HandTrack, src: Source, now: number): void {
+    if (src.kind !== 'controller' || !src.dir) {
+      t.awake = true;
+      return;
+    }
+    const a = t.restTip;
+    const d = t.restDir;
+    const moved = !a || !d || Math.hypot(src.tip.x - a.x, src.tip.y - a.y, src.tip.z - a.z) > CONTROLLER_WAKE_MOVE_M || src.dir.x * d.x + src.dir.y * d.y + src.dir.z * d.z < CONTROLLER_WAKE_TURN_COS;
+    if (moved) {
+      // The first sighting is not a move: a controller that appears lying still stays quiet.
+      if (a) t.movedAt = now;
+      t.restTip = { ...src.tip };
+      t.restDir = { ...src.dir };
+    }
+    if (src.touched || t.active) t.movedAt = now;
+    t.awake = now - t.movedAt <= CONTROLLER_AWAKE_MS;
   }
 
   /** New filters for a pointer kind (and for a controller going between touch and ray). */
@@ -296,6 +328,7 @@ export class HandAdapter implements PointerAdapter {
       if (src) {
         t.tip = src.tip;
         t.dir = src.dir;
+        this.wake(t, src, now);
       }
       if (src?.raw) {
         const raw = src.raw;
@@ -308,6 +341,7 @@ export class HandAdapter implements PointerAdapter {
         t.visible = true;
         t.lostAt = null;
         if (t.active) this.emit(this.subs.move, hand, this.gesturePoint(t, t.last, now), now);
+        else if (src.far && !t.awake) this.leave(t, hand);
         else if (this.inZone(t.last) && t.last.h_cm < HOVER_MAX_CM) {
           t.hovering = true;
           this.emit(this.subs.move, hand, t.last, now);

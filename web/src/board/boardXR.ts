@@ -218,7 +218,9 @@ export function createBoardXR(port: BoardXRPort, opts: BoardXROptions): BoardXR 
 
   // Controller extras. A or X takes back the last thing this user did on the board.
   const undo = (hand: 'left' | 'right'): boolean => {
-    if (input.holding(hand)) return false;
+    // Not while either side is in the middle of something (A on one controller must not take back the card the
+    // other one is carrying).
+    if (input.holding('left') || input.holding('right')) return false;
     const target = store.undoTarget();
     if (!target) return false;
     actor = hand;

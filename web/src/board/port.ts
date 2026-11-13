@@ -48,6 +48,8 @@ export interface XRControllerSample {
   busy?: boolean;
   /** Thumbstick, -1..1 per axis; y is negative when pushed away from the user (up). */
   stick?: { x: number; y: number };
+  /** A finger rests on the trigger (or it is pulled): the controller is in use even when it is held still. */
+  touched?: boolean;
 }
 
 /** 'cancel': a selectend with no select before it (the system cancelled the pinch). */

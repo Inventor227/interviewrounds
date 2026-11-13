@@ -50,6 +50,15 @@ export const CONTROLLER_NEAR_SLACK_CM = 1.5;
 /** The aim ray reaches the sheet from at most this far (m): the sheet is on the desk in front of the user. */
 export const CONTROLLER_RAY_MAX_M = 1.5;
 
+/**
+ * A controller that is only being held (resting on a knee, hanging in the other hand) may happen to aim at the
+ * sheet. Its ray, dot and hover show only while it is in use: it moved its tip this far (m) or turned this much
+ * (the cosine of about 2 degrees) within the last CONTROLLER_AWAKE_MS, or a finger is on its trigger.
+ */
+export const CONTROLLER_WAKE_MOVE_M = 0.008;
+export const CONTROLLER_WAKE_TURN_COS = 0.9994;
+export const CONTROLLER_AWAKE_MS = 2500;
+
 export function profileFor(kind: PointerKind, far: boolean): PointerProfile {
   if (kind === 'hand') return HAND_PROFILE;
   return far ? CONTROLLER_FAR_PROFILE : CONTROLLER_NEAR_PROFILE;

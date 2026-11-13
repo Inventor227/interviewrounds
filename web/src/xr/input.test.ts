@@ -55,8 +55,10 @@ function pad(o: { trigger?: boolean; a?: boolean; b?: boolean; stickY?: number }
 
 describe('controller buttons', () => {
   it('reads_trigger_a_b_and_the_thumbstick_from_an_xr_standard_gamepad', () => {
-    expect(readGamepad(pad({ trigger: true, a: true, stickY: -0.8 }))).toEqual({ trigger: true, primary: true, secondary: false, stick: { x: 0, y: -0.8 } });
-    expect(readGamepad(null)).toEqual({ trigger: false, primary: false, secondary: false, stick: { x: 0, y: 0 } });
+    expect(readGamepad(pad({ trigger: true, a: true, stickY: -0.8 }))).toEqual({ trigger: true, touched: true, primary: true, secondary: false, stick: { x: 0, y: -0.8 } });
+    expect(readGamepad(null)).toEqual({ trigger: false, touched: false, primary: false, secondary: false, stick: { x: 0, y: 0 } });
+    // A finger resting on the trigger without pulling it.
+    expect(readGamepad({ buttons: [{ pressed: false, touched: true, value: 0 }], axes: [] }).touched).toBe(true);
   });
 
   it('a_press_fires_once_when_the_button_goes_down', () => {
