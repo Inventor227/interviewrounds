@@ -66,6 +66,8 @@ export interface KitDraw {
   /** Board cm the drawing touches. */
   bounds: Rect;
   draw(ctx: CanvasRenderingContext2D, board: Board, pxPerCm: number): void;
+  /** Where it shows: on the sheet (default) or on the code panel (its own surface in XR). */
+  surface?: 'sheet' | 'panel';
 }
 
 export interface KitHandler {
