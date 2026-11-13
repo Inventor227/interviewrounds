@@ -1,0 +1,24 @@
+{
+  "id": "sde.system_design.full",
+  "title": "System design",
+  "role": "sde",
+  "round_type": "system_design",
+  "length": "full",
+  "target_minutes": 30,
+  "hard_stop_minutes": 33,
+  "silence_wait_seconds": 45,
+  "interrupt_after_seconds": 120,
+  "panel": { "lead": "persona.daniel", "second": "persona.ana", "second_enters_phase": "deep_dive" },
+  "phases": [
+    { "id": "intro", "minutes": 1, "goal": "Introduce yourself and the format." },
+    { "id": "requirements", "minutes": 6, "goal": "Give the prompt and let them scope.", "must_cover": ["functional", "scale"] },
+    { "id": "hld", "minutes": 12, "goal": "They draw; probe gaps.", "uses_whiteboard": true },
+    { "id": "deep_dive", "minutes": 9, "goal": "Failure modes and trade-offs, one at a time." },
+    { "id": "wrap", "minutes": 2, "goal": "Take one question and close." }
+  ],
+  "rubric_id": "rubric.system_design",
+  "question_pool": "bank.system_design",
+  "hands": "whiteboard",
+  "board_kit": "hld",
+  "short_version": "sde.system_design.short"
+}

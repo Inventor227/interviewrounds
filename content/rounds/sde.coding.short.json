@@ -19,7 +19,7 @@
       "id": "problem",
       "title": "Problem",
       "minutes": 1.5,
-      "goal": "Open in about twenty words: first name, round and length, then ask how they would approach the problem, and call show_question. Answer clarifying questions briefly; do not prompt for them."
+      "goal": "Open in about twenty words: first name, round and length, then ask how they would approach the problem[[tool: , and call show_question]]. Answer clarifying questions briefly; do not prompt for them."
     },
     {
       "id": "approach",
@@ -42,7 +42,7 @@
       "id": "twist",
       "title": "Twist",
       "minutes": 1,
-      "goal": "Give the twist in one or two sentences; they answer in words. One follow up, then close and call end_round."
+      "goal": "Give the twist in one or two sentences; they answer in words. One follow up, then close[[tool:  and call end_round]]."
     }
   ],
   "rubric_id": "rubric.coding",

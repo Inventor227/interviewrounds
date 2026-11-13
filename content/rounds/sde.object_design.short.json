@@ -19,7 +19,7 @@
       "id": "requirements",
       "title": "Requirements",
       "minutes": 2,
-      "goal": "Open in about twenty words: first name, round and length, then ask who the main users are, and call show_question. Let them list actors and use cases. Ask once what is out of scope if it keeps growing.",
+      "goal": "Open in about twenty words: first name, round and length, then ask who the main users are[[tool: , and call show_question]]. Let them list actors and use cases. Ask once what is out of scope if it keeps growing.",
       "must_cover": [
         "use_cases"
       ]
@@ -28,14 +28,14 @@
       "id": "classes",
       "title": "Classes",
       "minutes": 3,
-      "goal": "They name four to six core classes and what each owns. If one class holds everything, ask what it is responsible for, with point_at.",
+      "goal": "They name four to six core classes and what each owns. If one class holds everything, ask what it is responsible for[[tool: , with point_at]].",
       "uses_whiteboard": true
     },
     {
       "id": "extension",
       "title": "Extension",
       "minutes": 2,
-      "goal": "Give the extension request. Ask what changes in their model and how many classes they would edit. Close and call end_round."
+      "goal": "Give the extension request. Ask what changes in their model and how many classes they would edit. Close[[tool:  and call end_round]]."
     }
   ],
   "rubric_id": "rubric.object_design",

@@ -17,5 +17,6 @@
   "daily": { "round_id": "sde.behavioral.short", "title": "Behavioral" },
   "resumable": null,
   "limits": { "short_left_today": 2, "full_left": 1, "resets_at": "2026-11-14T00:00:00Z", "reason": null },
-  "entitlements": { "plan": "guest", "free_rounds_left": 3, "minutes_total": null, "minutes_used": null, "period_end": null }
+  "entitlements": { "plan": "guest", "free_rounds_left": 3, "minutes_total": null, "minutes_used": null, "period_end": null },
+  "resumable": null
 }

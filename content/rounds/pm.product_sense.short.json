@@ -19,7 +19,7 @@
       "id": "segment",
       "title": "Users",
       "minutes": 1.5,
-      "goal": "Open in about twenty words: first name, round and length, the prompt in short, then ask who they would build for first, and call show_question. Ask why that group if they do not say."
+      "goal": "Open in about twenty words: first name, round and length, the prompt in short, then ask who they would build for first[[tool: , and call show_question]]. Ask why that group if they do not say."
     },
     {
       "id": "problem",
@@ -38,7 +38,7 @@
       "id": "metric",
       "title": "Metric",
       "minutes": 1.5,
-      "goal": "Ask how they would know it worked and what must not get worse. Close and call end_round.",
+      "goal": "Ask how they would know it worked and what must not get worse. Close[[tool:  and call end_round]].",
       "must_cover": [
         "success_metric"
       ]

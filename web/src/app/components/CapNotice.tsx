@@ -22,6 +22,10 @@ const COPY: Record<LimitReason, { title: string; body: string }> = {
     title: 'Live rounds are paused',
     body: 'Live practice is paused for now. Reports and history still work. Live rounds come back',
   },
+  model_budget_reached: {
+    title: 'Rounds are fully booked for today',
+    body: 'Every live round for today is taken. They open again',
+  },
   free_rounds_used: {
     title: 'You have used your free rounds',
     body: 'Your reports and history stay free. Pick a plan to keep practicing live.',

@@ -1,0 +1,20 @@
+{
+  "id": "bank.system_design",
+  "round_type": "system_design",
+  "title": "System design problems",
+  "cards": [
+    {
+      "id": "system_design.url_shortener",
+      "round_type": "system_design",
+      "title": "Link shortener",
+      "levels": ["junior", "mid", "senior"],
+      "lengths": ["short", "full"],
+      "prompt": "Design a link shortener for a social app with about a hundred million new links a month.",
+      "brief_lines": ["100M new links a month", "Reads far outnumber writes"],
+      "facts_if_asked": ["Links never expire unless deleted.", "Read to write ratio is about one hundred to one."],
+      "follow_ups": ["How do you make short codes unique?", "What happens when one link goes viral?"],
+      "twist": "One link gets ten million clicks in a minute.",
+      "interviewer_notes": "Strong answers separate the read path and cache hot links."
+    }
+  ]
+}

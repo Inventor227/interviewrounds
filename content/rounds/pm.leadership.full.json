@@ -43,7 +43,7 @@
       "id": "candidate_questions",
       "title": "Your questions",
       "minutes": 1,
-      "goal": "Take one question, answer briefly, close and call end_round."
+      "goal": "Take one question, answer briefly, close[[tool:  and call end_round]]."
     }
   ],
   "rubric_id": "rubric.pm_leadership",

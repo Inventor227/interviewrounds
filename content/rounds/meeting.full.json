@@ -41,7 +41,7 @@
       "id": "close",
       "title": "Close",
       "minutes": 1,
-      "goal": "The chair reads back next steps with owners and dates and calls end_round. No ask made: 'Let's regroup when you have a clear proposal.' When the user runs the meeting, the meeting ends on the user's close; the decision maker says one short line and calls end_round."
+      "goal": "The chair reads back next steps with owners and dates[[tool:  and calls end_round]]. No ask made: 'Let's regroup when you have a clear proposal.' When the user runs the meeting, the meeting ends on the user's close; the decision maker says one short line[[tool:  and calls end_round]]."
     }
   ],
   "rubric_id": "rubric.meeting",

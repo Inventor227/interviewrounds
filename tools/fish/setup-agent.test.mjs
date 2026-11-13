@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { buildConfig, buildAgentSettings, mask, main, HANGUP_AFTER_MAX_SECONDS } from "./setup-agent.mjs";
+import { buildConfig, buildAgentSettings, mask, main, HANGUP_AFTER_MAX_SECONDS, ASR_MODEL, TTS_MODEL } from "./setup-agent.mjs";
 
 const input = { appOrigin: "https://rounds.dijmo.com/", llmSecret: "llm-secret-value" };
 
@@ -8,7 +8,18 @@ test("config points the agent at our server as a custom LLM", () => {
   const cfg = buildConfig(input);
   assert.deepEqual(cfg.llm, {
     custom: { base_url: "https://rounds.dijmo.com/v1", model: "interview-rounds", api_key: "llm-secret-value" },
+    fallback: { mode: "off" },
   });
+});
+
+test("speech models come from the spike and can be overridden", () => {
+  const cfg = buildConfig(input);
+  assert.equal(cfg.asr.model, ASR_MODEL);
+  assert.equal(cfg.voice.tts_model, TTS_MODEL);
+  const other = buildConfig({ ...input, asrModel: "fish_audio:transcribe-stream-1", ttsModel: "drama-3" });
+  assert.equal(other.asr.model, "fish_audio:transcribe-stream-1");
+  assert.equal(other.voice.tts_model, "drama-3");
+  assert.throws(() => buildConfig({ ...input, ttsModel: "s2.1-pro-free" }), /TTS model/);
 });
 
 test("conversation settings match the brief", () => {
@@ -20,6 +31,11 @@ test("conversation settings match the brief", () => {
   assert.equal(c.interruption_sensitivity, "low");
   assert.deepEqual(c.echo_guard, { web_voice: true });
   assert.equal(c.record_audio, true);
+  assert.equal(c.speculative_response, true);
+});
+
+test("the voice platform never hangs up on its own", () => {
+  assert.deepEqual(buildConfig(input).tools, { system_tools: { hang_up_call: false } });
 });
 
 test("origin must be https", () => {
@@ -30,7 +46,7 @@ test("origin must be https", () => {
 test("agent stays private and allows the overrides the server uses", () => {
   const s = buildAgentSettings();
   assert.equal(s.public_enabled, false);
-  for (const o of ["system_prompt", "voice_id", "first_message"]) assert.ok(s.overrides_allowed.includes(o));
+  for (const o of ["system_prompt", "voice_id", "first_message", "asr.model"]) assert.ok(s.overrides_allowed.includes(o));
 });
 
 test("mask hides secrets at any depth", () => {
