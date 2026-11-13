@@ -72,12 +72,18 @@ pub fn router(state: AppState) -> Router {
     let public_dir = state.config.public_dir.clone();
     let index = public_dir.join("index.html");
 
+    // Hashed build assets: a miss is a plain 404 (never the web app), and only hits are cached for a year.
+    let assets: Router<AppState> = Router::new()
+        .fallback_service(ServeDir::new(public_dir.join("assets")))
+        .layer(middleware::from_fn(immutable_cache_headers));
+
     // Unknown paths fall back to index.html (status 200) so client routes work on reload.
     let static_files = Router::new()
         .fallback_service(ServeDir::new(&public_dir).fallback(ServeFile::new(index)))
         .layer(middleware::from_fn(static_cache_headers));
 
     Router::new()
+        .nest("/assets", assets)
         .route("/healthz", get(healthz))
         // Fish custom LLM endpoint (and the fake-voice path from the browser).
         .route("/v1/chat/completions", post(oai::chat_completions))
@@ -159,18 +165,24 @@ async fn api_not_found() -> AppError {
     AppError::NotFound
 }
 
-/// Hashed build assets are cached for a year; everything else (index.html) revalidates.
-async fn static_cache_headers(req: Request, next: Next) -> Response {
-    let immutable = req.uri().path().starts_with("/assets/");
+/// Hashed build assets are cached for a year (hits only).
+async fn immutable_cache_headers(req: Request, next: Next) -> Response {
     let mut res = next.run(req).await;
     if res.status().is_success() || res.status() == StatusCode::NOT_MODIFIED {
-        let value = if immutable {
-            "public, max-age=31536000, immutable"
-        } else {
-            "no-cache"
-        };
+        res.headers_mut().insert(
+            header::CACHE_CONTROL,
+            HeaderValue::from_static("public, max-age=31536000, immutable"),
+        );
+    }
+    res
+}
+
+/// Everything else (index.html and the web app routes) revalidates.
+async fn static_cache_headers(req: Request, next: Next) -> Response {
+    let mut res = next.run(req).await;
+    if res.status().is_success() || res.status() == StatusCode::NOT_MODIFIED {
         res.headers_mut()
-            .insert(header::CACHE_CONTROL, HeaderValue::from_static(value));
+            .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
     }
     res
 }

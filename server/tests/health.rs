@@ -98,3 +98,34 @@ async fn web_app_routes_fall_back_to_index_html() {
     assert_eq!(body["status"], 404);
     assert_eq!(body["code"], "not_found");
 }
+
+#[tokio::test]
+async fn missing_assets_are_404_not_the_web_app() {
+    let public = common::temp_dir("public");
+    std::fs::write(
+        public.join("index.html"),
+        "<!doctype html><title>IR</title>",
+    )
+    .unwrap();
+    std::fs::create_dir_all(public.join("assets")).unwrap();
+    std::fs::write(public.join("assets/app-abc123.js"), "console.log(1)").unwrap();
+    let app = common::app_with_public(&public).await;
+
+    let res = common::get(app.clone(), "/assets/app-old999.js").await;
+    assert_eq!(res.status(), StatusCode::NOT_FOUND);
+    assert_ne!(
+        res.headers()
+            .get(header::CACHE_CONTROL)
+            .map(|v| v.to_str().unwrap().to_string()),
+        Some("public, max-age=31536000, immutable".to_string())
+    );
+    let body = common::body_bytes(res).await;
+    assert!(!String::from_utf8_lossy(&body).contains("<title>IR</title>"));
+
+    let res = common::get(app, "/assets/app-abc123.js").await;
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(
+        res.headers().get(header::CACHE_CONTROL).unwrap(),
+        "public, max-age=31536000, immutable"
+    );
+}
