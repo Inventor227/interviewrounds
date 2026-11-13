@@ -22,7 +22,9 @@ JSON; cookie `ir_id` identifies the device/user; all under same origin. A new gu
   Swap mode mints a Fish token for the floor panelist only (`fish_pending` for the others); joined mode mints one for everyone.
   A cap refusal is `429 {status, code, message, resets_at}` where `code` is a `Limits.reason` value and `resets_at` is a
   date-time or `null`. `voice:"fake"` (browser speech, no Fish) is a development path: it needs the header
-  `X-Dev-Key: <DEV_KEY>`, else `403 {code: "dev_only"}`.
+  `X-Dev-Key: <DEV_KEY>`, else `403 {code: "dev_only"}`. Only rounds that started (the first socket `hello`) count
+  toward limits. A new session replaces the caller's earlier sessions that never started (they end as `abandoned`), and
+  a session with no `hello` within 10 minutes ends as `abandoned`.
 - `POST /api/sessions/{id}/panelists/{pid}/join` `{opening_line?}` → `{voice}` (swap mode hand-over; `voice` as in `Panelist`).
   The server adds the opening line to the shared history as that panelist's turn, gives it to the new Fish session as
   `first_message`, moves the floor, and ends the previous panelist's Fish session. Joining a panelist that already has a
