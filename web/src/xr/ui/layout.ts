@@ -61,7 +61,7 @@ export function layoutHud(aspect: number, vfovDeg: number): Partial<Record<Panel
   const s = Math.min(1, (halfW * 2 * 0.62) / 0.48);
   return {
     roundBar: { pos: v3(0, -halfH + 0.05 * s, -d), yaw: 0, tilt: 0, scale: s },
-    brief: { pos: v3(-halfW + 0.17 * s, halfH - 0.08 * s, -d), yaw: 0, tilt: 0, scale: s },
+    brief: { pos: v3(-halfW + 0.18 * s, halfH - 0.105 * s, -d), yaw: 0, tilt: 0, scale: s },
     captions: { pos: v3(0, -halfH + 0.13 * s, -d), yaw: 0, tilt: 0, scale: s },
   };
 }
