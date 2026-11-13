@@ -22,6 +22,8 @@ await waitReady();
 await go('/');
 await until('the home page', () => !!document.querySelector('[data-test="try-quick"]'));
 await setupTab({ ghostSettle: 300 });
+// One capture before the session: the emulator's room needs it to draw.
+await shot('c00-home');
 await click('try-quick');
 await until('the round ready for Enter', () => !!document.querySelector('[data-test="start-round"]:not([disabled])') && !!globalThis.__xrApp, null, 150000);
 await enterFromTap('start-round');

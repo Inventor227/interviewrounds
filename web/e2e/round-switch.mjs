@@ -21,6 +21,8 @@ await waitReady();
 await go('/');
 await until('the home page', () => !!document.querySelector('[data-test="try-quick"]'));
 await setupTab({ ghostSettle: 300 });
+// One capture before the session: the emulator's room needs it to draw.
+await shot('s00-home');
 await click('try-quick');
 await until('the round ready for Enter', () => !!document.querySelector('[data-test="start-round"]:not([disabled])') && !!globalThis.__xrApp, null, 150000);
 await enterFromTap('start-round');
@@ -87,6 +89,48 @@ if (!b.edges.length) await fail('the connector pinched after the change did not 
 await look(S, -52);
 await sleep(600);
 await shot('s03-drawn-by-both');
+
+// A hand pokes Pause on the round bar (direct touch), then Resume. Recorded, not required: the emulator renders a
+// few frames a second, and a poke can fall between two of them.
+{
+  const poke = async (re) => {
+    const list = await R.clickables('roundBar');
+    const at = list.find((x) => re.test(x.label))?.at;
+    if (!at) return false;
+    // Along the bar's normal (it leans 35 degrees up from the desk, facing the user).
+    const off = (d) => ({ x: at.x, y: at.y + 0.819 * d, z: at.z + 0.574 * d });
+    await C.xr('run-sequence', {
+      device: 'hand-right',
+      steps: [
+        { label: 'above', position: off(0.06), anchor: 'index-tip', duration: 0.7, poseId: 'point' },
+        { label: 'press', position: off(-0.004), anchor: 'index-tip', duration: 0.5 },
+        { label: 'hold', duration: 1.2 },
+        { label: 'back', position: off(0.08), anchor: 'index-tip', duration: 0.6 },
+      ],
+      body: 'auto',
+      gaze: 'fixed',
+      idleHand: 'keep',
+    }).catch((e) => console.log('poke failed', String(e).slice(0, 300)));
+    await sleep(1500);
+    return true;
+  };
+  await look(S, -48);
+  await poke(/Pause/);
+  const paused = (await roundState()).state === 'paused';
+  if (paused) await shot('s02b-paused-by-poke');
+  let resumed = null;
+  if (paused) {
+    await poke(/Resume/);
+    resumed = (await roundState()).state === 'live';
+    if (!resumed) {
+      await page(() => globalThis.__round.controller.resume());
+      await waitState(['live'], 30000);
+    }
+  }
+  stage('hand poke on the round bar', { paused, resumed });
+  await call('xr', 'set-hand-pose', { device: 'hand-right', poseId: 'default' });
+  await look(S, -52);
+}
 
 // A suggestion accepted by pinch, if one is waiting or comes with the next answer.
 stage('answer 2', await answer('The box on the left is the API service and the one on the right is the key value store. The service reads and writes the store.'));

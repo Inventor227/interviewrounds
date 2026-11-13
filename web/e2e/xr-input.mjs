@@ -24,6 +24,8 @@ const check = (name, ok, detail = null) => {
   log.checks.push({ name, ok: !!ok, detail });
   if (!ok) failed++;
   console.log(`${ok ? 'ok  ' : 'FAIL'} ${name} ${detail === null ? '' : JSON.stringify(detail).slice(0, 500)}`);
+  // Kept on disk as the run goes (the emulator's browser can drop out before the end).
+  writeFileSync(path.join(process.env.EMU_SHOTS, 'xr-input.json'), JSON.stringify(log, null, 2));
 };
 const shot = async (name) => {
   await screenshot(name);
@@ -85,6 +87,24 @@ const clickables = (panel) =>
     return out;
   }, panel);
 const actions = () => app(() => globalThis.__acts.slice());
+/** What the platform's pointer for the right controller is on: which kind is active and the panel under it. */
+const rayInfo = () =>
+  app(() => {
+    const mp = globalThis.__xrApp.world.input.xr.multiPointers.right;
+    const hit = (k) => {
+      const i = mp[k].pointer.getIntersection();
+      if (!i || i.object.isVoidObject) return null;
+      let panel = null;
+      for (let q = i.object; q; q = q.parent) if (q.name) panel ??= q.name;
+      let label = '';
+      i.object.traverse?.((c) => {
+        const t = c.properties?.peek?.().text;
+        if (typeof t === 'string' && !label) label = t;
+      });
+      return { panel, label, dist: Math.round(i.distance * 1000) / 1000 };
+    };
+    return { active: mp.activeKind, ray: hit('ray'), touch: hit('touch'), states: { ray: mp.pointerStates.get('ray'), touch: mp.pointerStates.get('touch') } };
+  });
 
 await waitReady();
 await go('/session/emu?offer=1&standins=1&seats=1&fallback=600');
@@ -163,9 +183,8 @@ check('Mute and CC pressed by ray', acts.includes('mute') && acts.includes('capt
 const endBtn = byLabel(bar, /End/);
 await hold('right', barFrom, endBtn.at);
 await sleep(900);
-await pull('right', 0.3);
-await sleep(400);
-check('a short pull on End does nothing', !(await actions()).includes('end'));
+// (A short pull on End doing nothing is unit tested: the emulator's tooling cannot make a pull shorter than a second.)
+check('End not pressed yet', !(await actions()).includes('end'));
 await trigger('right', 1);
 await sleep(700);
 await shot('04-end-hold-ring');
@@ -183,9 +202,12 @@ await sleep(800);
 await look(-30);
 const statusBtns = await clickables('status');
 check('the paused card has a Resume button', !!byLabel(statusBtns, /Resume/), statusBtns.map((b) => b.label));
-const cardFrom = { x: HEAD.x + 0.18, y: HEAD.y - 0.42, z: HEAD.z - 0.08 };
+// Held in front of the chest, to the left: well clear of the round bar (a tip within a few centimetres of a
+// panel is a touch, and touch comes before the ray).
+const cardFrom = { x: HEAD.x - 0.16, y: HEAD.y - 0.28, z: HEAD.z - 0.02 };
 await hold('right', cardFrom, byLabel(statusBtns, /Resume/).at);
 await sleep(1200);
+log.rayOnResume = await rayInfo();
 await shot('05-ray-on-resume');
 await pull('right', 0.25);
 await sleep(600);
@@ -200,6 +222,7 @@ const sumBtns = await clickables('summary');
 check('the summary card has Retry and See full report', !!byLabel(sumBtns, /Retry/) && !!byLabel(sumBtns, /report/i), sumBtns.map((b) => b.label));
 await hold('right', cardFrom, byLabel(sumBtns, /Retry/).at);
 await sleep(1200);
+log.rayOnRetry = await rayInfo();
 await shot('06-ray-on-summary');
 await pull('right', 0.25);
 await sleep(500);
@@ -296,7 +319,7 @@ const n0 = (await actions()).filter((a) => a === 'captions').length;
 await xr('run-sequence', {
   device: 'hand-right',
   steps: [
-    { label: 'above', position: { x: cc.x, y: cc.y + 0.05, z: cc.z + 0.035 }, anchor: 'index-tip', duration: 0.6, pose: 'point' },
+    { label: 'above', position: { x: cc.x, y: cc.y + 0.05, z: cc.z + 0.035 }, anchor: 'index-tip', duration: 0.6, poseId: 'point' },
     { label: 'press', position: { x: cc.x, y: cc.y - 0.006, z: cc.z - 0.004 }, anchor: 'index-tip', duration: 0.35 },
     { label: 'hold', duration: 0.2 },
     { label: 'back', position: { x: cc.x, y: cc.y + 0.05, z: cc.z + 0.035 }, anchor: 'index-tip', duration: 0.35 },

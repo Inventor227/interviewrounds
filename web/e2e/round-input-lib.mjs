@@ -157,7 +157,8 @@ export async function pressCard(hand, S, panel, re, shotName = null) {
   const list = await clickables(panel);
   const b = list.find((x) => re.test(x.label));
   if (!b) await fail(`no ${re} button on the ${panel} card`, list);
-  const from = { x: S.head.x + 0.18, y: S.head.y - 0.42, z: S.head.z - 0.08 };
+  // In front of the chest, to the left: clear of the round bar (a tip close to a panel is a touch, not a ray).
+  const from = { x: S.head.x - 0.16, y: S.head.y - 0.28, z: S.head.z - 0.02 };
   await hold(hand, from, b.at);
   await sleep(1200);
   if (shotName) await shot(shotName);
