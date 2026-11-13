@@ -70,9 +70,15 @@ export class FakePort implements BoardXRPort {
   pinchStroke(hand: 'left' | 'right', points: [number, number][]): void {
     const [first, ...rest] = points;
     if (!first) return;
-    this.handAt(hand, first[0], first[1]);
-    this.frame();
+    // Arrive and settle over the first point before pinching, as a hand does (the filter
+    // would otherwise still be catching up from wherever the hand was).
+    for (let i = 0; i < 12; i++) {
+      this.handAt(hand, first[0], first[1]);
+      this.frame();
+    }
     this.select(hand, 'start');
+    // The fingers close first: a moment still before the stroke moves.
+    for (let i = 0; i < 8; i++) this.frame();
     for (const [x, y] of rest) {
       this.handAt(hand, x, y);
       this.frame();
@@ -82,4 +88,30 @@ export class FakePort implements BoardXRPort {
     this.select(hand, 'end');
     this.frame();
   }
+}
+
+/** A 2D context that accepts every call (jsdom has no canvas); counts calls. */
+export function stubContext(): CanvasRenderingContext2D & { calls: number } {
+  const state: Record<string, unknown> = { font: '10px sans-serif', calls: 0 };
+  return new Proxy(state, {
+    get(t, prop: string) {
+      if (prop in t) return t[prop];
+      return (...args: unknown[]) => {
+        t.calls = (t.calls as number) + 1;
+        if (prop === 'measureText') return { width: String(args[0]).length * 5 };
+        if (prop === 'getLineDash') return [];
+        return undefined;
+      };
+    },
+    set(t, prop: string, v) {
+      t[prop] = v;
+      return true;
+    },
+  }) as unknown as CanvasRenderingContext2D & { calls: number };
+}
+
+/** A canvas stand-in with a stub 2D context, for Sheet, Tray and Bin in tests. */
+export function stubCanvas(w: number, h: number): HTMLCanvasElement {
+  const ctx = stubContext();
+  return { width: w, height: h, getContext: () => ctx } as unknown as HTMLCanvasElement;
 }

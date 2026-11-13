@@ -948,7 +948,7 @@ function drawGhost(p: Pen, board: Board, g: GhostOp): void {
 // ---------- around the sheet: tray, bin, live gestures ----------
 
 /** The tray of cards (and the bin), in board cm (the tray sits at negative x). */
-export function renderKit(ctx: Ctx, kit: Kit, pxPerCm: number, state: { binHot?: boolean } = {}): void {
+export function renderKit(ctx: Ctx, kit: Kit, pxPerCm: number, state: { binHot?: boolean; bin?: boolean } = {}): void {
   const k = pxPerCm;
   const pen: Pen = { ctx, k, ghost: false, focus: null };
   ctx.save();
@@ -968,7 +968,7 @@ export function renderKit(ctx: Ctx, kit: Kit, pxPerCm: number, state: { binHot?:
     ctx.textBaseline = 'alphabetic';
   }
   ctx.restore();
-  renderBin(ctx, kit, k, state.binHot === true);
+  if (state.bin !== false) renderBin(ctx, kit, k, state.binHot === true);
 }
 
 /** The bin; red while something is held over it. */
@@ -1116,6 +1116,26 @@ export interface DrawState {
   drawLive?: boolean;
 }
 
+/**
+ * The pinch shadow: a ring on the sheet under a hand's pinch point that tightens as the hand
+ * comes down, filled while pinched (research 06 §2.5).
+ */
+export function renderPinchShadow(ctx: Ctx, p: { x_cm: number; y_cm: number; h_cm: number; pinched: boolean }, pxPerCm: number): void {
+  const k = pxPerCm;
+  const r = 0.45 + Math.min(Math.max(p.h_cm, 0), 8) * 0.1;
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(p.x_cm * k, p.y_cm * k, r * k, 0, Math.PI * 2);
+  if (p.pinched) {
+    ctx.fillStyle = withAlpha(ACCENT, 0.35);
+    ctx.fill();
+  }
+  ctx.strokeStyle = withAlpha(ACCENT, 0.6);
+  ctx.lineWidth = Math.max(1, 0.1 * k);
+  ctx.stroke();
+  ctx.restore();
+}
+
 /** A small ring at a ghost that fills over its 4 s settle. */
 export function renderGhostRing(ctx: Ctx, ring: GhostRing, pxPerCm: number): void {
   const k = pxPerCm;
@@ -1136,7 +1156,7 @@ export function renderGhostRing(ctx: Ctx, ring: GhostRing, pxPerCm: number): voi
 }
 
 /** Ring progress in 5% steps, so a settle redraws 20 times, not every frame. */
-const ringKey = (rs: readonly GhostRing[]) => rs.map((r) => `${r.op_id}:${Math.floor(r.progress * 20)}`).join(',');
+export const ringKey = (rs: readonly GhostRing[]) => rs.map((r) => `${r.op_id}:${Math.floor(r.progress * 20)}`).join(',');
 
 function defaultLayer(w: number, h: number): Layer | null {
   if (typeof OffscreenCanvas !== 'undefined') return new OffscreenCanvas(w, h);
@@ -1149,7 +1169,7 @@ function defaultLayer(w: number, h: number): Layer | null {
   return null;
 }
 
-function overlayKey(o: Overlay): string {
+export function overlayKey(o: Overlay): string {
   switch (o.kind) {
     case 'none':
       return 'none';
