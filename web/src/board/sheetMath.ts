@@ -39,7 +39,7 @@ export class SheetProjector {
   private readonly inv = new Matrix4();
   private readonly v = new Vector3();
 
-  constructor(private readonly anchor: Object3D) {}
+  constructor(readonly anchor: Object3D) {}
 
   project(p: Vec3): { x_cm: number; y_cm: number; h_cm: number } {
     this.anchor.updateWorldMatrix(true, false);
@@ -87,6 +87,7 @@ export class SurfaceProjector {
   private readonly sheet: SheetProjector;
   private readonly inv = new Matrix4();
   private readonly v = new Vector3();
+  private readonly d = new Vector3();
 
   constructor(
     anchor: Object3D,
@@ -109,4 +110,47 @@ export class SurfaceProjector {
     const sheetValid = onSheet.h_cm > -3 && onSheet.h_cm < 12 && onSheet.x_cm >= -3 && onSheet.x_cm <= SHEET.w + 3;
     return sheetValid && Math.abs(onSheet.h_cm) < Math.abs(onPanel.h_cm) ? onSheet : onPanel;
   }
+
+  /**
+   * Where an aim ray (a controller's) meets the board from the front: the code panel when the ray lands on its
+   * screen, else the sheet's plane (the sheet, the tray and the bin lie in it). The world point and the distance
+   * along the ray (m); null when the ray points away or comes from behind.
+   */
+  cast(origin: Vec3, dir: Vec3): { point: Vec3; dist: number } | null {
+    const anchor = this.sheet.anchor;
+    anchor.updateWorldMatrix(true, false);
+    let best: { point: Vec3; dist: number } | null = null;
+    if (this.panel) {
+      const { frame, rect } = this.panel;
+      frame.updateWorldMatrix(true, false);
+      const hit = castPlane(frame, this.inv, origin, dir, this.v, this.d);
+      if (hit) {
+        const x = rect.x + rect.w / 2 + hit.local.x * 100;
+        const y = rect.y + rect.h + hit.local.z * 100;
+        const m = 1;
+        if (x >= rect.x - m && x <= rect.x + rect.w + m && y >= rect.y - m && y <= rect.y + rect.h + m) best = { point: hit.point, dist: hit.dist };
+      }
+    }
+    const hit = castPlane(anchor, this.inv, origin, dir, this.v, this.d);
+    if (hit && (!best || hit.dist < best.dist)) {
+      const b = localToBoard(hit.local);
+      // The panel's place in board cm is beside the sheet; the desk under it is not the board.
+      const r = this.panel?.rect;
+      const underPanel = !!r && b.x_cm >= r.x && b.x_cm <= r.x + r.w && b.y_cm >= r.y && b.y_cm <= r.y + r.h;
+      if (!underPanel) best = { point: hit.point, dist: hit.dist };
+    }
+    return best;
+  }
+}
+
+/** A ray against a frame's surface (its local y = 0 plane), from the front (+Y) side only. */
+function castPlane(frame: Object3D, inv: Matrix4, origin: Vec3, dir: Vec3, v: Vector3, d: Vector3): { point: Vec3; dist: number; local: Vector3 } | null {
+  inv.copy(frame.matrixWorld).invert();
+  v.set(origin.x, origin.y, origin.z).applyMatrix4(inv);
+  d.set(dir.x, dir.y, dir.z).transformDirection(inv);
+  if (!(v.y > 0) || !(d.y < -1e-4)) return null;
+  const t = -v.y / d.y;
+  const local = new Vector3(v.x + d.x * t, 0, v.z + d.z * t);
+  const w = local.clone().applyMatrix4(frame.matrixWorld);
+  return { point: { x: w.x, y: w.y, z: w.z }, dist: t, local };
 }

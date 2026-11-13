@@ -90,8 +90,8 @@ describe('Sheet', () => {
     for (let i = 0; i < 20; i++) {
       sheet.update(b, {
         pointers: [
-          { hand: 'right', x_cm: 30 + i, y_cm: 30, h_cm: 3, pinched: false },
-          { hand: 'left', x_cm: 5, y_cm: 5 + i, h_cm: 1, pinched: i > 10 },
+          { hand: 'right', x_cm: 30 + i, y_cm: 30, h_cm: 3, pinched: false, kind: 'hand' },
+          { hand: 'left', kind: 'hand', x_cm: 5, y_cm: 5 + i, h_cm: 1, pinched: i > 10 },
         ],
       });
     }

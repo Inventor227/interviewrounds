@@ -4,11 +4,13 @@
 // - a small gesture mesh just above it for what moves every frame (the live stroke, the
 //   dragged card, the connector, a tray card, ghost settle rings), sized to what is live so
 //   each frame uploads a small texture;
-// - texture-free meshes for what follows the hands: a ring per hand (the pinch shadow) and
+// - texture-free meshes for what follows the pointers: a ring per hand or controller tip (the
+//   pinch shadow), a thin ray and a cursor dot per controller that points from a distance, and
 //   an outline per hovered card, so hovering never uploads anything.
 // Plus the tray and the bin beside the sheet.
 import {
   CircleGeometry,
+  CylinderGeometry,
   Group,
   Mesh,
   MeshBasicMaterial,
@@ -16,6 +18,8 @@ import {
   RingGeometry,
   Shape,
   ShapeGeometry,
+  SphereGeometry,
+  Vector3,
   type CanvasTexture,
   type PlaneGeometry,
 } from 'three';
@@ -78,6 +82,12 @@ function outlineGeometry(w: number, h: number, outset: number, width: number): S
   return new ShapeGeometry(outer, 6);
 }
 
+/** A controller's cursor dot on the board (m), and how much it grows while the trigger is held. */
+export const CURSOR_DOT_R = 0.004;
+const CURSOR_PRESSED_SCALE = 1.4;
+const RAY_R = 0.0011;
+const Z_AXIS = new Vector3(0, 0, 1);
+
 const pow2 = (n: number) => Math.min(GESTURE_MAX_PX, Math.max(32, 2 ** Math.ceil(Math.log2(Math.max(1, n)))));
 
 export class Sheet {
@@ -96,6 +106,10 @@ export class Sheet {
   private gKey = '';
   private readonly shadows: Record<'left' | 'right', Mesh<RingGeometry, MeshBasicMaterial>>;
   private readonly hoverPool: { mesh: Mesh<ShapeGeometry, MeshBasicMaterial>; key: string }[] = [];
+  /** Per side: the aim ray from a controller's tip and the cursor dot where it lands. Hidden for hands. */
+  private readonly rays: Record<'left' | 'right', { line: Mesh<CylinderGeometry, MeshBasicMaterial>; dot: Mesh<SphereGeometry, MeshBasicMaterial> }>;
+  private readonly a = new Vector3();
+  private readonly b = new Vector3();
 
   constructor(opts: SheetOptions) {
     this.kit = opts.kit;
@@ -138,6 +152,29 @@ export class Sheet {
     this.shadows = { left: shadow(), right: shadow() };
     this.shadows.left.name = 'pinch-shadow-left';
     this.shadows.right.name = 'pinch-shadow-right';
+
+    const ray = (side: 'left' | 'right') => {
+      // A unit length along +Z from the origin, scaled to the ray's length.
+      const line = new Mesh(
+        new CylinderGeometry(RAY_R, RAY_R, 1, 6, 1, true).translate(0, 0.5, 0).rotateX(Math.PI / 2),
+        new MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.55, depthWrite: false, toneMapped: false }),
+      );
+      line.name = `pointer-ray-${side}`;
+      const dot = new Mesh(new SphereGeometry(CURSOR_DOT_R, 14, 10), new MeshBasicMaterial({ color: ACCENT, toneMapped: false }));
+      dot.name = `pointer-dot-${side}`;
+      line.renderOrder = 3;
+      dot.renderOrder = 3;
+      line.visible = false;
+      dot.visible = false;
+      this.group.add(line, dot);
+      return { line, dot };
+    };
+    this.rays = { left: ray('left'), right: ray('right') };
+  }
+
+  /** A controller's cursor dot and aim ray for a side (hidden unless that controller points from a distance). */
+  cursor(hand: 'left' | 'right'): { line: Mesh; dot: Mesh } {
+    return this.rays[hand];
   }
 
   /** The pinch shadow mesh of a hand. */
@@ -168,8 +205,23 @@ export class Sheet {
     for (const hand of ['left', 'right'] as const) {
       const m = this.shadows[hand];
       const p = pointers.find((q) => q.hand === hand);
-      m.visible = !!p;
-      if (!p) continue;
+      const { line, dot } = this.rays[hand];
+      // From a distance a controller shows its ray and a dot on the board instead of the ring.
+      const far = p?.ray;
+      line.visible = dot.visible = !!far;
+      if (far) {
+        this.group.updateWorldMatrix(true, false);
+        const from = this.group.worldToLocal(this.a.set(far.from.x, far.from.y, far.from.z));
+        const to = this.group.worldToLocal(this.b.set(far.to.x, far.to.y, far.to.z));
+        dot.position.copy(to);
+        dot.scale.setScalar(p.pinched ? CURSOR_PRESSED_SCALE : 1);
+        const len = from.distanceTo(to);
+        line.position.copy(from);
+        line.quaternion.setFromUnitVectors(Z_AXIS, to.sub(from).normalize());
+        line.scale.set(1, 1, Math.max(0.001, len));
+      }
+      m.visible = !!p && !far;
+      if (!p || far) continue;
       // The ring tightens as the hand comes down (research 06 §2.5).
       const r = 0.45 + Math.min(Math.max(p.h_cm, 0), 8) * 0.1;
       boardToLocal(p.x_cm, p.y_cm, 0.25, m.position);
@@ -266,7 +318,7 @@ export class Sheet {
     this.gestureMesh.material.dispose();
     this.tray.dispose();
     this.bin.dispose();
-    for (const m of [...Object.values(this.shadows), ...this.hoverPool.map((h) => h.mesh)]) {
+    for (const m of [...Object.values(this.shadows), ...this.hoverPool.map((h) => h.mesh), ...Object.values(this.rays).flatMap((r) => [r.line, r.dot])]) {
       m.traverse((o) => {
         if (o instanceof Mesh) {
           o.geometry.dispose();
