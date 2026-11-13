@@ -566,7 +566,13 @@ export async function createXRApp(root: HTMLElement, opts: XRAppOptions): Promis
     const rates = s?.supportedFrameRates ? Array.from(s.supportedFrameRates) : [];
     governor = new FrameRateGovernor(rates.map((r) => Math.round(r)));
     targetFps = s?.frameRate ? Math.round(s.frameRate) : 72;
-    if (s?.updateTargetFrameRate && rates.some((r) => Math.round(r) === 72)) s.updateTargetFrameRate(72).catch(() => {});
+    if (s?.updateTargetFrameRate && rates.some((r) => Math.round(r) === 72)) {
+      s.updateTargetFrameRate(72)
+        .then(() => {
+          if (governor?.rate === 72) targetFps = 72;
+        })
+        .catch(() => {});
+    }
     console.info(`[xr] frame rate 72 Hz to start; offered: ${rates.join(', ') || 'unknown'}`);
     renderer.xr.setFoveation(0.5);
     exitByApp = false;
