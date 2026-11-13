@@ -21,7 +21,11 @@ pub async fn connect_url(database_url: &str) -> anyhow::Result<PgPool> {
         .connect(database_url)
         .await
         .context("connecting to Postgres (check DATABASE_URL)")?;
-    sqlx::migrate!()
+    // A migration applied by a newer build is not an error: an older build (a rollback) still boots on the newer
+    // schema, which works because migrations stay backward compatible (additive only).
+    let mut migrator = sqlx::migrate!();
+    migrator.set_ignore_missing(true);
+    migrator
         .run(&pool)
         .await
         .context("running database migrations")?;
