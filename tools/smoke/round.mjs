@@ -47,6 +47,9 @@ const ANSWERS = [
     "and page someone when the queue keeps growing for more than a few minutes.",
 ];
 
+// A tool written out by the model and spoken (identifier, or the spaced form the old filter produced).
+const TOOL_WORDS = /\b(show[ _]question|next_phase|end[ _]round|give[ _]hint|point_at|hand_over)\b/i;
+const toolSpeech = [];
 const t0 = Date.now();
 const now = () => Date.now() - t0;
 const log = [];
@@ -175,6 +178,7 @@ async function turn(sessionId, token, text, label, panelist = "p1") {
   history.push({ role: "user", content: text }, { role: "assistant", content: reply });
   record("turn", label, { panelist, user: text, reply, ttft_ms: ttft, total_ms: total });
   say(`${label}: first text ${ttft} ms, ${total} ms: "${reply}"`);
+  if (TOOL_WORDS.test(reply)) toolSpeech.push({ label, reply });
   return { reply, ttft, total };
 }
 
@@ -225,6 +229,7 @@ async function main() {
       check("meeting round", false, e.message);
     }
   }
+  check("no tool names in speech", toolSpeech.length === 0, toolSpeech.length ? toolSpeech : undefined);
   summary.ok = Object.values(summary.checks).every((c) => c.ok);
   summary.total_s = Math.round(now() / 100) / 10;
   writeFileSync(join(OUT, "summary.json"), JSON.stringify(summary, null, 2) + "\n");
