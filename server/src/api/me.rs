@@ -284,10 +284,22 @@ pub async fn resumable(app: &AppState, identity: Uuid) -> Result<Option<Value>, 
     let now = Utc::now();
     for (id, round_id, status, started_at, last_socket_at, elapsed_ms) in rows {
         let key = id.to_string();
+        let mut paused = status == "paused";
         let expires_at = match (app.hubs.get(&key), app.registry.get(&key)) {
-            // In memory: only when no socket is connected now.
+            // In memory. A paused round is listed whether or not a socket is still connected (the XR session can
+            // end while the 2D page keeps the socket), until its pause budget ends. A live one only while no socket
+            // is connected, for the rest of its offline window.
             (Some(hub), Some(handle)) => {
-                match crate::ws::resume_window_left(app, &hub, &handle).await {
+                if hub.is_ended().await {
+                    continue;
+                }
+                paused = handle.lock().await.status == crate::orchestrator::SessionStatus::Paused;
+                let left = if paused {
+                    Some(crate::ws::pause_budget_left(app, &hub, &handle).await)
+                } else {
+                    crate::ws::resume_window_left(app, &hub, &handle).await
+                };
+                match left {
                     Some(left) => now + chrono::Duration::from_std(left).unwrap_or_default(),
                     None => continue,
                 }
@@ -322,6 +334,7 @@ pub async fn resumable(app: &AppState, identity: Uuid) -> Result<Option<Value>, 
             "session_id": id,
             "round_title": round_title,
             "expires_at": expires_at,
+            "paused": paused,
         })));
     }
     Ok(None)

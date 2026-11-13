@@ -1,7 +1,8 @@
 // Adapter from the XR app to the round controller's XRPort (session/ports.ts). Thin on purpose: the controller owns
 // the round; the app owns the room, the placement and the panels.
 
-import type { ControllerState, SeatPoseLike, UiAction, XRPort } from '../session/ports';
+import type { NoticeKind } from '../session/notices';
+import type { ControllerState, SeatPoseLike, UiAction, XRPort, XRVisibilityLike } from '../session/ports';
 import type { HeadsetCard, Report, RoundStatePayload } from '../shared/types';
 import type { DeskPose } from './placement';
 import type { SeatPose } from './seats';
@@ -14,6 +15,8 @@ export interface XRAppLike {
   place(): Promise<DeskPose>;
   /** XR select events per hand (a pinch): user gestures. */
   onSelect?(cb: (hand: 'left' | 'right', phase: 'start' | 'end' | 'cancel', nowMs: number) => void): () => void;
+  onVisibility?(cb: (v: XRVisibilityLike) => void): () => void;
+  onSessionEnd?(cb: (e: { byApp: boolean }) => void): () => void;
   room: { seatPoses(): SeatPose[] };
   ui: {
     setRoundState(s: RoundUIState): void;
@@ -22,6 +25,8 @@ export interface XRAppLike {
     setStatus(stage: StatusStage, pct?: number | null): void;
     showStatusText(text: string, pct?: number | null): void;
     hideStatus(): void;
+    setNotice?(kind: NoticeKind | null): void;
+    setPaused?(paused: boolean): void;
     onAction(cb: (a: RoundAction) => void): () => void;
   };
 }
@@ -50,6 +55,8 @@ export function createXRPort(app: XRAppLike): XRPort & { dispose(): void } {
     exit: () => app.exit(),
     // WebXR grants user activation on `select` (a completed pinch), which is when `end` arrives; not on its start.
     onGesture: (cb: () => void) => app.onSelect?.((_hand, phase) => phase === 'end' && cb()) ?? (() => {}),
+    onVisibility: (cb) => app.onVisibility?.(cb) ?? (() => {}),
+    onSessionEnd: (cb) => app.onSessionEnd?.(cb) ?? (() => {}),
     ui: {
       setRoundState(s: RoundStatePayload & { controller: ControllerState }) {
         // The controller knows first when the round is over: the last snapshot can still say "live" when the
@@ -71,6 +78,8 @@ export function createXRPort(app: XRAppLike): XRPort & { dispose(): void } {
         else if (HEAR_LINE.test(text)) app.ui.setStatus('hear');
         else app.ui.showStatusText(text, progress ?? null);
       },
+      setNotice: (kind: NoticeKind | null) => app.ui.setNotice?.(kind),
+      setPaused: (paused: boolean) => app.ui.setPaused?.(paused),
       onAction(cb: (a: UiAction) => void) {
         return app.ui.onAction((a) => {
           // Captions are a local view setting; everything else is the controller's.

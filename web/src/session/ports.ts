@@ -14,6 +14,7 @@ import type {
   ServerMsgMap,
   ServerMsgType,
 } from '../shared/types';
+import type { NoticeKind } from './notices';
 
 export type ControllerState =
   | 'idle'
@@ -31,7 +32,13 @@ export type ControllerState =
  * "Tap to hear your interviewer" action shown when agent audio seems blocked. Every action is a
  * user gesture, so the controller also retries blocked audio on each one.
  */
-export type UiAction = 'mute' | 'unmute' | 'pause' | 'resume' | 'end' | 'hear' | 'retry' | 'report';
+export type UiAction = 'mute' | 'unmute' | 'pause' | 'resume' | 'end' | 'hear' | 'retry' | 'report' | 'history' | 'stay' | 'skip';
+
+/** XRSession visibility: the system menu covers the room (`visible-blurred`) or the headset is off (`hidden`). */
+export type XRVisibilityLike = 'visible' | 'visible-blurred' | 'hidden';
+
+/** Why a round was paused (`ui.event {kind: "pause", reason}`). `voice_lost` is the room's own pause while it gets a new voice. */
+export type PauseReason = 'user' | 'blurred' | 'hidden' | 'headset_removed' | 'voice_lost';
 
 export interface SeatPoseLike {
   position: { x: number; y: number; z: number };
@@ -70,12 +77,32 @@ export interface XRPort {
   exit?(): void;
   /** Any pinch in the room (a user gesture): the controller retries blocked audio on it. */
   onGesture?(cb: () => void): () => void;
+  /** The headset session's visibility changed (system menu, headset off, back again). */
+  onVisibility?(cb: (v: XRVisibilityLike) => void): () => void;
+  /** The headset session ended; `byApp` when exit() asked for it. */
+  onSessionEnd?(cb: (e: { byApp: boolean }) => void): () => void;
+  /** The pause and resume tones. */
+  cue?(name: 'pause' | 'resume'): void;
+  /**
+   * First round with a board on this device: teaches the one gesture by doing (draw a box), after
+   * the desk is placed and before the round starts. Resolves `done` when the user made a box,
+   * `skipped` when they pinched Skip, `none` when there is nothing to teach (no board, already
+   * done, the preview). The round starts only after it resolves.
+   */
+  onboard?(): Promise<'done' | 'skipped' | 'none'>;
   ui: {
     setRoundState(s: RoundStatePayload & { controller: ControllerState }): void;
     showSummary(report: Report): void;
     /** The quick card a few seconds after the round: one line, the top strength and the top fix. */
     showCard?(card: HeadsetCard, opts?: { pending?: boolean }): void;
     setStatus(text: string | null, progress?: number): void;
+    /** A designed card for an interruption (session/notices.ts); null takes the card down. */
+    setNotice?(kind: NoticeKind | null): void;
+    /**
+     * The round is paused (or runs again): while paused the captions are cleared, no cue plays
+     * and nothing on the board reaches the Scribe.
+     */
+    setPaused?(paused: boolean): void;
     onAction(cb: (action: UiAction) => void): () => void;
   };
   room: { seatPoses(): SeatPoseLike[] };
@@ -117,6 +144,8 @@ export interface SocketPort {
   send<T extends ClientMsgType>(t: T, d: ClientMsgMap[T]): void;
   on<T extends ServerMsgType>(t: T, cb: (d: ServerMsgMap[T]) => void): () => void;
   onStatus?(cb: (s: SocketStatus) => void): () => void;
+  /** The highest server seq seen on this socket. */
+  lastSeq?(): number;
   /** The server closed for good (bad token, unknown or ended session). */
   onTerminal?(cb: (info: CloseInfo) => void): () => void;
   close(): void;
@@ -137,4 +166,4 @@ export interface VisibilityPort {
   removeEventListener(type: 'visibilitychange', cb: () => void): void;
 }
 
-export type ApiPort = Pick<Api, 'createSession' | 'retry' | 'resumeSession' | 'joinPanelist' | 'endSession' | 'report'>;
+export type ApiPort = Pick<Api, 'createSession' | 'retry' | 'resumeSession' | 'joinPanelist' | 'endSession' | 'report'> & Partial<Pick<Api, 'onboardingDone'>>;

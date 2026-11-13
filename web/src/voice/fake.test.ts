@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { VoiceMode } from '../shared/types';
-import { BrowserSpeaker, FakeTransport, readSse, type Speaker } from './fake';
+import { BrowserSpeaker, FakeTransport, readSse, RETRY_AFTER_MS, type Speaker } from './fake';
 import { panelist } from './testkit';
 import type { AgentText, UserTranscript, VoiceError } from './transport';
 
@@ -136,7 +136,7 @@ describe('FakeTransport', () => {
   });
 
   it('reports_server_errors_and_sse_error_chunks', async () => {
-    const s = setup([new Response('oops', { status: 502 }), sse([chunk('Hel'), 'data: {"error":{"message":"model down"}}\n\n'])]);
+    const s = setup([new Response('oops', { status: 500 }), sse([chunk('Hel'), 'data: {"error":{"message":"model down"}}\n\n'])]);
     await s.t.start();
     s.t.sendText('one');
     await vi.waitFor(() => expect(s.errors).toHaveLength(1));
@@ -144,6 +144,34 @@ describe('FakeTransport', () => {
     s.t.sendText('two');
     await vi.waitFor(() => expect(s.errors).toHaveLength(2));
     expect(s.errors[1]!.message).toBe('model down');
+  });
+
+  it('fake_turn_retries_once_on_503', async () => {
+    vi.useFakeTimers();
+    try {
+      // A deploy swaps the container: the first try meets the proxy's 503, the second the new server.
+      const s = setup([new Response('swapping', { status: 503 }), sse([chunk('Back again.', 'stop'), 'data: [DONE]\n\n'])]);
+      await s.t.start();
+      s.t.sendText('hello');
+      await vi.advanceTimersByTimeAsync(RETRY_AFTER_MS - 1);
+      expect(s.fetchFn).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1);
+      await vi.waitFor(() => expect(s.speaker.spoken.map((x) => x.text)).toEqual(['Back again.']));
+      expect(s.fetchFn).toHaveBeenCalledTimes(2);
+      expect(JSON.parse(String(s.fetchFn.mock.calls[1]![1]!.body))).toEqual(JSON.parse(String(s.fetchFn.mock.calls[0]![1]!.body)));
+      expect(s.errors).toEqual([]);
+
+      // Twice in a row is a real failure: one retry, then the error.
+      const d = setup([new Response('x', { status: 502 }), new Response('x', { status: 504 }), sse([chunk('never', 'stop')])]);
+      await d.t.start();
+      d.t.sendText('hello');
+      await vi.advanceTimersByTimeAsync(RETRY_AFTER_MS);
+      await vi.waitFor(() => expect(d.errors).toHaveLength(1));
+      expect(d.errors[0]!.code).toBe('llm_failed');
+      expect(d.fetchFn).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('speaks_the_opening_line_on_start', async () => {

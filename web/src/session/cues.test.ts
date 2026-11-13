@@ -48,7 +48,22 @@ describe('round cues', () => {
     expect(played).toEqual(['ghost', 'ghost']);
   });
 
-  it('time_checks_hand_overs_pause_and_resume_play_on_their_edges', () => {
+  it('nothing_plays_while_the_round_is_paused', () => {
+    const played: CueName[] = [];
+    const socket = fakeSocket();
+    let paused = true;
+    wireCues((n) => played.push(n), socket, { paused: () => paused });
+    socket.server('round.state', rs());
+    socket.server('round.state', rs({ time_check_due: true }));
+    socket.server('round.state', rs({ floor: 'p2' }));
+    socket.server('board.ghosts', { ghosts: [ghost('g1')] });
+    expect(played).toEqual([]);
+    paused = false;
+    socket.server('round.state', rs({ floor: 'p1' }));
+    expect(played).toEqual(['handover']);
+  });
+
+  it('time_checks_and_hand_overs_play_on_their_edges', () => {
     const played: CueName[] = [];
     const socket = fakeSocket();
     const cues = wireCues((n) => played.push(n), socket);
@@ -61,7 +76,8 @@ describe('round cues', () => {
     socket.server('round.state', rs({ floor: 'p2', status: 'paused' }));
     socket.server('round.state', rs({ floor: 'p2', status: 'paused' }));
     socket.server('round.state', rs({ floor: 'p2' }));
-    expect(played).toEqual(['tick', 'handover', 'pause', 'resume']);
+    // The pause and resume tones are the controller's (they play at the press, not on the server's echo).
+    expect(played).toEqual(['tick', 'handover']);
     cues.roundStarted();
     cues.roundStarted();
     expect(played.filter((p) => p === 'start')).toHaveLength(1);

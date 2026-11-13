@@ -32,7 +32,7 @@ export function makeTransport(settings: { voice_speed?: number } = {}) {
         });
 }
 
-export const makeSocket = (wsUrl: string, clientToken: string): SocketPort => new SessionSocket(wsUrl, clientToken);
+export const makeSocket = (wsUrl: string, clientToken: string, lastSeq = 0): SocketPort => new SessionSocket(wsUrl, clientToken, { lastSeq });
 
 export const pageVisibility: VisibilityPort | undefined = typeof document === 'undefined' ? undefined : document;
 

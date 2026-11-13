@@ -4,8 +4,10 @@
 //          raised to 90 only after the room and people are on screen and frames show headroom. Hands are the
 //          first-class input; held controllers do everything hands do (input.ts), and the room follows the user
 //          changing between them. Placement is explicit: place() asks "Touch your desk with one finger" (or with
-//          the controller tip), builds the room around the desk and anchors it. Everything placed belongs to one session: a session end forgets the desk and the anchor, hides
-//          the room and rejects a pending place(). XRSession visibility changes pause a live round.
+//          the controller tip), builds the room around the desk and anchors it. Everything placed belongs to one
+//          session: a session end forgets the desk and the anchor, hides the room and rejects a pending place().
+//          XRSession visibility changes and the session's end are reported (onVisibility, onSessionEnd); the round
+//          controller pauses on them.
 // preview: no WebXR. The same room in a calm virtual meeting room, camera at seated eye height, mouse input.
 //
 // The round controller drives it through createXRPort (port.ts).
@@ -28,6 +30,7 @@ import { ACESFilmicToneMapping, Matrix4, Quaternion, Vector3, type Material, typ
 import type { HapticName } from '../board/pointer';
 import { ControllerView, hostControllerModels } from './controllerView';
 import { FrameRateGovernor } from './framerate';
+import { HANDS_LOST_LINE, HandsLostWatch } from './handsLost';
 import { ButtonEdges, Haptics, InputTracker, newController, readGamepad, type ActiveInput, type ControllerButton, type ControllerState, type HapticPad } from './input';
 import { AnchorTracker, PlacementLifecycle } from './lifecycle';
 import { yawPitchFromQuat } from './math';
@@ -121,10 +124,7 @@ export interface XRApp {
   /** Shows a texture on the wall board (the board mirrors the sheet); null clears it. */
   wallboardTexture(tex: Texture | null): void;
   visibility$: ReadonlySignal<VisibilityState>;
-  /**
-   * XRSession visibility changes (Quest system menu, headset off). The app also asks the round UI to pause by
-   * itself (a 'pause' action, so the Resume card shows) when a live round loses visibility.
-   */
+  /** XRSession visibility changes (Quest system menu, headset off, back again). The round controller pauses on them. */
   onVisibility(cb: (v: XRVisibility) => void): () => void;
   /** The immersive session ended; byApp is true when exit() asked for it (End), false for the system or the user. */
   onSessionEnd(cb: (e: { byApp: boolean }) => void): () => void;
@@ -288,6 +288,7 @@ export async function createXRApp(root: HTMLElement, opts: XRAppOptions): Promis
     controllerViews.left.attach(world.player.raySpaces.left);
     controllerViews.right.attach(world.player.raySpaces.right);
   }
+  const handsLost = new HandsLostWatch();
   let lastXRFrameAt: number | null = null;
   let lastInterval = 0;
 
@@ -309,6 +310,8 @@ export async function createXRApp(root: HTMLElement, opts: XRAppOptions): Promis
   world.onXRFrame((frame) => {
     const now = performance.now();
     lastInterval = lastXRFrameAt === null ? 0 : now - lastXRFrameAt;
+    // Frames stopped for a while (headset off, system menu): the hands were not lost, nobody was looking.
+    if (lastInterval > 1000) handsLost.reset();
     lastXRFrameAt = now;
     const ref = world.xrReferenceSpace;
     const session = world.session;
@@ -385,6 +388,11 @@ export async function createXRApp(root: HTMLElement, opts: XRAppOptions): Promis
     }
     // Hands or controllers: whichever the session lists now. Nothing is said about it; both do everything.
     input.update({ hands: listedHands, controllers: controllers ? 1 : 0 });
+    // In a placed room with no hand and no controller in view for 5 s: one calm line, once.
+    if (handsLost.update(now, left.tracked || right.tracked || controllers) && desk$.value) {
+      ui.layoutHint(headPose());
+      ui.showHint(HANDS_LOST_LINE, now, 6000);
+    }
     anchors.update(frame, ref);
   });
 
@@ -500,8 +508,8 @@ export async function createXRApp(root: HTMLElement, opts: XRAppOptions): Promis
     if (desk.input === 'controllers' && desk.hand) haptics.pulse(desk.hand, 'snap');
     placementView.finish(room.sheet, now);
     ui.hideStatus();
-    // Back in a paused round (the resume path): keep the Resume card up.
-    if (ui.paused) ui.setStatus('paused');
+    // Back in a round that is paused or reconnecting (the resume path): its card comes back.
+    ui.restoreNotice();
     if (desk.source === 'fallback') {
       ui.layoutHint(headPose());
       ui.showHint('No desk? We set one up for you.', now, 6000);
@@ -766,10 +774,11 @@ export async function createXRApp(root: HTMLElement, opts: XRAppOptions): Promis
     buttons.reset();
     haptics.reset();
     s?.addEventListener('inputsourceschange', onSources);
+    handsLost.reset();
     lastXRFrameAt = null;
     s?.addEventListener('visibilitychange', () => {
+      // The round controller pauses on anything but `visible`, in every active state, and never resumes by itself.
       const v = s.visibilityState as XRVisibility;
-      if (v !== 'visible') ui.systemPause();
       for (const cb of visCbs) cb(v);
     });
     if (s) selects.attach(s);
@@ -795,7 +804,6 @@ export async function createXRApp(root: HTMLElement, opts: XRAppOptions): Promis
     armAt = null;
     const byApp = exitByApp;
     exitByApp = false;
-    if (!byApp) ui.systemPause();
     for (const cb of endCbs) cb({ byApp });
   };
   renderer.xr.addEventListener('sessionstart', onSessionStart);

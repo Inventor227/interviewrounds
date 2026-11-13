@@ -1260,3 +1260,58 @@ async fn report_clock_matches_the_server_when_a_pause_overlaps_an_outage() {
         "model_back is logged even while paused: {events:?}"
     );
 }
+
+#[tokio::test]
+async fn me_resumable_lists_a_paused_round_with_its_socket_connected() {
+    let app = live::test_app(Options {
+        timing: SessionTiming {
+            offline_limit: Duration::from_secs(3),
+            ..timing()
+        },
+        ..Options::default()
+    })
+    .await;
+    let base = app.serve().await;
+    let (cookie, id, token) = new_session(&app, "fake").await;
+    // Live with the socket connected: nothing to resume.
+    let mut ws = hello(&base, &id, &token, 0).await;
+    frame_of(&mut ws, "round.state", WAIT).await.unwrap();
+    let me = app.call(Method::GET, "/api/me", Some(&cookie), None).await;
+    assert!(me.body["resumable"].is_null(), "{}", me.body);
+    // Paused (the XR session ended), the 2D page still holds the socket: listed, with the pause budget deadline.
+    send(
+        &mut ws,
+        "ui.event",
+        1,
+        json!({"kind": "pause", "reason": "blurred"}),
+    )
+    .await;
+    live::eventually("paused", WAIT, || async {
+        app.state.registry.get(&id).unwrap().lock().await.status
+            == ir_server::orchestrator::SessionStatus::Paused
+    })
+    .await;
+    let me = app.call(Method::GET, "/api/me", Some(&cookie), None).await;
+    let r = &me.body["resumable"];
+    assert_eq!(r["session_id"], id, "{}", me.body);
+    assert_eq!(r["paused"], true);
+    let expires: DateTime<Utc> = r["expires_at"].as_str().unwrap().parse().unwrap();
+    let left = expires - Utc::now();
+    assert!(
+        left > chrono::Duration::seconds(500) && left <= chrono::Duration::seconds(600),
+        "{left:?}"
+    );
+    // A live round whose socket dropped: listed as not paused.
+    send(&mut ws, "ui.event", 2, json!({"kind": "resume"})).await;
+    live::eventually("live", WAIT, || async {
+        app.state.registry.get(&id).unwrap().lock().await.status
+            == ir_server::orchestrator::SessionStatus::Live
+    })
+    .await;
+    drop(ws);
+    live::eventually("listed after the drop", WAIT, || async {
+        let me = app.call(Method::GET, "/api/me", Some(&cookie), None).await;
+        me.body["resumable"]["paused"] == false
+    })
+    .await;
+}

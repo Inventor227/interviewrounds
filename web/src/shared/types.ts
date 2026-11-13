@@ -803,7 +803,8 @@ export interface Me {
   /** Today's suggested short round; null when there is none. */
   daily: { round_id: string; title: string } | null;
   /** A dropped live session that can still be resumed until expires_at; null when there is none. */
-  resumable: { session_id: string; round_title: string; expires_at: string } | null;
+  /** A round to resume until expires_at: paused (even with the socket still open), or live with a dropped socket. */
+  resumable: { session_id: string; round_title: string; expires_at: string; paused: boolean } | null;
   limits: Limits;
   entitlements: Entitlements;
 }
@@ -886,6 +887,10 @@ export interface RoundStatePayload {
   floor: string;
   /** True once per phase boundary: the browser sends `[event: time_check]`. Absent from older servers. */
   time_check_due?: boolean;
+  /** The server ended the round's voices after 45 s in one pause: Resume needs `POST /resume` first. */
+  voices_released?: boolean;
+  /** The interviewer's model failed 3 live turns in a row; the server holds the round clock until a real reply. */
+  degraded?: boolean;
 }
 
 /** One pick of the headset card: the candidate's own words behind a strength or a fix. */

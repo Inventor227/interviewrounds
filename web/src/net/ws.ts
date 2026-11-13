@@ -63,6 +63,11 @@ export interface SessionSocketOptions {
   /** WebSocket constructor, injectable for tests. */
   WebSocketImpl?: typeof WebSocket;
   backoffMs?: readonly number[];
+  /**
+   * The highest server seq this page has already seen on an earlier socket of the same session (server seq is per
+   * session, across tokens): hello asks only for what came after it.
+   */
+  lastSeq?: number;
   pingMs?: number;
   /** Unacked reliable messages kept for replay; beyond this the oldest is dropped and reported. */
   maxQueue?: number;
@@ -103,6 +108,12 @@ export class SessionSocket {
   private ws: WebSocket | null = null;
   private status: SocketStatus = 'idle';
   private lastServerSeq = 0;
+
+  /** The highest server seq seen (for a later socket of the same session). */
+  lastSeq(): number {
+    return this.lastServerSeq;
+  }
+
   private nextClientSeq = 1;
   private unacked: Envelope[] = [];
   private attempt = 0;
@@ -123,6 +134,7 @@ export class SessionSocket {
     private readonly clientToken: string,
     opts: SessionSocketOptions = {},
   ) {
+    this.lastServerSeq = opts.lastSeq ?? 0;
     this.url = resolveWsUrl(url);
     this.WS = opts.WebSocketImpl ?? WebSocket;
     this.backoff = opts.backoffMs ?? DEFAULT_BACKOFF;

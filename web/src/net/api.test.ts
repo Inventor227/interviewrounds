@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { api, ApiError, DEV_KEY_STORE } from './api';
+import { api, ApiError, DEV_KEY_STORE, RETRY_AFTER_MS } from './api';
 
 type Call = { url: string; init: RequestInit };
 
@@ -55,8 +55,51 @@ describe('api', () => {
 
   it('non_json_errors_still_become_api_errors', async () => {
     stubFetch(502, 'Bad gateway', 'text/html');
-    const err = await api.sessionStatus('s1').catch((e: unknown) => e);
+    const err = await api.me().catch((e: unknown) => e);
     expect(err).toMatchObject({ status: 502, code: 'http_502' });
+  });
+
+  it('a_call_inside_a_round_is_made_once_more_after_a_502_503_or_504', async () => {
+    vi.useFakeTimers();
+    try {
+      const answers = [new Response('swapping', { status: 503 }), new Response('{"voice":{"transport":"fake"}}', { status: 200 })];
+      const fetchFn = vi.fn(async () => answers.shift()!);
+      vi.stubGlobal('fetch', fetchFn);
+      const join = api.joinPanelist('s1', 'p2', { opening_line: 'Hi' });
+      await vi.advanceTimersByTimeAsync(RETRY_AFTER_MS - 1);
+      expect(fetchFn).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(join).resolves.toEqual({ voice: { transport: 'fake' } });
+      expect(fetchFn).toHaveBeenCalledTimes(2);
+
+      // Only once, and never for a call that starts a round (a refused start must show at once).
+      const twice = [new Response('x', { status: 504 }), new Response('x', { status: 502 })];
+      const f2 = vi.fn(async () => twice.shift()!);
+      vi.stubGlobal('fetch', f2);
+      const end = api.endSession('s1', 'user_ended').catch((e: unknown) => e);
+      await vi.advanceTimersByTimeAsync(RETRY_AFTER_MS);
+      expect(await end).toMatchObject({ status: 502 });
+      expect(f2).toHaveBeenCalledTimes(2);
+      // A resume is made again only after the server's own 503 (no new voices, not counted): after a 502 or 504
+      // it may already have happened, and a second one would count.
+      const f4 = vi.fn(async () => new Response('x', { status: 504 }));
+      vi.stubGlobal('fetch', f4);
+      await expect(api.resumeSession('s1')).rejects.toMatchObject({ status: 504 });
+      expect(f4).toHaveBeenCalledTimes(1);
+      const again = [new Response('x', { status: 503 }), new Response('{"session_id":"s1"}', { status: 200 })];
+      const f5 = vi.fn(async () => again.shift()!);
+      vi.stubGlobal('fetch', f5);
+      const resume = api.resumeSession('s1');
+      await vi.advanceTimersByTimeAsync(RETRY_AFTER_MS);
+      await expect(resume).resolves.toMatchObject({ session_id: 's1' });
+      expect(f5).toHaveBeenCalledTimes(2);
+      const f3 = vi.fn(async () => new Response('x', { status: 503 }));
+      vi.stubGlobal('fetch', f3);
+      await expect(api.createSession({ mode: 'interview', round_id: 'r', length: 'short', level: 'mid', style: 'neutral', voice: 'fish' })).rejects.toMatchObject({ status: 503 });
+      expect(f3).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('empty_responses_resolve_undefined', async () => {

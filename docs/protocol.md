@@ -80,10 +80,12 @@ JSON; cookie `ir_id` identifies the device/user; all under same origin. A new gu
   headset card). At most 2 calls per retry, each ledgered as a `retry_scoring` row; `POST
   /api/sessions/{id}/report` on a failed retry gives 2 fresh ones, as for rounds.
 - `GET /api/me` → `{identity:{kind:"guest"|"user", name?, email?}, sign_in_available, settings, onboarding_done,
-  streak:{current, best, today_done}, daily:{round_id, title}|null, resumable:{session_id, round_title, expires_at}|null,
-  limits, entitlements}`. `resumable` is a dropped live session the user can still resume (`POST /api/sessions/{id}/resume`)
-  until `expires_at` (3 minutes after the drop, or the end of the pause budget when that comes first; for a paused
-  round, the end of the pause budget); `null` when there is none
+  streak:{current, best, today_done}, daily:{round_id, title}|null,
+  resumable:{session_id, round_title, expires_at, paused}|null, limits, entitlements}`. `resumable` is a round the user
+  can still resume (`POST /api/sessions/{id}/resume`) until `expires_at`: a **paused** round (`paused: true`), whether or
+  not its socket is still connected (the XR session can end while the 2D page keeps the socket), until its pause budget
+  ends; or a **live** round whose socket dropped (`paused: false`), until 3 minutes after the drop or the end of the pause
+  budget, whichever comes first. A live round with a socket connected is not listed; `null` when there is none
 - `GET /api/me/history?role=` → `[{session_id, round_id, title, started_at, headline}]` where `started_at` is a date-time
   and `headline: string` is the session report's `headline.summary`
 - `GET /api/me/skills?role=` → `{competencies:[{id, name, points:[{session_id, at, score}]}]}`
@@ -208,8 +210,9 @@ Sequencing and acks:
   none, pauses the same way; it is only logged. While paused:
   - **Hold.** A paused round whose socket drops is held: it does not end after the 3-minute offline window. It ends
     only when its pause budget (10 minutes of pauses in total) runs out, with `time_limit` (scored when the candidate
-    spoke). A round that drops while live keeps the 3-minute rule. `GET /api/me` `resumable.expires_at` is that
-    deadline: the end of the pause budget for a paused round, the end of the offline window for a live one.
+    spoke). A round that drops while live keeps the 3-minute rule. `GET /api/me` lists a paused round as
+    `resumable` (`paused: true`) even while its socket is connected, and `resumable.expires_at` is that deadline: the
+    end of the pause budget for a paused round, the end of the offline window for a live one.
   - **Voice release.** After 45 s in one pause (a new pause starts the 45 s again) the server ends every voice
     session of the round (they bill per minute while idle) and sets `round.state.voices_released: true`; the browser
     also sees its voice sessions end. It survives a restart: a reloaded round keeps the time its pause began, and the

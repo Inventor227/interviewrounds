@@ -201,6 +201,26 @@ describe('Report', () => {
     spy.mockRestore();
   });
 
+  it('a_report_whose_summary_is_the_chip_says_not_enough_signal_once', async () => {
+    // What the server writes for a round with too little to score: its summary is the chip's own words.
+    const report = { ...fakeReport('nosignal') };
+    report.headline = { ...report.headline, summary: 'Not enough signal yet.' };
+    useFakeServer({ routes: { 'GET /api/sessions/thin/report': () => report } });
+    const root = await renderApp('/report/thin');
+    const box = $(root, 'no-signal')!;
+    expect(box).not.toBeNull();
+    expect((box.textContent ?? '').match(/not enough signal yet/gi)).toHaveLength(1);
+    expect(box.querySelector('.verdict-summary')).toBeNull();
+    expect($(root, 'verdict')).toBeNull(); // no verdict chip is guessed
+    expect($(root, 'no-signal-again')!.getAttribute('href')).toBe(`/round/${report.session.round_id}`);
+    // A summary that says more is kept, next to the chip.
+    cleanup();
+    const more = { ...fakeReport('nosignal') };
+    useFakeServer({ routes: { 'GET /api/sessions/thin2/report': () => more } });
+    const root2 = await renderApp('/report/thin2');
+    expect($(root2, 'no-signal')!.querySelector('.verdict-summary')!.textContent).toBe(more.headline.summary);
+  });
+
   it('report_says_not_enough_signal_instead_of_a_verdict', async () => {
     useFakeServer();
     const root = await renderApp('/report/nosignal');

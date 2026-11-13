@@ -28,6 +28,10 @@ export interface FakeTransportOptions {
   speaker?: Speaker;
 }
 
+/** A deploy swaps the server in a few seconds: a turn answered 502, 503 or 504 is sent once more after this long. */
+export const RETRY_AFTER_MS = 1500;
+const TRANSIENT: ReadonlySet<number> = new Set([502, 503, 504]);
+
 interface ChatMessage {
   role: 'user' | 'assistant';
   content: string;
@@ -221,23 +225,31 @@ export class FakeTransport implements VoiceTransport {
   private async *stream(): AsyncGenerator<string> {
     const turn = this.turn;
     if (!turn) return;
-    const res = await this.fetchFn(this.endpoint, {
-      method: 'POST',
-      headers: {
-        authorization: `Bearer ${this.opts.clientToken}`,
-        'content-type': 'application/json',
-        accept: 'text/event-stream',
-      },
-      body: JSON.stringify({
-        model: 'interview-rounds',
-        stream: true,
-        stream_options: { include_usage: true },
-        messages: this.history.map((m) => ({ ...m })),
-        session_id: this.opts.sessionId,
-        fishaudio_extra_body: { session_id: this.opts.sessionId, panelist_id: this.panelistId },
-      }),
-      signal: turn.abort.signal,
-    });
+    const send = () =>
+      this.fetchFn(this.endpoint, {
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${this.opts.clientToken}`,
+          'content-type': 'application/json',
+          accept: 'text/event-stream',
+        },
+        body: JSON.stringify({
+          model: 'interview-rounds',
+          stream: true,
+          stream_options: { include_usage: true },
+          messages: this.history.map((m) => ({ ...m })),
+          session_id: this.opts.sessionId,
+          fishaudio_extra_body: { session_id: this.opts.sessionId, panelist_id: this.panelistId },
+        }),
+        signal: turn.abort.signal,
+      });
+    let res = await send();
+    if (TRANSIENT.has(res.status)) {
+      // The server is being swapped (a deploy): once more, a moment later.
+      await new Promise<void>((r) => setTimeout(r, RETRY_AFTER_MS));
+      if (this.turn !== turn || this.stopped) return;
+      res = await send();
+    }
     if (res.status === 401 || res.status === 403) {
       throw new VoiceError('session_expired', `The voice endpoint refused the session (${res.status})`);
     }

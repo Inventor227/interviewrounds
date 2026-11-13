@@ -5,9 +5,10 @@ import { clearLiveRoom, setLiveRoom, type LiveRoom } from '../../session/room';
 import { StageTimings } from '../../session/timings';
 import { sessionRes } from '../../voice/testkit';
 import { Emitter } from '../../voice/transport';
-import { $, cleanup, click, renderApp, settle } from '../test-utils';
+import { fakeMe } from '../fake/server';
+import { $, cleanup, click, renderApp, settle, useFakeServer } from '../test-utils';
 import { sameWords } from './Report';
-import { startHref } from './Session';
+import { noticeLine, RESUMABLE_POLL_MS, startHref } from './Session';
 
 const launchMock = vi.hoisted(() => ({ next: null as unknown }));
 vi.mock('../launch', async (orig) => ({
@@ -24,6 +25,8 @@ function fakeController(state: ControllerState) {
   const c = {
     state,
     started: false,
+    notice: null as string | null,
+    endedWhilePaused: false,
     session: sessionRes(),
     latencyHistory: [],
     on: events.on.bind(events),
@@ -114,10 +117,121 @@ describe('session page', () => {
   it('a_round_lost_after_it_began_keeps_the_report', async () => {
     const { root, controller } = await mount('greeting');
     controller.go('live');
+    // A lost voice is not the end of the round any more (the room gets a new one): nothing fatal shows.
     controller.emit('error', { code: 'voice_lost' } as never);
+    await settle();
+    expect($(root, 'session-error')).toBeNull();
+    controller.emit('error', { code: 'socket_terminal' } as never);
     await settle();
     expect($(root, 'session-not-started')).toBeNull();
     expect($(root, 'session-error')!.querySelector('a')!.getAttribute('href')).toBe('/report/sess1');
+  });
+
+  it('xr_session_ended_while_paused_offers_resume_on_2d', async () => {
+    // The pause budget on the server says how long the round is held: 9 minutes here.
+    const me = fakeMe('resume');
+    me.resumable = { session_id: 'sess1', round_title: 'Behavioral', expires_at: new Date(Date.now() + 9 * 60_000).toISOString(), paused: true };
+    useFakeServer({ me });
+    const { root, controller, room } = await mount('live');
+    controller.go('paused'); // the headset went to sleep: the controller holds the round
+    room.sessionLost = true;
+    room.changed();
+    await settle();
+    const offer = $(root, 'resume-offer')!;
+    expect(offer.textContent).toMatch(/Your round is paused/);
+    expect($(root, 'resume-left')!.textContent).toMatch(/^8:5\d$|^9:00$/);
+    expect($(root, 'return-to-room')).toBeNull();
+    expect($(root, 'session-state')).toBeNull(); // one message, not two
+    await click($(root, 'resume-round'));
+    // Back into the headset, the desk again, then the round carries on: all the controller's.
+    expect(controller.returnToRoom).toHaveBeenCalledTimes(1);
+    await click($(root, 'end-from-page'));
+    expect(controller.end).toHaveBeenCalledTimes(1);
+    // Back in the room: the offer goes away.
+    room.sessionLost = false;
+    controller.go('live');
+    room.changed();
+    await settle();
+    expect($(root, 'resume-offer')).toBeNull();
+  });
+
+  it('the_page_never_ends_a_round_the_server_still_holds', async () => {
+    // The first read of /api/me does not name the round yet (the pause is still on its way to the server).
+    const me = fakeMe('1');
+    const server = useFakeServer({ me });
+    const { root, controller, room } = await mount('live');
+    vi.useFakeTimers();
+    try {
+      controller.go('paused');
+      room.sessionLost = true;
+      room.changed();
+      await settle();
+      // No deadline known: none is made up, and nothing counts down to an end.
+      expect($(root, 'resume-offer')).not.toBeNull();
+      expect($(root, 'resume-left')).toBeNull();
+      await vi.advanceTimersByTimeAsync(4 * 60_000);
+      await settle();
+      expect($(root, 'resume-offer')).not.toBeNull();
+      expect(controller.end).not.toHaveBeenCalled();
+      // The server now lists it, held for six more minutes: the next read shows that.
+      server.state.me = { ...server.state.me, resumable: { session_id: 'sess1', round_title: 'Behavioral', expires_at: new Date(Date.now() + 6 * 60_000).toISOString(), paused: true } };
+      await vi.advanceTimersByTimeAsync(RESUMABLE_POLL_MS);
+      await settle();
+      expect($(root, 'resume-left')!.textContent).toMatch(/^5:\d\d$|^6:00$/);
+      // Even past the deadline the page ends nothing: the server's own end comes over the socket.
+      await vi.advanceTimersByTimeAsync(7 * 60_000);
+      await settle();
+      expect(controller.end).not.toHaveBeenCalled();
+      expect($(root, 'resume-round')).not.toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('a_held_round_is_not_shown_as_lost_when_a_voice_reported_an_error', async () => {
+    const { root, controller } = await mount('live');
+    controller.go('paused');
+    controller.emit('error', { code: 'connect_failed' } as never);
+    await settle();
+    expect($(root, 'session-error')).toBeNull();
+    // And not once the round runs again after the Resume in the headset.
+    controller.go('live');
+    await settle();
+    expect($(root, 'session-error')).toBeNull();
+    expect($(root, 'session-state')!.dataset.state).toBe('live');
+  });
+
+  it('pause_budget_exhausted_shows_report', async () => {
+    const { root, controller, room } = await mount('live');
+    controller.go('paused');
+    room.sessionLost = true;
+    room.changed();
+    await settle();
+    expect($(root, 'resume-offer')).not.toBeNull();
+    // The server ended the round: ten minutes of pauses were used up.
+    controller.endedWhilePaused = true;
+    controller.go('ending');
+    await settle();
+    expect($(root, 'resume-offer')).toBeNull();
+    expect($(root, 'ended-paused')!.textContent).toBe('The round ended while paused. Your report is being written.');
+    expect($(root, 'see-report')!.getAttribute('href')).toBe('/report/sess1');
+    controller.go('scoring');
+    await settle();
+    expect($(root, 'ended-paused')).not.toBeNull();
+    expect($(root, 'session-error')).toBeNull();
+  });
+
+  it('the_history_button_of_the_slow_scoring_card_goes_to_history', async () => {
+    const { controller } = await mount('scoring');
+    controller.emit('action', 'history');
+    await settle();
+    expect(location.pathname).toBe('/history');
+  });
+
+  it('a_card_of_the_room_reads_as_one_line_on_the_page', () => {
+    expect(noticeLine({ title: 'Welcome back', detail: "Resume when you're ready." })).toBe("Welcome back. Resume when you're ready.");
+    expect(noticeLine({ title: 'Reconnecting…', detail: 'Your progress is saved.' })).toBe('Reconnecting… Your progress is saved.');
+    expect(noticeLine({ title: 'Your interviewer is reconnecting…', detail: '' })).toBe('Your interviewer is reconnecting…');
   });
 
   it('try_again_goes_back_to_the_start_the_round_came_from', () => {

@@ -20,11 +20,11 @@ function ResumeBody(props: { id: string; me: Me }) {
   if (!r || left <= 0) {
     return (
       <div class="state" data-test="resume-gone">
-        <h2>This round can no longer be resumed</h2>
-        <p>It is scored as far as it went, and the report will be in your history.</p>
+        <h2>This round has ended</h2>
+        <p>Your report is being written.</p>
         <div class="row">
           <a class="btn btn-primary" href={`/report/${encodeURIComponent(props.id)}`}>
-            See the report
+            See report
           </a>
           <a class="btn" href="/">
             Go home

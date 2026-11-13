@@ -1,8 +1,9 @@
 // Round cues: short recorded sounds for what the room does by itself. The start chime when the
 // round begins (the desk is down), a tick when a time check falls due, a pop when suggestions
-// arrive (once per batch), a soft whoosh when the floor moves to another panelist, and the pause
-// and resume tones. The sounds themselves stay silent while the user is speaking (createSounds'
-// isSpeaking gate), so none of them reaches the microphone.
+// arrive (once per batch) and a soft whoosh when the floor moves to another panelist. The pause
+// and resume tones are played by the round controller, at the press itself (XRPort.cue). While the
+// round is paused nothing here plays. The sounds themselves stay silent while the user is speaking
+// (createSounds' isSpeaking gate), so none of them reaches the microphone.
 
 import type { ServerMsgMap, ServerMsgType } from '../shared/types';
 
@@ -18,11 +19,13 @@ export interface Cues {
   dispose(): void;
 }
 
-export function wireCues(play: (name: CueName) => void, socket: CueSocket): Cues {
+export function wireCues(playCue: (name: CueName) => void, socket: CueSocket, opts: { paused?: () => boolean } = {}): Cues {
   let started = false;
   let floor: string | null = null;
-  let status: string | null = null;
   let due = false;
+  const play = (name: CueName) => {
+    if (!opts.paused?.()) playCue(name);
+  };
   /** Suggestions already announced, so a list that only shrinks or repeats stays quiet. */
   const seen = new Set<string>();
   const offs = [
@@ -31,9 +34,6 @@ export function wireCues(play: (name: CueName) => void, socket: CueSocket): Cues
       due = !!d.time_check_due;
       if (floor !== null && d.floor && d.floor !== floor) play('handover');
       if (d.floor) floor = d.floor;
-      if (status === 'live' && d.status === 'paused') play('pause');
-      else if (status === 'paused' && d.status === 'live') play('resume');
-      status = d.status;
     }),
     socket.on('board.ghosts', (d) => {
       let fresh = false;

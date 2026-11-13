@@ -3,6 +3,7 @@
 
 import { UIKitDocument } from '@iwsdk/core';
 import type { Object3D } from 'three';
+import { ACTION_LABELS, NOTICES, type NoticeKind } from '../../session/notices';
 import type { HeadsetCard, Report } from '../../shared/types';
 import type { HeadPose } from '../placement';
 import type { DeskFrame } from '../seats';
@@ -38,6 +39,10 @@ export class RoundUI {
   private chrome = false;
   private lastStage: StatusStage | null = null;
   private state: RoundUIState | null = null;
+  private notice: NoticeKind | null = null;
+  /** True once a round controller drives the cards (setNotice): the UI then never picks a card by itself. */
+  private driven = false;
+  private held = false;
 
   constructor(private readonly sounds?: Sounds) {
     const emit = (a: RoundAction) => this.emit(a);
@@ -72,8 +77,46 @@ export class RoundUI {
     const live = s.status === 'live' || s.status === 'paused';
     this.setChromeVisible(live);
     if (live) this.summary.hide();
+    // With a round controller the cards come through setNotice; without one (the bare room, tooling) a paused
+    // state shows the paused card by itself.
+    if (this.driven) return;
     if (s.status === 'paused') this.setStatus('paused');
     else if (this.lastStage === 'paused') this.hideStatus();
+  }
+
+  /**
+   * The card for an interruption of the round (paused, welcome back, reconnecting, a lost voice, slow scoring):
+   * the same status card, with the words and buttons of session/notices.ts. null takes it down.
+   */
+  setNotice(kind: NoticeKind | null): void {
+    this.driven = true;
+    const was = this.notice;
+    this.notice = kind;
+    if (kind) this.showNotice(kind);
+    else if (was) this.hideStatus();
+  }
+
+  private showNotice(kind: NoticeKind): void {
+    const n = NOTICES[kind];
+    this.lastStage = null;
+    this.status.showText(
+      n.title,
+      n.detail,
+      null,
+      n.actions.map((action) => ({ action, label: ACTION_LABELS[action] ?? action })),
+    );
+  }
+
+  /** The status card is free again (the placement prompt is over): the round's card comes back, if any. */
+  restoreNotice(): void {
+    if (this.notice) this.showNotice(this.notice);
+    else if (!this.driven && this.paused) this.setStatus('paused');
+  }
+
+  /** Paused: the captions are cleared and stay empty until the round runs again. */
+  setPaused(paused: boolean): void {
+    this.held = paused;
+    if (paused) this.captions.setCaption('', '');
   }
 
   /** Scoring progress and other calm status lines; pct 0..1 or omitted. */
@@ -121,6 +164,7 @@ export class RoundUI {
   }
 
   setCaption(speaker: string, words: string): void {
+    if (this.held) return;
     this.captions.setCaption(speaker, words);
   }
 
@@ -190,11 +234,6 @@ export class RoundUI {
     this.roundBar.tick(dt, nowMs);
     this.captions.tick(nowMs);
     this.hint.tick(nowMs);
-  }
-
-  /** The system took focus (menu, headset off, session ended): pause a live round so the Resume card shows. */
-  systemPause(): void {
-    if (this.state?.status === 'live') this.emit('pause', false);
   }
 
   private emit(a: RoundAction, sound = true): void {

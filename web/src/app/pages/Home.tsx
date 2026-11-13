@@ -32,10 +32,10 @@ function ResumeBanner(props: { r: NonNullable<Me['resumable']> }) {
   return (
     <div class="banner" role="region" aria-label="Resume your round" data-test="resume-banner">
       <div>
-        <p class="banner-title">Your {props.r.round_title} round dropped</p>
+        <p class="banner-title" data-test="resume-title">{props.r.paused ? 'Your round is paused' : `Your ${props.r.round_title} round dropped`}</p>
         <p class="banner-text">
-          Pick up where you left off for the next <span class="num" data-test="resume-left">{clock(left)}</span>. After that it is
-          scored as far as it went.
+          {props.r.paused ? 'Your interviewer is waiting. Come back within' : 'Pick up where you left off for the next'}{' '}
+          <span class="num" data-test="resume-left">{clock(left)}</span>. After that it is scored as far as it went.
         </p>
       </div>
       <a class="btn btn-primary" href={`/resume/${encodeURIComponent(props.r.session_id)}`} data-test="resume">

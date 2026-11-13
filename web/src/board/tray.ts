@@ -8,6 +8,14 @@ import { canvasTexture, defaultCanvas, placeOnSheet, sheetPlane, type MakeCanvas
 
 const mirror = (r: Rect): Rect => ({ ...r, x: SHEET.w - r.x - r.w });
 
+/**
+ * Which hand is the dominant one for this round: the hand that touched the desk to place the sheet (people reach
+ * with the hand they write with), else the setting from the 2D pages. The tray goes on the other side.
+ */
+export function dominantFor(deskHand: 'left' | 'right' | undefined | null, setting: 'left' | 'right' | undefined | null): 'left' | 'right' {
+  return deskHand ?? setting ?? 'right';
+}
+
 /** The kit for a hand: tray on the non-dominant side, bin on the dominant side. */
 export function kitFor(kit: Kit, dominant: 'left' | 'right'): Kit {
   if (dominant === 'right') return kit;
