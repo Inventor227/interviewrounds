@@ -886,6 +886,10 @@ export interface RoundStatePayload {
   floor: string;
   /** True once per phase boundary: the browser sends `[event: time_check]`. Absent from older servers. */
   time_check_due?: boolean;
+  /** The server ended the round's voices after 45 s in one pause: Resume needs `POST /resume` first. */
+  voices_released?: boolean;
+  /** The interviewer's model failed 3 live turns in a row; the server holds the round clock until a real reply. */
+  degraded?: boolean;
 }
 
 /** One pick of the headset card: the candidate's own words behind a strength or a fix. */
