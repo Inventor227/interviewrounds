@@ -114,6 +114,23 @@ describe('avatar on the real rig', () => {
     expect(hand.getWorldPosition(new Vector3()).distanceTo(before)).toBeLessThan(0.08);
   }, 60000);
 
+  it('thinking_turns_the_eyes_up_and_to_the_side', async () => {
+    const { a, entry, model } = await load('f01', 6);
+    const eye = model.getObjectByName(entry.eye_bones![0]!)!;
+    model.updateMatrixWorld(true);
+    const bindInv = eye.getWorldQuaternion(new Quaternion()).invert();
+    a.lookAt(new Vector3(0, 1.3, 1.45));
+    a.setMode('listening');
+    for (let i = 0; i < 72 * 2; i++) a.update(1 / 72);
+    a.setMode('thinking');
+    for (let i = 0; i < 22; i++) a.update(1 / 72); // 0.3 s
+    model.updateMatrixWorld(true);
+    const p = headPose(eye, bindInv);
+    process.stderr.write(`thinking eye yaw ${(p.yaw / DEG).toFixed(1)} pitch ${(p.pitch / DEG).toFixed(1)}\n`);
+    expect(p.yaw).toBeGreaterThan(10 * DEG);
+    expect(p.pitch).toBeGreaterThan(8 * DEG);
+  }, 60000);
+
   it('update_cost_per_avatar', async () => {
     const { a } = await load('m02', 4);
     a.lookAt(new Vector3(0, 1.2, 1.45));

@@ -31,7 +31,7 @@ const MICRO_RECENTRE = 0.3;
 const SWAY_YAW = 1.2 * DEG;
 const SWAY_PITCH = 0.7 * DEG;
 /** The thinking look: up and to the avatar's left, for 0.6 s. */
-export const THINK_LOOK = { yaw: 15 * DEG, pitch: 12 * DEG, seconds: 0.6 };
+export const THINK_LOOK = { yaw: 18 * DEG, pitch: 16 * DEG, seconds: 0.6 };
 /** Jumps of the eye target above this count as big shifts (the avatar may blink with them). */
 const BIG_SHIFT = 8 * DEG;
 
@@ -129,7 +129,7 @@ export class GazeController {
     if (mode === this.mode) return;
     this.mode = mode;
     this.glanceLeft = 0;
-    if (mode === 'thinking') this.glance(THINK_LOOK.yaw, THINK_LOOK.pitch, THINK_LOOK.seconds, 0.35);
+    if (mode === 'thinking') this.glance(THINK_LOOK.yaw, THINK_LOOK.pitch, THINK_LOOK.seconds, 0.25);
     this.glanceWait = mode === 'speaking' ? between(this.rng, 0.3, 1.2) : this.nextGlanceWait();
   }
 
