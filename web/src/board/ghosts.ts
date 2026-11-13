@@ -13,6 +13,8 @@ import type { BoardStore } from './ops';
 
 export const GHOST_SETTLE_MS = 4000;
 export const GHOST_HOLD_MS = 600;
+/** One slow frame adds at most this much to a pinch-hold, so a hitch never dismisses a ghost. */
+const HOLD_FRAME_CAP_MS = 100;
 /** Extra reach around a ghost's target, for fingertip error. */
 const GHOST_MARGIN_CM = 0.5;
 
@@ -102,7 +104,9 @@ type Cb = (p: BoardPoint) => void;
 interface Press {
   opId: string;
   start: Pt;
-  t0: number;
+  /** Time held so far, counted frame by frame (a frame hitch counts at most HOLD_FRAME_CAP_MS). */
+  heldMs: number;
+  lastMs: number;
   dragged: boolean;
   overBin: boolean;
   done: boolean;
@@ -185,7 +189,7 @@ export class GhostLayer implements PointerAdapter {
       return;
     }
     this.touched.add(g.op_id);
-    this.presses.set(p.hand, { opId: g.op_id, start: [p.x_cm, p.y_cm], t0: this.now(), dragged: false, overBin: false, done: false });
+    this.presses.set(p.hand, { opId: g.op_id, start: [p.x_cm, p.y_cm], heldMs: 0, lastMs: this.now(), dragged: false, overBin: false, done: false });
   }
 
   private move(p: BoardPoint): void {
@@ -194,7 +198,6 @@ export class GhostLayer implements PointerAdapter {
       if (pr.done) return;
       if (Math.hypot(p.x_cm - pr.start[0], p.y_cm - pr.start[1]) >= DRAG_THRESHOLD_CM) pr.dragged = true;
       pr.overBin = inRect(this.kit.bin, p.x_cm, p.y_cm);
-      this.holdCheck(pr);
       return;
     }
     if (!this.passing.has(p.hand)) {
@@ -233,15 +236,17 @@ export class GhostLayer implements PointerAdapter {
     this.pass(this.subs.cancel, p);
   }
 
-  private holdCheck(pr: Press): void {
-    if (pr.done || pr.dragged || this.now() - pr.t0 < this.holdMs) return;
+  private holdCheck(pr: Press, nowMs: number): void {
+    pr.heldMs += Math.min(HOLD_FRAME_CAP_MS, Math.max(0, nowMs - pr.lastMs));
+    pr.lastMs = nowMs;
+    if (pr.done || pr.dragged || pr.heldMs < this.holdMs) return;
     pr.done = true;
     if (this.ghost(pr.opId)) this.opts.reject(pr.opId);
   }
 
   /** Call every frame: pinch-holds and the 4 s settle. */
   update(nowMs = this.now()): void {
-    for (const pr of this.presses.values()) this.holdCheck(pr);
+    for (const pr of this.presses.values()) this.holdCheck(pr, nowMs);
     const pressed = new Set([...this.presses.values()].map((p) => p.opId));
     for (const g of [...this.store.board.ghosts]) {
       const t0 = this.firstSeen.get(g.op_id);

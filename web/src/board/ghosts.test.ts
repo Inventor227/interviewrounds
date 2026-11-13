@@ -79,14 +79,23 @@ describe('ghosts', () => {
   it('a pinch-hold of 0.6 s rejects the ghost; letting go after does nothing more', () => {
     const { store, adapter, sent, rejected, tick } = setup();
     adapter.down(44, 22);
-    tick(GHOST_HOLD_MS / 2);
+    for (let t = 0; t < GHOST_HOLD_MS / 2; t += 50) tick(50);
     expect(rejected).toEqual([]);
-    tick(GHOST_HOLD_MS / 2 + 20);
+    for (let t = 0; t < GHOST_HOLD_MS / 2 + 50; t += 50) tick(50);
     expect(rejected).toEqual(['g1']);
     adapter.up(44, 22);
     expect(sent).toEqual([]);
     expect(store.board.ghosts.map((g) => g.op_id)).toEqual(['g2', 'g3']);
     expect(store.log.at(-1)).toMatchObject({ accepted: false, op: { op_id: 'g1' } });
+  });
+
+  it('a frame hitch during a quick pinch does not count as a hold', () => {
+    const { adapter, sent, rejected, tick } = setup();
+    adapter.down(44, 22);
+    tick(900);
+    adapter.up(44, 22);
+    expect(rejected).toEqual([]);
+    expect(sent.map((o) => o.op_id)).toEqual(['g1']);
   });
 
   it('dragging a ghost onto the bin rejects it; dropping it elsewhere keeps it', () => {
