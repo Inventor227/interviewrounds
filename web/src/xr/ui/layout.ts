@@ -50,9 +50,9 @@ export function layoutDesk(desk: DeskFrame): Record<PanelName, PanelPose> {
 }
 
 /** How far the brief card leans back in a round with a board (from upright): low and flat, like a propped card. */
-export const BRIEF_BEYOND_TILT = 52 * DEG;
+export const BRIEF_BEYOND_TILT = 50 * DEG;
 /** Its right edge stays this far left of the sheet's centre line, clear of the lead's hands and chest. */
-export const BRIEF_BEYOND_CLEAR = 0.14;
+export const BRIEF_BEYOND_CLEAR = 0.1;
 
 /**
  * The brief card in a round with a board: propped just beyond the sheet's far edge, to the left of the lead (whose
@@ -61,7 +61,9 @@ export const BRIEF_BEYOND_CLEAR = 0.14;
  */
 export function layoutBriefBeyondSheet(desk: DeskFrame): PanelPose {
   const u = -BRIEF_BEYOND_CLEAR - BRIEF_W / 2;
-  const edge = sheetPoint(desk, u, SHEET_D + 0.02, 0);
+  // Leaning back, its lower edge comes toward the user: the centre sits far enough out that the lower edge stays
+  // just past the sheet's far edge and covers none of it.
+  const edge = sheetPoint(desk, u, SHEET_D + 0.004 + (BRIEF_H / 2) * Math.sin(BRIEF_BEYOND_TILT), 0);
   const rise = (BRIEF_H / 2) * Math.cos(BRIEF_BEYOND_TILT);
   return { pos: v3(edge.x, edge.y + rise + 0.008, edge.z), yaw: desk.yaw, tilt: -BRIEF_BEYOND_TILT };
 }

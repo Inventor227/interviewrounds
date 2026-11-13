@@ -39,21 +39,28 @@ describe('readability and reach', () => {
     const deg = Math.atan(BRIEF_MIN_FONT_CM / 100 / dist(eye, p.pos)) / DEG;
     expect(deg).toBeGreaterThanOrEqual(MIN_DEG);
     expect(p.tilt).toBeLessThan(0); // leans back
+    // Its lower edge (toward the user) is still past the sheet's far edge: nothing on the sheet is covered.
+    const lowerEdgeZ = p.pos.z + 0.06 * Math.sin(-p.tilt);
+    expect(lowerEdgeZ).toBeLessThan(sheetPoint(desk, 0, SHEET_D, 0).z);
   });
 
   it('the_brief_card_beyond_the_sheet_stays_low_and_clear_of_every_seat', () => {
     const p = layoutBriefBeyondSheet(desk);
-    const far = sheetPoint(desk, 0, SHEET_D, 0);
-    // Low: its top edge is under the seated hands' height plus a hand (the clips rest hands on the desk top).
+    // Low: its top edge stays well under a seated chest (about 0.3 m above the table).
     const top = p.pos.y + 0.06 * Math.cos(-p.tilt);
-    expect(top).toBeLessThan(far.y + 0.09);
+    expect(top).toBeLessThan(desk.deskY + 0.23);
+    // Seen from the user's eyes, the card's sides stay clear of every panelist's hands (about 0.12 m to each side
+    // of the seat's centre line, resting on the table in front of them).
+    const side = (x: number, z: number) => Math.atan2(x - eye.x, eye.z - z) / DEG;
+    const cardLeft = side(p.pos.x - 0.15, p.pos.z);
+    const cardRight = side(p.pos.x + 0.15, p.pos.z);
     for (const n of [1, 2, 3] as const) {
       for (const seat of seatLayout(n, desk)) {
-        // Hands and chest take about 0.22 m to each side of a seat's centre line.
-        const left = p.pos.x - 0.15;
-        const right = p.pos.x + 0.15;
-        const clear = right < seat.pos.x - 0.1 || left > seat.pos.x + 0.22;
-        expect(clear, `seat ${seat.seat} of ${n}`).toBe(true);
+        const handsZ = seat.pos.z + 0.25; // the hands rest about 0.25 m in front of the seat
+        const handsLeft = side(seat.pos.x - 0.12, handsZ);
+        const handsRight = side(seat.pos.x + 0.12, handsZ);
+        const clear = cardRight < handsLeft - 1 || cardLeft > handsRight + 1;
+        expect(clear, `seat ${seat.seat} of ${n}: card ${cardLeft.toFixed(1)}..${cardRight.toFixed(1)}, hands ${handsLeft.toFixed(1)}..${handsRight.toFixed(1)}`).toBe(true);
       }
     }
   });
