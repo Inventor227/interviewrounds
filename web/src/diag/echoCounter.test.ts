@@ -109,4 +109,71 @@ describe('EchoCounter', () => {
     c.tick(11000);
     expect(c.remainingMs(12000)).toBe(4000);
   });
+
+  it('the spoken cue ends the silent part, even before 45 s, so obeying it is never echo', () => {
+    const c = new EchoCounter(0);
+    c.mode('speaking', 0);
+    c.agentText(1000, 'This is a sound check');
+    c.user('echo', 'the old', true, 10000);
+    c.agentText(40000, 'This is a sound check ... above the lighthouse. Now please talk over me');
+    expect(c.phase).toBe('barge');
+    c.user('t', 'sorry can I jump in', false, 40600);
+    c.mode('listening', 41000);
+    const r = c.results(42000);
+    expect(r.barge.started_by).toBe('cue');
+    expect(r.silent.user_segments).toBe(1);
+    expect(r.silent.user_texts).toEqual(['the old']);
+    expect(r.silent.ms).toBe(40000);
+    expect(r.barge.user_texts).toEqual(['sorry can I jump in']);
+    expect(r.barge.onset_source).toBe('transcript');
+    expect(r.barge.agent_stopped).toBe(true);
+    expect(r.barge.stop_after_onset_ms).toBe(400);
+  });
+
+  it('speech starting just before the cue counts as the tester reacting', () => {
+    const c = new EchoCounter(0);
+    c.mode('speaking', 0);
+    c.agentText(500, 'This is');
+    c.user('t', 'sorry', false, 39200);
+    c.agentText(40000, 'Now please talk over me');
+    const r = c.results(40500);
+    expect(r.silent.user_segments).toBe(0);
+    expect(r.barge.user_texts).toEqual(['sorry']);
+    expect(r.barge.onset_ms).toBe(-800);
+  });
+
+  it('with her words but no cue the silent part waits for the long fallback', () => {
+    const c = new EchoCounter(0);
+    c.mode('speaking', 0);
+    c.agentText(500, 'This is a sound check');
+    c.tick(46000);
+    expect(c.phase).toBe('silent');
+    c.tick(75000);
+    expect(c.phase).toBe('barge');
+    expect(c.results(75000).barge.started_by).toBe('timer');
+  });
+
+  it('a stop with nobody talking over her is not a barge-in', () => {
+    const c = new EchoCounter(0, 45000, 15000);
+    c.mode('speaking', 0);
+    c.agentText(40000, 'Now please talk over me');
+    c.mode('listening', 50000);
+    const r = c.results(52000);
+    expect(r.barge.agent_stopped).toBe(false);
+    expect(r.barge.stopped_on_its_own).toBe(true);
+    expect(r.barge.stop_after_onset_ms).toBeNull();
+  });
+
+  it('a pause before the tester talks is kept apart from the stop that answers them', () => {
+    const c = new EchoCounter(0, 1000, 10000);
+    c.mode('speaking', 0);
+    c.tick(1000);
+    c.mode('listening', 2000);
+    c.mode('speaking', 2300);
+    c.user('t', 'wait', false, 6000);
+    c.mode('listening', 6300);
+    const r = c.results(7000);
+    expect(r.barge.stop_after_onset_ms).toBe(300);
+    expect(r.barge.stopped_on_its_own).toBe(true);
+  });
 });

@@ -102,7 +102,7 @@ export class EchoTest {
     const tr = new FishTransport(echoPanelist(voice), { start });
     this.transport = tr;
     tr.on('mode', (m) => c.mode(m, performance.now()));
-    tr.on('agentText', () => c.agentText(performance.now()));
+    tr.on('agentText', (e) => c.agentText(performance.now(), e.text));
     tr.on('userTranscript', (e) => c.user(e.segmentId, e.text, e.final, performance.now()));
     tr.on('ended', () => void this.end('ended'));
     tr.on('error', (e) => {
