@@ -8,6 +8,7 @@ pub mod db;
 pub mod dev;
 pub mod error;
 pub mod fish;
+pub mod meeting;
 pub mod orchestrator;
 
 pub use app::{AppState, router};
