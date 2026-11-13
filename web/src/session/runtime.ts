@@ -27,7 +27,7 @@ import * as browser from './browser';
 import type { RoundControllerDeps } from './controller';
 import { wireCues, type Cues } from './cues';
 import { createHeadPort } from './headPort';
-import { needsOnboarding, Onboarding, watchPresence } from './onboarding';
+import { needsOnboarding, Onboarding, watchPresence, type PresenceWatch } from './onboarding';
 import { People, type AvatarLike } from './people';
 import type { HeadSamplerPort, SocketPort, UiAction, XRPort, XRVisibilityLike } from './ports';
 import { clearLiveRoom, setLiveRoom, type LiveRoom } from './room';
@@ -115,6 +115,7 @@ export function createRoundRuntime({ preview }: RuntimeOptions): RoundController
   let settings: Settings | null = null;
   let me: Me | null = null;
   let onboarding: Onboarding | null = null;
+  let presence: PresenceWatch | null = null;
   let taught = false;
   /** Builds the board for a dominant hand (the tray goes opposite); set once the board's parts are loaded. */
   let makeBoard: ((hand: 'left' | 'right') => BoardXR) | null = null;
@@ -205,6 +206,7 @@ export function createRoundRuntime({ preview }: RuntimeOptions): RoundController
     cues = null;
     onboarding?.dispose();
     onboarding = null;
+    presence = null;
     makeBoard = null;
     board?.destroy();
     board = null;
@@ -496,12 +498,21 @@ export function createRoundRuntime({ preview }: RuntimeOptions): RoundController
         },
       });
       // The 20 s only count while the user is in the room (headset on, no system menu, page visible).
-      cleanups.push(watchPresence(onboarding, { onXrVisibility: (cb) => a.onVisibility(cb), onSessionEnd: (cb) => a.onSessionEnd(() => cb()), page: typeof document === 'undefined' ? undefined : document }));
+      const watch = watchPresence(onboarding, {
+        onXrVisibility: (cb) => a.onVisibility(cb),
+        xrNow: () => (a.world.session?.visibilityState as 'visible' | 'visible-blurred' | 'hidden' | undefined) ?? 'visible',
+        onSessionEnd: (cb) => a.onSessionEnd(() => cb()),
+        page: typeof document === 'undefined' ? undefined : document,
+      });
+      presence = watch;
+      cleanups.push(() => watch.dispose());
       if (import.meta.env.DEV && room.debug) {
         const ob = onboarding;
         room.debug.onboarding = { showing: () => (ob.showing ? 'box' : null), skip: () => [...skips].forEach((cb) => cb()), view };
       }
     }
+    // This call is an Enter (the first, or the way back after the headset view was lost): presence counts again.
+    presence?.entered();
     const result = await onboarding.run();
     if (result === 'none') return 'none';
     taught = true;

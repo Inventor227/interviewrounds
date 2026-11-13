@@ -32,6 +32,7 @@ export class Onboarding {
   private readonly offs: (() => void)[] = [];
   private timer: ReturnType<typeof setTimeout> | null = null;
   private on = false;
+  private present = true;
   private result: Promise<OnboardResult> | null = null;
   private settle: ((r: OnboardResult) => void) | null = null;
 
@@ -73,13 +74,24 @@ export class Onboarding {
 
   private arm(): void {
     if (this.timer) clearTimeout(this.timer);
+    this.timer = null;
+    if (!this.present) return; // nobody is in the room: the clock starts when they are
     this.timer = setTimeout(() => this.finish('skipped', 'timeout'), ONBOARD_TIMEOUT_MS);
   }
 
-  /** The user left the headset view: the clock waits (a round never starts into an empty room). run() starts it again. */
-  suspend(): void {
-    if (this.timer) clearTimeout(this.timer);
-    this.timer = null;
+  /**
+   * Whether the user is in the room (headset on, no system menu, page visible). Away: the clock waits, so a round
+   * never starts into an empty room. Back: the line and Skip again, and a fresh 20 s.
+   */
+  setPresent(present: boolean): void {
+    this.present = present;
+    if (!present) {
+      if (this.timer) clearTimeout(this.timer);
+      this.timer = null;
+    } else if (this.on) {
+      this.host.show(true);
+      this.arm();
+    }
   }
 
   private finish(result: OnboardResult, why?: 'done' | 'skipped' | 'timeout'): void {
@@ -102,24 +114,35 @@ export class Onboarding {
 export interface PresenceSources {
   /** XRSession visibility changes (`hidden`: headset off; `visible-blurred`: system menu). */
   onXrVisibility(cb: (v: 'visible' | 'visible-blurred' | 'hidden') => void): () => void;
+  /** The session's visibility right now (a menu can already be up when the watch starts, or at a new Enter). */
+  xrNow?(): 'visible' | 'visible-blurred' | 'hidden';
   /** The headset session ended. */
   onSessionEnd(cb: () => void): () => void;
   /** The page (document.visibilityState and its `visibilitychange`). */
   page?: { readonly visibilityState: string; addEventListener(t: 'visibilitychange', cb: () => void): void; removeEventListener(t: 'visibilitychange', cb: () => void): void };
 }
 
+export interface PresenceWatch {
+  /** The user entered the headset view again (a new session): presence counts from its state now. */
+  entered(): void;
+  dispose(): void;
+}
+
 /**
- * Keeps the onboarding's 20 s clock to the time the user is really in the room: it stops when the headset comes
- * off, the system menu opens, the page is hidden or the session ends, and starts fresh, with the line and Skip
- * shown again, when the room is visible again. (After a session end the way back is a new Enter, which calls
- * run() itself.) The round therefore never starts by itself while nobody is there.
+ * Keeps the onboarding's 20 s clock to the time the user is really in the room. Present means: a headset session
+ * that is `visible`, and a page that is not hidden. The state that already holds when the watch starts counts (a
+ * system menu up as placement ends: no clock yet). After a session end nobody is present until the next Enter,
+ * whatever the page's visibility does meanwhile. Coming back shows the line and Skip again and starts a fresh 20 s.
  */
-export function watchPresence(onboarding: Onboarding, src: PresenceSources): () => void {
-  let xr: 'visible' | 'visible-blurred' | 'hidden' = 'visible';
+export function watchPresence(onboarding: Onboarding, src: PresenceSources): PresenceWatch {
+  let xr = src.xrNow?.() ?? 'visible';
+  let ended = false;
+  let present: boolean | null = null;
   const sync = () => {
-    const here = xr === 'visible' && src.page?.visibilityState !== 'hidden';
-    if (!here) onboarding.suspend();
-    else if (onboarding.showing) void onboarding.run();
+    const here = !ended && xr === 'visible' && src.page?.visibilityState !== 'hidden';
+    if (here === present) return;
+    present = here;
+    onboarding.setPresent(here);
   };
   const onPage = () => sync();
   src.page?.addEventListener('visibilitychange', onPage);
@@ -129,11 +152,18 @@ export function watchPresence(onboarding: Onboarding, src: PresenceSources): () 
       sync();
     }),
     src.onSessionEnd(() => {
-      // A new session starts visible; until then nothing counts.
-      xr = 'visible';
-      onboarding.suspend();
+      ended = true;
+      sync();
     }),
     () => src.page?.removeEventListener('visibilitychange', onPage),
   ];
-  return () => offs.forEach((off) => off());
+  sync();
+  return {
+    entered() {
+      ended = false;
+      xr = src.xrNow?.() ?? 'visible';
+      sync();
+    },
+    dispose: () => offs.forEach((off) => off()),
+  };
 }

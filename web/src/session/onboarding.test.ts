@@ -79,22 +79,6 @@ describe('onboarding by doing', () => {
     expect(h.shown).toEqual(['on', 'on', 'off:skipped']); // over: nothing comes back
   });
 
-  it('the_clock_waits_while_the_user_is_out_of_the_headset_view', async () => {
-    const h = host();
-    const o = new Onboarding(h.host);
-    let result: string | null = null;
-    void o.run().then((r) => (result = r));
-    await vi.advanceTimersByTimeAsync(10_000);
-    o.suspend(); // the headset session ended
-    await vi.advanceTimersByTimeAsync(120_000);
-    expect(result).toBeNull(); // no round starts into an empty room
-    void o.run(); // back: the line again, and a fresh 20 s
-    await vi.advanceTimersByTimeAsync(ONBOARD_TIMEOUT_MS - 1);
-    expect(result).toBeNull();
-    await vi.advanceTimersByTimeAsync(1);
-    expect(result).toBe('skipped');
-  });
-
   function presence() {
     const vis = new Set<(v: 'visible' | 'visible-blurred' | 'hidden') => void>();
     const ends = new Set<() => void>();
@@ -104,8 +88,10 @@ describe('onboarding by doing', () => {
       addEventListener: (_t: 'visibilitychange', cb: () => void) => void pageCbs.add(cb),
       removeEventListener: (_t: 'visibilitychange', cb: () => void) => void pageCbs.delete(cb),
     };
+    let now: 'visible' | 'visible-blurred' | 'hidden' = 'visible';
     return {
-      src: { onXrVisibility: (cb: (v: 'visible' | 'visible-blurred' | 'hidden') => void) => (vis.add(cb), () => vis.delete(cb)), onSessionEnd: (cb: () => void) => (ends.add(cb), () => ends.delete(cb)), page },
+      setNow: (v: 'visible' | 'visible-blurred' | 'hidden') => (now = v),
+      src: { xrNow: () => now, onXrVisibility: (cb: (v: 'visible' | 'visible-blurred' | 'hidden') => void) => (vis.add(cb), () => vis.delete(cb)), onSessionEnd: (cb: () => void) => (ends.add(cb), () => ends.delete(cb)), page },
       xr: (v: 'visible' | 'visible-blurred' | 'hidden') => vis.forEach((cb) => cb(v)),
       end: () => ends.forEach((cb) => cb()),
       page: (v: string) => {
@@ -126,7 +112,7 @@ describe('onboarding by doing', () => {
       const h = host();
       const o = new Onboarding(h.host);
       const p = presence();
-      const off = watchPresence(o, p.src);
+      const off = watchPresence(o, p.src).dispose;
       let result: string | null = null;
       void o.run().then((r) => (result = r));
       await vi.advanceTimersByTimeAsync(15_000);
@@ -144,7 +130,7 @@ describe('onboarding by doing', () => {
     });
   }
 
-  it('away_twice_over_needs_both_back_and_a_session_end_waits_for_the_next_enter', async () => {
+  it('away_twice_over_needs_both_back', async () => {
     const h = host();
     const o = new Onboarding(h.host);
     const p = presence();
@@ -157,17 +143,51 @@ describe('onboarding by doing', () => {
     await vi.advanceTimersByTimeAsync(60_000);
     expect(result).toBeNull();
     p.xr('visible');
-    p.end(); // then the system ends the session
-    await vi.advanceTimersByTimeAsync(60_000);
-    expect(result).toBeNull();
-    void o.run(); // the page's way back
     await vi.advanceTimersByTimeAsync(ONBOARD_TIMEOUT_MS);
     expect(result).toBe('skipped');
-    // Once it is over, coming and going shows nothing again.
-    p.xr('hidden');
-    p.xr('visible');
-    expect(h.shown.filter((x) => x === 'on')).toHaveLength(3); // the start, the headset back on, the new Enter
-    expect(h.shown.at(-1)).toBe('off:timeout');
+  });
+
+  it('after_a_session_end_the_page_coming_back_into_view_starts_nothing_until_the_next_enter', async () => {
+    const h = host();
+    const o = new Onboarding(h.host);
+    const p = presence();
+    const w = watchPresence(o, p.src);
+    let result: string | null = null;
+    void o.run().then((r) => (result = r));
+    p.end(); // the system ended the headset session; the user is on the 2D page
+    p.page('hidden');
+    p.page('visible'); // they look at the page again: still not in the room
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
+    expect(result).toBeNull();
+    expect(h.shown).toEqual(['on']);
+    // The page's way back: a new Enter, then the same step with a fresh 20 s.
+    w.entered();
+    void o.run();
+    await vi.advanceTimersByTimeAsync(ONBOARD_TIMEOUT_MS - 1);
+    expect(result).toBeNull();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(result).toBe('skipped');
+  });
+
+  it('the_first_clock_waits_for_a_menu_or_a_hidden_page_that_is_already_up', async () => {
+    for (const already of ['menu', 'page'] as const) {
+      const h = host();
+      const o = new Onboarding(h.host);
+      const p = presence();
+      if (already === 'menu') p.setNow('visible-blurred');
+      else p.page('hidden');
+      watchPresence(o, p.src); // the watch starts with the menu up (or the page hidden)
+      let result: string | null = null;
+      void o.run().then((r) => (result = r));
+      await vi.advanceTimersByTimeAsync(5 * 60_000);
+      expect(result, already).toBeNull(); // no clock ran
+      if (already === 'menu') p.xr('visible');
+      else p.page('visible');
+      await vi.advanceTimersByTimeAsync(ONBOARD_TIMEOUT_MS - 1);
+      expect(result, already).toBeNull();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(result, already).toBe('skipped');
+    }
   });
 
   it('closing_the_room_settles_a_waiting_run', async () => {
