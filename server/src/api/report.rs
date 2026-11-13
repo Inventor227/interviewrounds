@@ -79,12 +79,19 @@ async fn rescore(
     let (id, status) = owned_status(&app, &id, &who).await?;
     match status.as_str() {
         "failed" => {
+            // The row lock serialises concurrent "try again" taps: only the request that moves the session from
+            // failed to scoring records a re-score.
+            let mut tx = app.db.begin().await?;
+            sqlx::query("select 1 from sessions where id = $1 for update")
+                .bind(id)
+                .execute(&mut *tx)
+                .await?;
             let today: i64 = sqlx::query_scalar(
                 "select count(*) from usage_events where session_id = $1 and kind = 'rescore' \
                    and created_at > now() - interval '1 day'",
             )
             .bind(id)
-            .fetch_one(&app.db)
+            .fetch_one(&mut *tx)
             .await?;
             if today >= MAX_RESCORES_PER_DAY {
                 return Err(AppError::Limited {
@@ -92,22 +99,24 @@ async fn rescore(
                     message: "This report was retried twice today. Try again tomorrow.".into(),
                 });
             }
-            let mut tx = app.db.begin().await?;
-            sqlx::query(
-                "insert into usage_events (identity_id, session_id, provider, kind, usage_phase, cost_usd) \
-                 values ($1, $2, 'anthropic', 'rescore', $3, 0)",
-            )
-            .bind(who.id)
-            .bind(id)
-            .bind(app.config.usage_phase.as_str())
-            .execute(&mut *tx)
-            .await?;
-            sqlx::query(
+            let moved = sqlx::query(
                 "update sessions set status = 'scoring' where id = $1 and status = 'failed'",
             )
             .bind(id)
             .execute(&mut *tx)
-            .await?;
+            .await?
+            .rows_affected();
+            if moved == 1 {
+                sqlx::query(
+                    "insert into usage_events (identity_id, session_id, provider, kind, usage_phase, cost_usd) \
+                     values ($1, $2, 'anthropic', 'rescore', $3, 0)",
+                )
+                .bind(who.id)
+                .bind(id)
+                .bind(app.config.usage_phase.as_str())
+                .execute(&mut *tx)
+                .await?;
+            }
             tx.commit().await?;
         }
         "scoring" => {}
@@ -174,8 +183,9 @@ async fn post_board_image(
             .await
             .map_err(|e| AppError::Internal(anyhow::anyhow!("creating {}: {e}", dir.display())))?;
     }
-    // Write next to the target, then rename, so a reader never sees half an image.
-    let tmp = full.with_extension("png.part");
+    // Write next to the target under a name of its own, then rename, so a reader never sees half an image and
+    // two uploads at once never write the same file.
+    let tmp = full.with_extension(format!("{}.part", Uuid::new_v4().simple()));
     tokio::fs::write(&tmp, &body)
         .await
         .map_err(|e| AppError::Internal(anyhow::anyhow!("writing {}: {e}", tmp.display())))?;
