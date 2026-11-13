@@ -274,6 +274,15 @@ async function interviewRound() {
   const opener = await turn(id, token, "[event: start]", "opener");
   spoken(opener.reply);
 
+  // The headset comes off and goes back on: paused, then live again.
+  const pausedF = next((f) => f.t === "round.state" && f.d.status === "paused", 5000, "paused");
+  send("ui.event", { kind: "pause", reason: "headset_removed" });
+  await pausedF;
+  const liveF = next((f) => f.t === "round.state" && f.d.status === "live", 5000, "live again");
+  send("ui.event", { kind: "resume" });
+  await liveF;
+  check("pause and resume", true);
+
   const turns = [];
   // Answer 1, then the board.
   let r = await turn(id, token, ANSWERS[0], "answer 1");
