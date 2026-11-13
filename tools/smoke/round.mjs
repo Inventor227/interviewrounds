@@ -346,13 +346,22 @@ const MEETING_SETUP = {
   notes: "Status: QA found 40 open bugs, 12 of them blockers.",
   difficulty: "realistic",
 };
+// Long enough together (about 300 words) for the scorer's minimum of 90 seconds of speech.
 const MEETING_LINES = [
-  "Bottom line first: the mobile launch is slipping three weeks. QA found forty open bugs, twelve of them " +
-    "blockers. I'm asking for one payments engineer for six weeks, which brings us back to one week late.",
-  "Owen, I know that hits the refunds work. I'd take the engineer who already knows our checkout code, and I'll " +
-    "give the refunds team two of my people for the week after launch so the refunds date only moves by one week.",
-  "So the ask is clear: one payments engineer for six weeks, starting Monday. In return the refunds work gets two " +
-    "of my engineers right after launch. Dana, can we agree on that today?",
+  "Bottom line first: the mobile launch is slipping three weeks. QA found forty open bugs, and twelve of them are " +
+    "blockers in checkout and payments. Most of those twelve sit in code the payments team wrote, which is why my " +
+    "team is slow on them. I'm asking for one payments engineer for six weeks. With that person we get back to one " +
+    "week late instead of three, and the marketing date only moves by a week. If we do nothing, support takes the " +
+    "hit at launch, because every one of those blockers is a failed payment a customer will call us about.",
+  "Owen, I know that hits the refunds work, and I don't want to pretend it's free. I'd take the engineer who already " +
+    "knows our checkout code, so there's no ramp up. In return I'll give the refunds team two of my people for the " +
+    "week right after launch, so the refunds date only moves by one week. I'll also keep you in our daily standup, " +
+    "so you can pull your engineer back if a refunds emergency comes up. I've already talked to QA, and they will " +
+    "test the refunds changes first after launch, so your release does not wait in their queue.",
+  "So the ask is clear: one payments engineer for six weeks, starting Monday. That engineer takes the seven payment " +
+    "blockers first, then the five checkout blockers. In return the refunds work gets two of my engineers right " +
+    "after launch, and I'll send you both a weekly note on the blocker count. Dana, can we agree on that today, or " +
+    "is there something you need from me before you decide?",
 ];
 
 async function meetingRound() {
