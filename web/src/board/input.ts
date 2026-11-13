@@ -278,6 +278,9 @@ export class BoardInput {
 
   private down(p: BoardPoint): void {
     const { x_cm: x, y_cm: y } = p;
+    // A second down without an up: the old press is over.
+    const old = this.gestures.get(p.hand);
+    if (old?.kind === 'kit') this.kit.handler?.cancel?.(old.press, this.ctx());
     let g = this.hit(x, y);
     if (!g && onSheet(this.board, x, y)) {
       const stroke = new StrokeBuilder(p.hand, { filter: this.opts.filterHands && p.hand !== 'mouse' });
