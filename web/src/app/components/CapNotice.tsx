@@ -7,8 +7,8 @@ import { resetPhrase } from './format';
 
 const COPY: Record<LimitReason, { title: string; body: string }> = {
   guest_daily_limit: {
-    title: 'You have used today’s free rounds',
-    body: 'Guest rounds come back',
+    title: 'You’ve used today’s rounds on this device',
+    body: 'Come back for more',
   },
   guest_full_used: {
     title: 'Your full round is used',
@@ -28,7 +28,7 @@ const COPY: Record<LimitReason, { title: string; body: string }> = {
   },
   free_rounds_used: {
     title: 'You have used your free rounds',
-    body: 'Your reports and history stay free. Pick a plan to keep practicing live.',
+    body: 'Your reports and history stay here.',
   },
 };
 
@@ -65,11 +65,6 @@ export function CapNotice(props: {
             ))}
         </p>
         <div class="row">
-          {props.reason === 'free_rounds_used' && (
-            <a class="btn btn-primary" href="/pricing" data-test="cap-plans">
-              See plans
-            </a>
-          )}
           {props.reason === 'guest_full_used' && (
             <a class="btn" href="/start" data-test="cap-quick">
               Pick a quick round

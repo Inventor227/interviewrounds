@@ -1739,9 +1739,14 @@ async fn score_session_stores_report_and_serves_it() {
 
     let res = common::get(app.clone(), &format!("/api/sessions/{id}/report")).await;
     assert_eq!(res.status(), StatusCode::OK);
-    let body = common::body_json(res).await;
-    assert_eq!(body, report);
+    let mut body = common::body_json(res).await;
+    // As served, the report carries the session's live public link (none here).
     assert!(schema().errors(&body).is_empty());
+    assert_eq!(
+        body.as_object_mut().unwrap().remove("share"),
+        Some(json!({"public_slug": null, "include_quotes": false}))
+    );
+    assert_eq!(body, report);
     let stranger = report_app(&db, &data, identity(Uuid::new_v4()));
     let res = common::get(stranger, &format!("/api/sessions/{id}/report")).await;
     assert_eq!(

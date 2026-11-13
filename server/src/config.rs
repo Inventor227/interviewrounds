@@ -51,6 +51,8 @@ pub struct Config {
     pub port: u16,
     pub database_url: String,
     pub app_origin: String,
+    /// Origin of public links such as shared scorecards (`PUBLIC_BASE_URL`, default `APP_ORIGIN`).
+    pub public_base_url: String,
     pub content_dir: PathBuf,
     pub public_dir: PathBuf,
     pub data_dir: PathBuf,
@@ -134,6 +136,14 @@ impl Config {
             });
         }
         let app_origin = app_origin.trim_end_matches('/').to_string();
+        let public_base_url = get("PUBLIC_BASE_URL").unwrap_or_else(|| app_origin.clone());
+        if !(public_base_url.starts_with("https://") || public_base_url.starts_with("http://")) {
+            return Err(ConfigError::Invalid {
+                var: "PUBLIC_BASE_URL",
+                reason: "must start with https:// or http://".into(),
+            });
+        }
+        let public_base_url = public_base_url.trim_end_matches('/').to_string();
 
         let usage_phase = match get("USAGE_PHASE").as_deref().unwrap_or("build") {
             "build" => UsagePhase::Build,
@@ -205,6 +215,7 @@ impl Config {
             port,
             database_url,
             app_origin,
+            public_base_url,
             content_dir: get("CONTENT_DIR")
                 .unwrap_or_else(|| "content".into())
                 .into(),
@@ -305,6 +316,7 @@ impl fmt::Debug for Config {
             .field("port", &self.port)
             .field("database_url", &REDACTED)
             .field("app_origin", &self.app_origin)
+            .field("public_base_url", &self.public_base_url)
             .field("content_dir", &self.content_dir)
             .field("public_dir", &self.public_dir)
             .field("data_dir", &self.data_dir)

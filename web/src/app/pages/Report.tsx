@@ -3,6 +3,7 @@
 // Also: scoring in progress (polls until ready), not enough signal, meeting outcome, failed.
 
 import { Component, type ComponentChildren, type JSX } from 'preact';
+import { useLocation } from 'preact-iso';
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { api, ApiError } from '../../net/api';
 import type { Catalog, Delivery, Evidence, MeetingDetails, NextDrill, Report as ReportData, SessionStatus } from '../../shared/types';
@@ -55,6 +56,9 @@ type View =
   | { kind: 'abandoned' }
   | { kind: 'error'; error: ApiError };
 
+/** A retry's page moves to its parent's address and hands over the report it already has (no second load). */
+let handoff: ReportData | null = null;
+
 function useReport(id: string): [View, () => void] {
   const [view, setView] = useState<View>({ kind: 'loading' });
   const [tick, setTick] = useState(0);
@@ -62,6 +66,12 @@ function useReport(id: string): [View, () => void] {
     let live = true;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const since = Date.now();
+    const handed = handoff;
+    handoff = null;
+    if (handed && handed.session.id === id) {
+      setView({ kind: 'ready', report: handed });
+      return;
+    }
     setView({ kind: 'loading' });
     const poll = async () => {
       try {
@@ -147,6 +157,11 @@ function Section(props: { name: string; title: string; children: ComponentChildr
   );
 }
 
+/** A retry is offered when the report has a retry prompt (interview rounds only). */
+function canRetry(r: ReportData): boolean {
+  return r.session.mode === 'interview' && !!r.weakest_moment?.retry?.prompt;
+}
+
 function retryHref(r: ReportData): string {
   const round = r.session.round_id ?? (r.session.mode === 'meeting' ? 'meeting.short' : `${r.session.role}.${r.session.round_type}.short`);
   return `/round/${round}?retry=${encodeURIComponent(r.session.id)}`;
@@ -155,7 +170,7 @@ function retryHref(r: ReportData): string {
 function drillHref(d: NextDrill, r: ReportData): string | null {
   switch (d.kind) {
     case 'retry_answer':
-      return retryHref(r);
+      return canRetry(r) ? retryHref(r) : null;
     case 'meeting':
       return '/meeting/new';
     case 'short_round':
@@ -213,14 +228,16 @@ function Weakest(props: { r: ReportData }) {
           <p class="model">{w.model_answer}</p>
         </div>
       </div>
-      <div class="row">
-        <a class="btn btn-primary" href={retryHref(props.r)} data-test="retry-answer">
-          Retry this answer
-        </a>
-        <span class="fine">
-          About {Math.round((w.retry?.max_seconds ?? 120) / 60)} minutes. Scored again, with before and after.
-        </span>
-      </div>
+      {canRetry(props.r) && (
+        <div class="row">
+          <a class="btn btn-primary" href={retryHref(props.r)} data-test="retry-answer">
+            Retry this answer
+          </a>
+          <span class="fine">
+            About {Math.round((w.retry?.max_seconds ?? 120) / 60)} minutes. Scored again, with before and after.
+          </span>
+        </div>
+      )}
       {w.retries && w.retries.length > 0 && (
         <ul class="retries" data-test="retries">
           {w.retries.map((x) => (
@@ -388,7 +405,8 @@ function Share(props: { r: ReportData }) {
   const initial = props.r.share?.public_slug ?? null;
   const [slug, setSlug] = useState<string | null>(initial);
   const [url, setUrl] = useState<string | null>(initial ? `${location.origin}/s/${initial}` : null);
-  const [withTranscript, setWithTranscript] = useState(false);
+  // A live link keeps showing what it shares.
+  const [withTranscript, setWithTranscript] = useState(!!initial && !!props.r.share?.include_quotes);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [copied, setCopied] = useState<'no' | 'yes' | 'manual'>('no');
@@ -731,6 +749,14 @@ class ReportBoundary extends Component<{ onRetry: () => void; children: Componen
 export function Report(props: { id?: string }) {
   const id = props.id ?? '';
   const [view, reload] = useReport(id);
+  const { route } = useLocation();
+  // A retry answers with its parent's report (with the before and after on it): show it at the parent's address.
+  const parentId = view.kind === 'ready' && view.report.session.id && view.report.session.id !== id ? view.report.session.id : null;
+  useEffect(() => {
+    if (!parentId || view.kind !== 'ready') return;
+    handoff = view.report;
+    route(`/report/${encodeURIComponent(parentId)}`, true);
+  }, [parentId]);
   if (view.kind === 'ready') {
     return (
       <ReportBoundary onRetry={reload}>

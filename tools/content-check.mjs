@@ -329,7 +329,7 @@ const HOUSE_RULES_PLACEHOLDERS = [
   'persona.display_name', 'persona.title', 'seniority', 'role', 'round_name', 'phase.id', 'phase.minutes_left', 'phase.goal',
   'silence_wait_seconds', 'interrupt_after_seconds',
 ];
-const REQUIRED_PROMPTS = ['house-rules.md', 'levels.md', 'styles.md', 'hand-over.md', 'scribe.md', 'scorer.md', 'meeting-prepare.md', 'meeting-state.md'];
+const REQUIRED_PROMPTS = ['house-rules.md', 'levels.md', 'styles.md', 'hand-over.md', 'scribe.md', 'scorer.md', 'meeting-prepare.md', 'meeting-state.md', 'round-retry.md'];
 const MARKERS = ['start', 'time_check', 'silence_check', 'long_answer', 'handover', 'resume', 'ending'];
 const AVATARS = ['f01', 'f02', 'f03', 'm02', 'm04', 'm05'];
 

@@ -206,6 +206,8 @@ pub struct ScoringDeps {
     pub max_tokens: u32,
     /// Model of the quick headset card (`claude-sonnet-5-5`).
     pub card_model: String,
+    /// `FAST_MODEL`: scores a retry (one before and after call).
+    pub fast_model: String,
     pub data_dir: PathBuf,
     pub usage_phase: UsagePhase,
     pub events: Arc<dyn ReportEvents>,
@@ -243,6 +245,7 @@ impl ScoringDeps {
             effort: DEFAULT_EFFORT.to_string(),
             max_tokens: MAX_TOKENS,
             card_model: CARD_MODEL.to_string(),
+            fast_model: crate::config::DEFAULT_LIVE_MODEL.to_string(),
             data_dir: PathBuf::from("data"),
             usage_phase: UsagePhase::Build,
             events: Arc::new(LogEvents),
@@ -264,6 +267,7 @@ impl ScoringDeps {
             &app.config.scoring_model,
         );
         deps.fish = Some(app.fish.clone());
+        deps.fast_model = app.config.fast_model.clone();
         deps.data_dir = app.config.data_dir.clone();
         deps.usage_phase = app.config.usage_phase;
         if let Ok(effort) = std::env::var("SCORING_EFFORT")
@@ -810,6 +814,10 @@ pub async fn mark_failed(deps: &ScoringDeps, session_id: Uuid) {
 /// Scores a session within its attempt budget (two, then `failed`) and stores the report. Every attempt is
 /// ledgered first, so a crash, a store error or a restart never buys more than two model runs.
 pub async fn score_session(deps: &ScoringDeps, session_id: Uuid) -> anyhow::Result<Value> {
+    // A retry is scored on its own terms (one fast call, ledgered like any other) into its parent's report.
+    if crate::retry::is_retry(&deps.db, session_id).await? {
+        return crate::retry::score(deps, session_id).await;
+    }
     // Scoring writes its own ledger rows (`record_usage`): the metered client must not record its calls again.
     crate::usage::LLM_UNMETERED
         .scope((), score_session_inner(deps, session_id))

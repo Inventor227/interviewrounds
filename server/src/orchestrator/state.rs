@@ -341,6 +341,17 @@ impl SessionState {
             .round(&spec.round_id)
             .ok_or_else(|| anyhow!("unknown round {}", spec.round_id))?
             .clone();
+        SessionState::with_round(spec, round, catalog, live, now)
+    }
+
+    /// Like [`SessionState::new`], with a round that is not in the catalog as it is (a retry's two minute round).
+    pub fn with_round(
+        spec: NewSession,
+        round: RoundConfig,
+        catalog: &Catalog,
+        live: LiveSettings,
+        now: Instant,
+    ) -> anyhow::Result<SessionState> {
         let mut meeting = spec.meeting.clone();
         let seats = if let (Mode::Meeting, Some(m), true) =
             (spec.mode, meeting.as_ref(), spec.panel.is_empty())

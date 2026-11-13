@@ -1,11 +1,14 @@
 #!/usr/bin/env node
 // End-to-end smoke round against a deployed server, with the fake voice (no voice platform session).
 //
-//   DEV_KEY=... node tools/smoke/round.mjs [--origin https://rounds.dijmo.com] [--out <dir>]
+//   DEV_KEY=... node tools/smoke/round.mjs [--origin https://rounds.dijmo.com] [--out <dir>] [--only interview]
+//     [--share-retry]
 //
 // Creates a short system design round, opens the session socket, plays the browser's part (typed events, four
 // answers through the custom LLM endpoint, playback reports, three board ops and a focus), ends the round, waits for
 // the headset card and the report, then checks the report against content/schema/report.v1.schema.json.
+// With --share-retry it then shares the scorecard (public page, transcript toggle, old link 410) and runs a two
+// minute retry of the weakest answer (typed answer, end, the parent report gains a retries entry).
 // Writes events.json (every frame and call, timed), report.json and summary.json to --out. Exit 0 on success.
 // The model calls are real (live turns, director, Scribe, scoring). DEV_KEY is never printed.
 
@@ -218,6 +221,7 @@ function validateReport(data) {
 }
 
 const MODE = opt("--only", "both");
+const SHARE_RETRY = args.includes("--share-retry");
 
 async function diagCheck() {
   // A device check result, stored for the caller (a guest).
@@ -230,7 +234,10 @@ async function diagCheck() {
 async function main() {
   mkdirSync(OUT, { recursive: true });
   await diagCheck();
-  if (MODE !== "meeting") await interviewRound();
+  if (MODE !== "meeting") {
+    await interviewRound();
+    if (SHARE_RETRY) await shareAndRetry(summary.session_id);
+  }
   if (MODE !== "interview") {
     try {
       await meetingRound();
@@ -343,6 +350,73 @@ async function interviewRound() {
     interview_s: Math.round(now() / 100) / 10,
   };
   writeFileSync(join(OUT, "events.json"), JSON.stringify(log, null, 2) + "\n");
+}
+
+// ---------- share the scorecard, then retry the weakest answer ----------
+async function page(path) {
+  const res = await fetch(`${ORIGIN}${path}`, { headers: { Accept: "text/html" } });
+  const html = await res.text();
+  record("http", `GET ${path.replace(/\/s\/[^/]+$/, "/s/:slug")}`, { status: res.status });
+  return { status: res.status, html, cache: res.headers.get("cache-control") };
+}
+
+async function shareAndRetry(id) {
+  const plain = await api("POST", "/api/shares", { session_id: id, include_transcript: false });
+  check("share link made", plain.status === 200 && plain.data?.slug?.length === 10, { status: plain.status, url: plain.data?.url });
+  if (plain.status !== 200) return;
+  const slug = plain.data.slug;
+  const p1 = await page(`/s/${slug}`);
+  writeFileSync(join(OUT, "share.html"), p1.html);
+  check("share page public, without transcript", p1.status === 200 && !p1.html.includes('class="transcript"') && !p1.html.includes(ANSWERS[0].slice(0, 60)), { status: p1.status });
+  check("share page tags", p1.html.includes('content="noindex"') && p1.html.includes('og:title" content="Interview Rounds scorecard"') && p1.cache === "private, max-age=60", { cache: p1.cache });
+  const again = await api("POST", "/api/shares", { session_id: id, include_transcript: false });
+  check("same choice keeps the link", again.data?.slug === slug, { slug: again.data?.slug });
+  const full = await api("POST", "/api/shares", { session_id: id, include_transcript: true });
+  const slug2 = full.data?.slug;
+  const old = await page(`/s/${slug}`);
+  const p2 = slug2 ? await page(`/s/${slug2}`) : { status: 0, html: "" };
+  check("transcript toggle: old link 410, new link shows the transcript", full.status === 200 && slug2 !== slug && old.status === 410 && p2.status === 200 && p2.html.includes('class="transcript"'), { old: old.status, new: p2.status });
+  summary.share = { slug: slug2, url: full.data?.url };
+  const rep0 = await api("GET", `/api/sessions/${id}/report`);
+  check("report share block", rep0.data?.share?.public_slug === slug2 && rep0.data?.share?.include_quotes === true, rep0.data?.share);
+
+  const created = await api("POST", `/api/sessions/${id}/retry`, undefined, { "X-Dev-Key": DEV_KEY });
+  const c = created.data ?? {};
+  check("retry created", created.status === 200 && c.session_id && c.session_id !== id && c.round?.target_minutes === 2 && c.panel?.length === 1 && c.timing?.hard_stop_minutes === 2.5, { status: created.status, round: c.round?.id, target_minutes: c.round?.target_minutes, panel: c.panel?.map((x) => x.persona_id), timing: c.timing, error: created.status === 200 ? undefined : c });
+  if (created.status !== 200) return;
+  const child = c.session_id;
+  summary.retry_session_id = child;
+  const ping = await openSocket(c.ws_url, c.client_token);
+  const st = await waitFrame((f) => f.t === "round.state", 5000, "retry round.state");
+  check("retry brief card holds the question", !!st.d.brief?.question, st.d.brief);
+  const opener = await turn(child, c.client_token, "[event: start]", "retry opener");
+  spoken(opener.reply);
+  const answer = await turn(child, c.client_token,
+    "At ten times the traffic the database write path breaks first, at about twelve thousand writes a second. " +
+      "I'd shard it by key so each write touches one shard, accept that resharding later costs us, and watch " +
+      "p99 write latency per shard to know it worked. The cache helps reads, not this.",
+    "retry answer");
+  spoken(answer.reply);
+  await sleep(1500);
+  send("ui.event", { kind: "end", reason: "user_ended" });
+  const ended = next((f) => f.t === "round.ended", 40000, "retry round.ended");
+  const closing = await turn(child, c.client_token, "[event: ending]", "retry closing");
+  spoken(closing.reply);
+  const e = await ended;
+  const endedAt = now();
+  check("retry ended", !!e.d.reason, e.d);
+  const ready = await next((f) => f.t === "report.ready" || (f.t === "error" && f.d.code === "report_failed"), 90000, "retry report.ready");
+  check("retry scored", ready.t === "report.ready", { ms_after_end: now() - endedAt });
+  clearInterval(ping);
+  if (ws.readyState === 1) ws.close();
+  const rep = await api("GET", `/api/sessions/${id}/report`);
+  writeFileSync(join(OUT, "report-after-retry.json"), JSON.stringify(rep.data, null, 2) + "\n");
+  const entry = rep.data?.weakest_moment?.retries?.find((r) => r.session_id === child);
+  check("parent report has the retry entry", !!entry, entry);
+  const v = validateReport(rep.data);
+  check("report with the retry matches report.v1", v.ok, v.ok ? undefined : v.errors?.slice?.(0, 5));
+  const viaChild = await api("GET", `/api/sessions/${child}/report`);
+  check("the retry answers its parent's report", viaChild.status === 200 && viaChild.data?.session?.id === id, { status: viaChild.status });
 }
 
 // ---------- a meeting rehearsal ----------
