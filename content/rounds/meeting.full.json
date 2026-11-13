@@ -19,7 +19,7 @@
       "id": "welcome",
       "title": "Welcome",
       "minutes": 1,
-      "goal": "The chair welcomes everyone and asks what we are here to decide, or hands straight to the user if they open. When the user runs the meeting, the opening line has been spoken and the user opens; nobody else welcomes."
+      "goal": "The chair welcomes everyone in under twenty words and asks what we are here to decide, or hands straight to the user if they open. When the user runs the meeting, the opening line has been spoken and the user opens; nobody else welcomes."
     },
     {
       "id": "opening",

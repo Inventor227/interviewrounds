@@ -19,7 +19,7 @@
       "id": "requirements",
       "title": "Requirements",
       "minutes": 2,
-      "goal": "Introduce yourself in one line, state the problem and call show_question. Let them list actors and use cases. Ask once what is out of scope if it keeps growing.",
+      "goal": "Open in about twenty words: first name, round and length, then ask who the main users are, and call show_question. Let them list actors and use cases. Ask once what is out of scope if it keeps growing.",
       "must_cover": [
         "use_cases"
       ]

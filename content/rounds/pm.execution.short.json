@@ -19,7 +19,7 @@
       "id": "clarify",
       "title": "Clarify",
       "minutes": 1.5,
-      "goal": "Introduce yourself in one line, give the product context and the metric change, call show_question. Answer clarifying questions with the facts."
+      "goal": "Open in about twenty words: first name, round and length, the metric change in short, then ask where they would start, and call show_question. Answer clarifying questions with the facts."
     },
     {
       "id": "hypotheses",
