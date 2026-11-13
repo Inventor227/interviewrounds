@@ -1,21 +1,22 @@
 // What the first-round onboarding shows on the sheet: a translucent ghost hand that pinches and draws a box in a
 // loop (3 s), in the near half of the sheet. It lives in the sheet's frame, so it lies on the user's desk with the
 // sheet. One merged mesh for the hand, one for the stroke: two draw calls while it shows, none after. The line
-// ("Pinch and draw a box", then "Say its name") and the Skip button are on the round's status card, which stands
-// above the far half of the sheet in reach of a poke, a pinch or a controller ray.
+// ("Pinch and draw a box") and the Skip button are on the round's status card, which stands above the far half of
+// the sheet in reach of a poke, a pinch or a controller ray.
 
 import { BoxGeometry, BufferAttribute, BufferGeometry, CapsuleGeometry, Group, Mesh, MeshBasicMaterial, SphereGeometry, type Object3D } from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 
-export type OnboardViewStep = 'box' | 'name';
 /** What the user draws with right now. The input lane provides the live value (`activeInput`, `onInputChange`). */
 export type ActiveInput = 'hands' | 'controllers';
 
-/** The lines of the two steps per input (short on purpose: the ghost does the teaching). */
-export const ONBOARD_COPY: Record<ActiveInput, Record<OnboardViewStep, string>> = {
-  hands: { box: 'Pinch and draw a box', name: 'Say its name' },
-  controllers: { box: 'Pull the trigger and draw a box', name: 'Say its name' },
+/** The one line, per input (short on purpose: the ghost does the teaching). */
+export const ONBOARD_COPY: Record<ActiveInput, string> = {
+  hands: 'Pinch and draw a box',
+  controllers: 'Pull the trigger and draw a box',
 };
+/** Said for a moment when the time ran out without a box: the round starts. */
+export const ONBOARD_BEGIN = "Let's begin";
 export const ONBOARD_SKIP = 'Skip';
 
 /** One loop of the ghost hand, in seconds (Meta hands onboarding: a short looping demonstration). */
@@ -99,7 +100,7 @@ export class OnboardingView {
   private readonly hand: Mesh<BufferGeometry, MeshBasicMaterial>;
   private readonly stroke: Mesh<BufferGeometry, MeshBasicMaterial>;
   private readonly strokePos: BufferAttribute;
-  private step: OnboardViewStep | null = null;
+  private on = false;
   private input: ActiveInput = 'hands';
   private t0 = 0;
 
@@ -124,17 +125,16 @@ export class OnboardingView {
     this.group.visible = false;
   }
 
-  /** Shows a step (the hand only demonstrates the box); null hides everything. */
-  show(step: OnboardViewStep | null, nowMs: number): void {
-    this.step = step;
-    this.t0 = nowMs;
-    this.group.visible = step !== null;
-    this.hand.visible = this.stroke.visible = step === 'box';
+  /** Shows or hides the demonstration. */
+  show(on: boolean, nowMs: number): void {
+    if (on && !this.on) this.t0 = nowMs;
+    this.on = on;
+    this.group.visible = on;
   }
 
-  /** The line for the step on screen (for the status card). */
+  /** The line to show with it. */
   get line(): string | null {
-    return this.step ? ONBOARD_COPY[this.input][this.step] : null;
+    return this.on ? ONBOARD_COPY[this.input] : null;
   }
 
   /**
@@ -146,12 +146,12 @@ export class OnboardingView {
     this.input = input;
   }
 
-  get showing(): OnboardViewStep | null {
-    return this.step;
+  get showing(): boolean {
+    return this.on;
   }
 
   update(nowMs: number): void {
-    if (this.step !== 'box') return;
+    if (!this.on) return;
     const d = demoAt((nowMs - this.t0) / 1000);
     this.hand.position.set(d.x, d.y, d.z);
     this.hand.material.opacity = HAND_OPACITY * d.alpha;

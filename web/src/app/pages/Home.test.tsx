@@ -14,6 +14,20 @@ describe('Home', () => {
     expect($(root, 'page-resume')).not.toBeNull();
   });
 
+  it('home_says_paused_for_a_paused_round_and_dropped_otherwise', async () => {
+    const me = fakeMe('resume');
+    me.resumable = { ...me.resumable!, paused: true };
+    useFakeServer({ me });
+    const root = await renderApp('/');
+    expect($(root, 'resume-title')!.textContent).toBe('Your round is paused');
+    cleanup();
+    const dropped = fakeMe('resume');
+    dropped.resumable = { ...dropped.resumable!, paused: false };
+    useFakeServer({ me: dropped });
+    const root2 = await renderApp('/');
+    expect($(root2, 'resume-title')!.textContent).toMatch(/round dropped$/);
+  });
+
   it('home_hides_resume_when_nothing_to_resume', async () => {
     useFakeServer({ scenario: '1' });
     const root = await renderApp('/');

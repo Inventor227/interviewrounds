@@ -1,26 +1,24 @@
 // Onboarding by doing, once per device, in the first round with a sheet: after the desk is placed
-// a ghost hand shows "pinch and draw a box" over the sheet, and the step is done only when the
-// user has made one box themselves (or pinched Skip). The round starts at that moment: the
-// interviewer waits until then. A second line, "Say its name", stays up until the first label or
-// for 8 s; by then the round is running and the mic is open, so saying the name really labels it.
-// Pure logic: the room supplies the board and the visuals.
+// a ghost hand shows "pinch and draw a box" over the sheet, and the step is done when the user has
+// made one box themselves, pinched Skip, or 20 s have passed without a box. The round starts at
+// that moment: the interviewer waits until then, and never longer than those 20 s. Nothing on
+// screen counts down. Pure logic: the room supplies the board and the visuals.
 
-export type OnboardStep = 'box' | 'name';
 export type OnboardResult = 'done' | 'skipped' | 'none';
 
-/** How long "Say its name" stays up without a label. */
-export const NAME_STEP_MS = 8000;
+/** The round starts by itself after this long without a box: the onboarding never holds a round. */
+export const ONBOARD_TIMEOUT_MS = 20_000;
 
 /** Kits where a drawn box becomes a card of the round (the coding and meeting sheets work differently). */
 export const ONBOARDING_KITS: readonly string[] = ['hld', 'lld', 'pm'];
 
 export interface OnboardingHost {
   /** The cards on the sheet now (ink strokes do not count). */
-  cards(): { id: string; labelled: boolean }[];
+  cards(): { id: string }[];
   /** The board changed. */
   onBoard(cb: () => void): () => void;
-  /** Shows a step's visuals; null takes them down. */
-  show(step: OnboardStep | null): void;
+  /** Shows the step's visuals (again, after the user left and came back); false takes them down. */
+  show(on: boolean, why?: 'done' | 'skipped' | 'timeout'): void;
   /** The user pinched Skip. */
   onSkip(cb: () => void): () => void;
 }
@@ -33,69 +31,69 @@ export function needsOnboarding(opts: { kit: string | null; done: boolean | unde
 export class Onboarding {
   private readonly offs: (() => void)[] = [];
   private timer: ReturnType<typeof setTimeout> | null = null;
-  private step: OnboardStep | null = null;
+  private on = false;
   private result: Promise<OnboardResult> | null = null;
+  private settle: ((r: OnboardResult) => void) | null = null;
 
   constructor(private readonly host: OnboardingHost) {}
 
-  /** The step on screen now. */
-  get showing(): OnboardStep | null {
-    return this.step;
+  /** True while the step is on screen. */
+  get showing(): boolean {
+    return this.on;
   }
 
   /**
-   * Starts the box step and resolves when the user has made a box (`done`) or skipped. The name
-   * step then runs by itself. A second call returns the same promise.
+   * Starts the step and resolves when the user has made a box (`done`), skipped, or the time ran
+   * out (`skipped`). A second call (the user left the headset view and came back) shows the
+   * visuals again and returns the same promise.
    */
   run(): Promise<OnboardResult> {
-    this.result ??= new Promise<OnboardResult>((resolve) => {
+    if (this.result) {
+      if (this.on) {
+        this.host.show(true);
+        this.arm();
+      }
+      return this.result;
+    }
+    this.result = new Promise<OnboardResult>((resolve) => {
+      this.settle = resolve;
       const before = new Set(this.host.cards().map((c) => c.id));
-      this.set('box');
-      const offBoard = this.host.onBoard(() => {
-        if (this.step !== 'box') return;
-        const made = this.host.cards().find((c) => !before.has(c.id));
-        if (!made) return;
-        resolve('done');
-        this.nameStep(made.labelled);
-      });
-      const offSkip = this.host.onSkip(() => {
-        if (this.step === null) return;
-        const wasBox = this.step === 'box';
-        this.finish();
-        if (wasBox) resolve('skipped');
-      });
-      this.offs.push(offBoard, offSkip);
+      this.on = true;
+      this.host.show(true);
+      this.offs.push(
+        this.host.onBoard(() => {
+          if (this.host.cards().some((c) => !before.has(c.id))) this.finish('done', 'done');
+        }),
+        this.host.onSkip(() => this.finish('skipped', 'skipped')),
+      );
+      this.arm();
     });
     return this.result;
   }
 
-  private nameStep(alreadyNamed: boolean): void {
-    if (alreadyNamed) return this.finish();
-    const labels = () => this.host.cards().filter((c) => c.labelled).length;
-    const had = labels();
-    this.set('name');
-    this.offs.push(
-      this.host.onBoard(() => {
-        if (this.step === 'name' && labels() > had) this.finish();
-      }),
-    );
-    this.timer = setTimeout(() => this.finish(), NAME_STEP_MS);
+  private arm(): void {
+    if (this.timer) clearTimeout(this.timer);
+    this.timer = setTimeout(() => this.finish('skipped', 'timeout'), ONBOARD_TIMEOUT_MS);
   }
 
-  private set(step: OnboardStep | null): void {
-    this.step = step;
-    this.host.show(step);
+  /** The user left the headset view: the clock waits (a round never starts into an empty room). run() starts it again. */
+  suspend(): void {
+    if (this.timer) clearTimeout(this.timer);
+    this.timer = null;
   }
 
-  private finish(): void {
+  private finish(result: OnboardResult, why?: 'done' | 'skipped' | 'timeout'): void {
+    if (!this.on) return;
+    this.on = false;
     if (this.timer) clearTimeout(this.timer);
     this.timer = null;
     for (const off of this.offs.splice(0)) off();
-    if (this.step !== null) this.set(null);
+    this.host.show(false, why);
+    this.settle?.(result);
   }
 
-  /** Takes everything down (the room is closed, or the round ended before the box). */
+  /** Takes everything down (the room is closed, or the round ended first); a waiting run() gets `none`. */
   dispose(): void {
-    this.finish();
+    this.finish('none');
   }
 }

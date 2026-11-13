@@ -144,6 +144,8 @@ export interface SocketPort {
   send<T extends ClientMsgType>(t: T, d: ClientMsgMap[T]): void;
   on<T extends ServerMsgType>(t: T, cb: (d: ServerMsgMap[T]) => void): () => void;
   onStatus?(cb: (s: SocketStatus) => void): () => void;
+  /** The highest server seq seen on this socket. */
+  lastSeq?(): number;
   /** The server closed for good (bad token, unknown or ended session). */
   onTerminal?(cb: (info: CloseInfo) => void): () => void;
   close(): void;

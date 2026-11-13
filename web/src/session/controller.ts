@@ -201,7 +201,8 @@ export interface ControllerEvents {
 
 export interface RoundControllerDeps {
   api: ApiPort;
-  makeSocket(wsUrl: string, clientToken: string): SocketPort;
+  /** `lastSeq`: the highest server seq already seen on an earlier socket of this session (0 for the first). */
+  makeSocket(wsUrl: string, clientToken: string, lastSeq?: number): SocketPort;
   makeTransport(p: Panelist, opts: TransportOptions | undefined, res: CreateSessionRes): VoiceTransport;
   xr: XRPort;
   media: MediaPort;
@@ -287,6 +288,8 @@ export class RoundController {
   private holdOver = false;
   /** The mic stays closed while the start chime plays, whatever is pressed meanwhile. */
   private micHeld = false;
+  /** New voices were made during this pause and have not been asked to speak yet. */
+  private rebuilt = false;
   /** Counts the voice sets of this round: 0 for the first, one more after every reconnect. */
   private voiceEpoch = 0;
   private degraded = false;
@@ -536,7 +539,8 @@ export class RoundController {
 
     // First round with a board: the user draws one box before anyone speaks. The round (hello,
     // the server's clock, the opening) starts only when that is done or skipped.
-    if (xr.onboard) {
+    // A resumed round is already running on the server: nothing holds it back.
+    if (xr.onboard && this.input?.kind !== 'resume') {
       const taught = await xr.onboard().catch(() => 'none' as const);
       // Also when a second enter() (the page's way back) waited on the same step: the first to
       // get here moves the round on, the other finds it no longer placing.
@@ -854,7 +858,7 @@ export class RoundController {
       this.syncNotice();
       return;
     }
-    this.finishResume(false);
+    this.finishResume(this.rebuilt);
   }
 
   /**
@@ -877,6 +881,8 @@ export class RoundController {
     }
     if (this.disposed || this.st !== 'paused') return;
     await old?.stopAll();
+    // Ended or closed while the old voices stopped: nothing new is opened.
+    if (this.disposed || this.st !== 'paused') return;
     this.modes.clear();
     // The new voices number their replies from the start again: nothing of the old ones may be
     // mistaken for them (a reply is reported as played once per voice and segment).
@@ -888,8 +894,11 @@ export class RoundController {
     this.preparedRes = res;
     this.applyTiming(res);
     if (this.lastRound) this.lastRound = { ...this.lastRound, voices_released: false };
+    // The new socket picks up where the old one was: the server must not replay the whole round
+    // (old hand-overs among it) into the page.
+    const seen = this.socket?.lastSeq?.() ?? 0;
     this.closeSocket();
-    this.openSocket(res);
+    this.openSocket(res, seen);
     this.socketWanted = true;
     this.events.emit('session', res);
     const panel = this.makePanel(res);
@@ -900,16 +909,24 @@ export class RoundController {
     } catch (err) {
       await panel.stopAll();
       if (this.disposed || this.st !== 'paused') return;
-      this.emitError(err instanceof VoiceError ? err : new VoiceError('connect_failed', String((err as Error)?.message ?? err), err));
+      // Not the end of the round: the card offers Resume again.
+      this.emitError(new VoiceError('voice_lost', String((err as Error)?.message ?? err), err));
       this.voicesGone = true;
       this.voiceLost = true;
       return;
     }
-    if (this.disposed || panel.isStopped || this.st !== 'paused') return;
+    if (this.disposed || panel.isStopped || this.st !== 'paused') {
+      // Ended or closed while the new voices joined: they are stopped again.
+      if (!panel.isStopped) await panel.stopAll();
+      return;
+    }
     this.voicesGone = false;
     this.voiceLost = false;
     this.voicesUp = true;
+    this.rebuilt = true;
     this.deps.head?.setFloor(panel.floor);
+    // The user went away while the voices were made: the round stays held, with its voices, until their Resume.
+    if (this.away) return;
     this.finishResume(true);
   }
 
@@ -923,10 +940,14 @@ export class RoundController {
     this.socket?.send('ui.event', { kind: 'resume' });
     this.setState(this.greeted ? 'live' : 'greeting');
     this.openMic();
+    this.rebuilt = false;
     const gated = this.gatedHandOver;
     this.gatedHandOver = null;
     this.releasePause();
-    const handOver = this.pendingHandOver;
+    const floor = this.panel?.floor;
+    // A hand-over to the panelist who already holds the floor is done (the server moved the floor
+    // when the hand-over was said, and new voices are made for the floor it has).
+    const handOver = this.pendingHandOver && this.pendingHandOver.to !== floor ? this.pendingHandOver : null;
     this.pendingHandOver = null;
     if (this.startPending) {
       this.startPending = false;
@@ -936,9 +957,12 @@ export class RoundController {
       this.handOver(handOver.to, handOver.openingLine);
     } else if (gated && !reconnected) {
       // The hand-over that waited goes on by itself: its opening line is the welcome back.
-    } else if (gated) {
+    } else if (gated && gated.to !== floor) {
       // The voices were made again meanwhile: the hand-over runs on the new panel.
       this.handOver(gated.to, gated.openingLine);
+    } else if (gated && this.voicesUp) {
+      // The new voices are already the new panelist's, and its line was never said: it says it now.
+      this.floorT()?.sendEvent(VOICE_MARKERS.handover);
     } else if (this.voicesUp) {
       this.floorT()?.sendEvent(VOICE_MARKERS.resume);
       // Still not greeted: keep offering "Tap to hear" if the voice stays silent.
@@ -1053,8 +1077,8 @@ export class RoundController {
 
   // ---------- wiring ----------
 
-  private openSocket(res: CreateSessionRes): void {
-    const s = this.deps.makeSocket(res.ws_url, res.client_token);
+  private openSocket(res: CreateSessionRes, lastSeq = 0): void {
+    const s = this.deps.makeSocket(res.ws_url, res.client_token, lastSeq);
     this.socket = s;
     this.socketUp = null;
     this.socketTerminal = false;
@@ -1246,6 +1270,8 @@ export class RoundController {
   }
 
   private handOver(to: string, openingLine: string): void {
+    // Already on the floor (a frame replayed after a reconnect, or new voices made for it): nothing to do.
+    if (this.panel && !this.panel.isStopped && this.voicesUp && to === this.panel.floor && !this.handingOver) return;
     if (this.st === 'paused' || this.st === 'greeting') {
       // Nobody new speaks while the user is away, and nobody takes over before the greeting is
       // done (a swap during the greeting would greet twice). Replayed on Resume or once live.
@@ -1344,7 +1370,9 @@ export class RoundController {
     const avatar = this.deps.avatars?.(t.panelistId);
     // Paused: everyone sits and listens, whatever a voice still reports.
     avatar?.setMode(this.st === 'paused' ? 'listening' : m);
-    if (m === 'speaking' && avatar) {
+    // A reply that was already on its way when the pause landed: it does not play into the pause.
+    if (this.st === 'paused' && (m === 'thinking' || m === 'speaking')) t.interrupt?.();
+    if (m === 'speaking' && avatar && this.st !== 'paused') {
       const stream = t.outputStream();
       if (stream && this.voices.get(t.panelistId) !== stream) {
         this.voices.set(t.panelistId, stream);

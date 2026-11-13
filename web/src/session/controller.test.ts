@@ -24,6 +24,12 @@ class FakeSocket implements SocketPort {
   terminalCbs = new Set<(i: { code: number; reason: string }) => void>();
   statusCbs = new Set<(s: SocketStatus) => void>();
   connectError: Error | null = null;
+  /** The last_seq this socket says hello with, and the highest server seq it has seen. */
+  openedAt = 0;
+  seen = 0;
+  lastSeq(): number {
+    return this.seen;
+  }
   constructor(private readonly log: string[]) {}
   connects = 0;
   async connect(): Promise<void> {
@@ -216,8 +222,9 @@ function harness(
   const deps: RoundControllerDeps = {
     api,
     // One socket per session: the first is `socket`, a remade session gets its own.
-    makeSocket: () => {
+    makeSocket: (_url: string, _token: string, lastSeq = 0) => {
       const so = sockets.length === 0 ? socket : new FakeSocket(log);
+      so.openedAt = lastSeq;
       sockets.push(so);
       return so;
     },
@@ -2014,6 +2021,112 @@ describe('RoundController pause and headset removal', () => {
     expect(new Set(lines).size).toBe(lines.length); // every reply is its own line for the page
   });
 
+  it('new_voices_after_a_hand_over_still_welcome_the_user_back', async () => {
+    // A second panelist took the floor earlier in the round; then a long pause releases the voices.
+    const h = harness({ voice: 'fish' });
+    await live(h);
+    h.socket.serverSend('panel.hand_over', { from: 'p1', to: 'p2', opening_line: 'Hi, I am Priya.' });
+    await vi.advanceTimersByTimeAsync(0);
+    const t2 = h.transports[1]!;
+    expect(h.ctl.floor).toBe('p2');
+    h.socket.seen = 41; // what this page has seen of the round so far
+    h.xrVisibility('hidden');
+    t2.events.emit('ended', { reason: 'server' });
+    h.xrVisibility('visible');
+    // The server makes the new voices for the floor it has: p2.
+    h.api.resumeSession.mockResolvedValueOnce(sessionRes({ client_token: 'tok2', floor: 'p2', panel: [panelist('p1', 0, { transport: 'fish_pending' } as never), panelist('p2', 1)] }));
+    let join!: () => void;
+    h.ui('resume');
+    await vi.waitFor(() => expect(h.sockets).toHaveLength(2));
+    void join;
+    // The new socket says hello from where the old one was: the round is not replayed into the page.
+    expect(h.sockets[1]!.openedAt).toBe(41);
+    // Even if an old hand-over reaches the page again while it reconnects, it is not a new one.
+    h.sockets[1]!.serverSend('panel.hand_over', { from: 'p1', to: 'p2', opening_line: 'Hi, I am Priya.' });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.ctl.state).toBe('live');
+    const t3 = h.transports.at(-1)!;
+    expect(t3.panelistId).toBe('p2');
+    expect(t3.sentEvents).toEqual(['[event: resume]']); // exactly one welcome back
+    expect(h.api.joinPanelist).toHaveBeenCalledTimes(1); // only the hand-over before the pause
+    // And one that arrives after the round is live again asks nobody twice.
+    h.sockets[1]!.serverSend('panel.hand_over', { from: 'p1', to: 'p2', opening_line: 'Hi, I am Priya.' });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.api.joinPanelist).toHaveBeenCalledTimes(1);
+    expect(t3.sentEvents).toEqual(['[event: resume]']);
+  });
+
+  it('a_hand_over_held_by_the_pause_is_spoken_by_the_new_voices_after_a_release', async () => {
+    const h = harness({ voice: 'fish' });
+    const t1 = await live(h);
+    t1.mode('speaking');
+    h.socket.serverSend('panel.hand_over', { from: 'p1', to: 'p2', opening_line: 'Hi, I am Priya.' });
+    await vi.advanceTimersByTimeAsync(0);
+    h.xrVisibility('hidden'); // held before p2 joined; the server has already moved its floor to p2
+    t1.mode('listening');
+    t1.events.emit('ended', { reason: 'server' });
+    h.xrVisibility('visible');
+    h.api.resumeSession.mockResolvedValueOnce(sessionRes({ client_token: 'tok2', floor: 'p2', panel: [panelist('p1', 0, { transport: 'fish_pending' } as never), panelist('p2', 1)] }));
+    h.ui('resume');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.ctl.state).toBe('live');
+    const t2 = h.transports.at(-1)!;
+    expect(t2.panelistId).toBe('p2');
+    // Its line was never said: it says it now (once), and nobody joins twice.
+    expect(t2.sentEvents).toEqual(['[event: handover]']);
+    expect(h.api.joinPanelist).not.toHaveBeenCalled();
+    expect(t2.muted).toBe(false);
+  });
+
+  it('new_voices_that_arrive_while_the_user_is_away_wait_for_their_resume', async () => {
+    const h = harness({ voice: 'fish' });
+    const t1 = await live(h);
+    h.ui('pause');
+    t1.events.emit('ended', { reason: 'server' });
+    let answer!: (r: CreateSessionRes) => void;
+    h.api.resumeSession.mockImplementationOnce(() => new Promise<CreateSessionRes>((r) => (answer = r)));
+    h.ui('resume');
+    h.xrVisibility('hidden'); // the headset comes off during "Reconnecting your interviewer…"
+    answer(sessionRes({ client_token: 'tok2' }));
+    await vi.advanceTimersByTimeAsync(0);
+    const t2 = h.transports[1]!;
+    expect(h.ctl.state).toBe('paused'); // nobody is welcomed back into an empty room
+    expect(t2.muted).toBe(true);
+    expect(t2.sentEvents).toEqual([]);
+    h.xrVisibility('visible');
+    expect(h.notice()).toBe('welcome_back');
+    h.ui('resume');
+    expect(h.api.resumeSession).toHaveBeenCalledTimes(1); // the voices are already there
+    expect(h.ctl.state).toBe('live');
+    expect(t2.sentEvents).toEqual(['[event: resume]']);
+    expect(t2.muted).toBe(false);
+  });
+
+  it('an_end_during_the_reconnect_opens_no_new_voice_or_socket', async () => {
+    const h = harness({ voice: 'fish' });
+    const t1 = await live(h);
+    h.ui('pause');
+    t1.events.emit('ended', { reason: 'server' });
+    let answer!: (r: CreateSessionRes) => void;
+    h.api.resumeSession.mockImplementationOnce(() => new Promise<CreateSessionRes>((r) => (answer = r)));
+    h.ui('resume');
+    h.ui('end');
+    answer(sessionRes({ client_token: 'tok2' }));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.sockets).toHaveLength(1);
+    expect(h.transports).toHaveLength(1);
+    expect(h.ctl.state).toBe('scoring');
+  });
+
+  it('a_reply_that_starts_during_a_pause_is_cut_again', async () => {
+    const h = harness();
+    const t = await live(h);
+    h.ui('pause');
+    expect(t.interrupts).toBe(1);
+    t.mode('speaking'); // it was already on its way
+    expect(t.interrupts).toBe(2);
+  });
+
   it('a_resume_that_cannot_get_new_voices_offers_resume_and_end', async () => {
     const h = harness({ voice: 'fish' });
     const t1 = await live(h);
@@ -2338,6 +2451,15 @@ describe('RoundController start, carried over', () => {
     expect(h.markers()).toEqual(['[event: start]']); // one opening, not two
     expect(h.log.filter((l) => l === 'xr.startCue')).toHaveLength(1);
     expect(h.api.onboardingDone).toHaveBeenCalledTimes(1);
+  });
+
+  it('a_resumed_round_is_never_held_by_the_onboarding', async () => {
+    const onboard = vi.fn(() => new Promise<'done' | 'skipped' | 'none'>(() => undefined));
+    const h = harness({ onboard });
+    await h.ctl.prepare({ kind: 'resume', sessionId: 'sess1', voice: 'fake' });
+    await h.ctl.enter();
+    expect(onboard).not.toHaveBeenCalled();
+    expect(h.markers()).toEqual(['[event: resume]']);
   });
 
   it('ending_during_onboarding_cancels_a_round_that_never_began', async () => {

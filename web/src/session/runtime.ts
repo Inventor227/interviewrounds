@@ -432,31 +432,45 @@ export function createRoundRuntime({ preview }: RuntimeOptions): RoundController
     const b = board;
     const s = store;
     if (!a || !b || !s || taught || !needsOnboarding({ kit: b.kit.id, done: me?.onboarding_done, preview })) return 'none';
+    // The input lane's `activeInput()` and `onInputChange` once they exist on the app. Until then: hands when a
+    // hand is tracked, else controllers.
+    const input = a as unknown as { activeInput?: () => 'hands' | 'controllers'; onInputChange?: (cb: (i: 'hands' | 'controllers') => void) => () => void; controllerDrawing?: boolean };
+    const active = () => input.activeInput?.() ?? (a.hands().some((h) => h.tracked) ? 'hands' : 'controllers');
+    // CONTROLLER VARIANT: drawing on the sheet by controller is the input lane's (`controllerDrawing` on the app
+    // when it lands). Without it a controller user could not do the step, so they are not asked to.
+    if (!onboarding && active() === 'controllers' && !input.controllerDrawing) return 'none';
     if (!onboarding) {
-      const { OnboardingView, ONBOARD_SKIP } = await import('../xr/onboardingView');
+      const { OnboardingView, ONBOARD_SKIP, ONBOARD_BEGIN } = await import('../xr/onboardingView');
       if (disposed || app !== a) return 'none';
       const skips = new Set<() => void>();
       const view = new OnboardingView();
-      // The input lane's `activeInput()` and `onInputChange` once they exist on the app; hands until then.
-      const input = a as unknown as { activeInput?: () => 'hands' | 'controllers'; onInputChange?: (cb: (i: 'hands' | 'controllers') => void) => () => void };
-      view.setInput(input.activeInput?.() ?? 'hands');
+      view.setInput(active());
       a.sheetAnchor.add(view.group);
       let shownLine: string | null = null;
+      let beginTimer: ReturnType<typeof setTimeout> | null = null;
       // The line and Skip are on the status card: reachable by poke, pinch and controller ray like every other card.
       const showLine = () => {
         const line = view.line;
-        if (line) {
-          shownLine = line;
-          a.ui.status.showText(line, '', null, view.showing === 'box' ? [{ label: ONBOARD_SKIP, action: 'skip' }] : []);
-        } else if (shownLine !== null) {
-          // Only our own line is taken down (a card of the round may have replaced it meanwhile).
-          if (a.ui.status.view.title === shownLine) a.ui.hideStatus();
-          shownLine = null;
+        if (!line) return;
+        shownLine = line;
+        a.ui.status.showText(line, '', null, [{ label: ONBOARD_SKIP, action: 'skip' }]);
+      };
+      const hideLine = (say: string | null) => {
+        // Only our own line is taken down (a card of the round may have replaced it meanwhile).
+        if (shownLine === null || a.ui.status.view.title !== shownLine) return;
+        if (!say) {
+          a.ui.hideStatus();
           a.ui.restoreNotice();
+          return;
         }
+        // The time ran out: a word that the round starts, then the card goes.
+        shownLine = say;
+        a.ui.status.showText(say);
+        beginTimer = setTimeout(() => hideLine(null), 1800);
       };
       cleanups.push(
         () => view.dispose(),
+        () => beginTimer && clearTimeout(beginTimer),
         a.onFrame((_dt, t) => view.update(t)),
         a.ui.onAction((act) => {
           if (act === 'skip') for (const cb of [...skips]) cb();
@@ -467,11 +481,12 @@ export function createRoundRuntime({ preview }: RuntimeOptions): RoundController
         }) ?? (() => undefined),
       );
       onboarding = new Onboarding({
-        cards: () => s.board.items.filter((i) => i.kind !== 'ink').map((i) => ({ id: i.id, labelled: !!((i as { label?: string | null }).label ?? (i as { text?: string | null }).text) })),
+        cards: () => s.board.items.filter((i) => i.kind !== 'ink').map((i) => ({ id: i.id })),
         onBoard: (cb) => s.onChange(() => cb()),
-        show: (step) => {
-          view.show(step, performance.now());
-          showLine();
+        show: (on, why) => {
+          view.show(on, performance.now());
+          if (on) showLine();
+          else hideLine(why === 'timeout' ? ONBOARD_BEGIN : null);
         },
         onSkip: (cb) => {
           skips.add(cb);
@@ -480,10 +495,11 @@ export function createRoundRuntime({ preview }: RuntimeOptions): RoundController
       });
       if (import.meta.env.DEV && room.debug) {
         const ob = onboarding;
-        room.debug.onboarding = { showing: () => ob.showing, skip: () => [...skips].forEach((cb) => cb()), view };
+        room.debug.onboarding = { showing: () => (ob.showing ? 'box' : null), skip: () => [...skips].forEach((cb) => cb()), view };
       }
     }
     const result = await onboarding.run();
+    if (result === 'none') return 'none';
     taught = true;
     // The next round in this tab does not teach again (the server remembers it for later visits).
     if (me) {
@@ -540,6 +556,7 @@ export function createRoundRuntime({ preview }: RuntimeOptions): RoundController
           if (disposed) return;
           // The controller first (it pauses a running round), then the page, which offers the way back.
           for (const cb of [...sessionEndCbs]) cb(e);
+          onboarding?.suspend();
           if (e.byApp) return;
           room.sessionLost = true;
           changed();
@@ -634,8 +651,8 @@ export function createRoundRuntime({ preview }: RuntimeOptions): RoundController
     return t;
   };
 
-  const makeSocket = (wsUrl: string, clientToken: string): SocketPort => {
-    socket = new SessionSocket(wsUrl, clientToken);
+  const makeSocket = (wsUrl: string, clientToken: string, lastSeq = 0): SocketPort => {
+    socket = new SessionSocket(wsUrl, clientToken, { lastSeq });
     sessionId = sessionIdOf(wsUrl);
     wireSocket();
     return socket;

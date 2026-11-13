@@ -225,7 +225,7 @@ export async function placeDesk(S, shotName = '03-placing', { onboarding = 'skip
   return desk;
 }
 
-/** The first-round onboarding step on the sheet, if one is showing ('box' or 'name'). */
+/** The first-round onboarding step on the sheet, if one is showing ('box'). */
 export const onboardingStep = () => page(() => globalThis.__round?.room?.debug?.onboarding?.showing?.() ?? null);
 
 /** Skips the first-round onboarding when it shows (a new guest gets it on a round with a sheet). Returns the step skipped. */

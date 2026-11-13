@@ -8,7 +8,7 @@ import { Emitter } from '../../voice/transport';
 import { fakeMe } from '../fake/server';
 import { $, cleanup, click, renderApp, settle, useFakeServer } from '../test-utils';
 import { sameWords } from './Report';
-import { noticeLine, RESUME_OFFER_MS, startHref } from './Session';
+import { noticeLine, RESUMABLE_POLL_MS, startHref } from './Session';
 
 const launchMock = vi.hoisted(() => ({ next: null as unknown }));
 vi.mock('../launch', async (orig) => ({
@@ -130,7 +130,7 @@ describe('session page', () => {
   it('xr_session_ended_while_paused_offers_resume_on_2d', async () => {
     // The pause budget on the server says how long the round is held: 9 minutes here.
     const me = fakeMe('resume');
-    me.resumable = { session_id: 'sess1', round_title: 'Behavioral', expires_at: new Date(Date.now() + 9 * 60_000).toISOString() };
+    me.resumable = { session_id: 'sess1', round_title: 'Behavioral', expires_at: new Date(Date.now() + 9 * 60_000).toISOString(), paused: true };
     useFakeServer({ me });
     const { root, controller, room } = await mount('live');
     controller.go('paused'); // the headset went to sleep: the controller holds the round
@@ -155,7 +155,10 @@ describe('session page', () => {
     expect($(root, 'resume-offer')).toBeNull();
   });
 
-  it('resume_offer_expires_after_3_minutes', async () => {
+  it('the_page_never_ends_a_round_the_server_still_holds', async () => {
+    // The first read of /api/me does not name the round yet (the pause is still on its way to the server).
+    const me = fakeMe('1');
+    const server = useFakeServer({ me });
     const { root, controller, room } = await mount('live');
     vi.useFakeTimers();
     try {
@@ -163,25 +166,34 @@ describe('session page', () => {
       room.sessionLost = true;
       room.changed();
       await settle();
-      // No deadline from the server (the call failed): three minutes from the moment the view was lost.
-      expect($(root, 'resume-left')!.textContent).toMatch(/^2:5\d$|^3:00$/);
-      await vi.advanceTimersByTimeAsync(RESUME_OFFER_MS - 5000);
+      // No deadline known: none is made up, and nothing counts down to an end.
+      expect($(root, 'resume-offer')).not.toBeNull();
+      expect($(root, 'resume-left')).toBeNull();
+      await vi.advanceTimersByTimeAsync(4 * 60_000);
       await settle();
       expect($(root, 'resume-offer')).not.toBeNull();
       expect(controller.end).not.toHaveBeenCalled();
-      await vi.advanceTimersByTimeAsync(6000);
+      // The server now lists it, held for six more minutes: the next read shows that.
+      server.state.me = { ...server.state.me, resumable: { session_id: 'sess1', round_title: 'Behavioral', expires_at: new Date(Date.now() + 6 * 60_000).toISOString(), paused: true } };
+      await vi.advanceTimersByTimeAsync(RESUMABLE_POLL_MS);
       await settle();
-      expect($(root, 'resume-offer')).toBeNull();
-      expect(controller.end).toHaveBeenCalledWith('headset_removed');
-      controller.go('ending');
-      controller.go('scoring');
+      expect($(root, 'resume-left')!.textContent).toMatch(/^5:\d\d$|^6:00$/);
+      // Even past the deadline the page ends nothing: the server's own end comes over the socket.
+      await vi.advanceTimersByTimeAsync(7 * 60_000);
       await settle();
-      expect($(root, 'ended-paused')!.textContent).toBe('This round has ended. Your report is being written.');
-      expect($(root, 'see-report')!.getAttribute('href')).toBe('/report/sess1');
-      expect($(root, 'see-report')!.textContent).toBe('See report');
+      expect(controller.end).not.toHaveBeenCalled();
+      expect($(root, 'resume-round')).not.toBeNull();
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('a_held_round_is_not_shown_as_lost_when_a_voice_reported_an_error', async () => {
+    const { root, controller } = await mount('live');
+    controller.go('paused');
+    controller.emit('error', { code: 'connect_failed' } as never);
+    await settle();
+    expect($(root, 'session-error')).toBeNull();
   });
 
   it('pause_budget_exhausted_shows_report', async () => {

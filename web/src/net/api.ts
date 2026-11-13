@@ -61,7 +61,7 @@ export function devKey(): string | null {
   }
 }
 
-async function request<T>(method: string, path: string, body?: Body, extra?: Record<string, string>, inRound = false): Promise<T> {
+async function request<T>(method: string, path: string, body?: Body, extra?: Record<string, string>, inRound: boolean | readonly number[] = false): Promise<T> {
   const headers: Record<string, string> = { accept: 'application/json', ...extra };
   let payload: BodyInit | undefined;
   if (body && 'json' in body) {
@@ -75,7 +75,7 @@ async function request<T>(method: string, path: string, body?: Body, extra?: Rec
   let res: Response;
   try {
     res = await fetch(path, { method, headers, body: payload, credentials: 'include' });
-    if (inRound && TRANSIENT.has(res.status)) {
+    if (inRound && (inRound === true ? TRANSIENT.has(res.status) : inRound.includes(res.status))) {
       await new Promise<void>((r) => setTimeout(r, RETRY_AFTER_MS));
       res = await fetch(path, { method, headers, body: payload, credentials: 'include' });
     }
@@ -127,7 +127,9 @@ export const api = {
   },
   joinPanelist: (sessionId: string, panelistId: string, body: { opening_line?: string } = {}) =>
     roundPost<JoinPanelistRes>(`/api/sessions/${enc(sessionId)}/panelists/${enc(panelistId)}/join`, body),
-  resumeSession: (sessionId: string) => roundPost<CreateSessionRes>(`/api/sessions/${enc(sessionId)}/resume`),
+  // Only on 503 (the server's own "no new voices, not counted"): after a 502 or 504 the resume may already have
+  // happened, and a second one would count and make voices again.
+  resumeSession: (sessionId: string) => request<CreateSessionRes>('POST', `/api/sessions/${enc(sessionId)}/resume`, undefined, undefined, [503]),
   endSession: (sessionId: string, reason: EndReason) =>
     roundPost<void>(`/api/sessions/${enc(sessionId)}/end`, { reason }),
   sessionStatus: (sessionId: string) => roundGet<SessionStatusRes>(`/api/sessions/${enc(sessionId)}`),

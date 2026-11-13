@@ -1,10 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { NAME_STEP_MS, needsOnboarding, Onboarding, type OnboardStep } from './onboarding';
+import { needsOnboarding, ONBOARD_TIMEOUT_MS, Onboarding } from './onboarding';
 
-function host(cards: { id: string; labelled: boolean }[] = []) {
+function host(cards: { id: string }[] = []) {
   const board = new Set<() => void>();
   const skip = new Set<() => void>();
-  const shown: (OnboardStep | null)[] = [];
+  const shown: string[] = [];
   return {
     cards,
     shown,
@@ -14,7 +14,7 @@ function host(cards: { id: string; labelled: boolean }[] = []) {
     host: {
       cards: () => cards,
       onBoard: (cb: () => void) => (board.add(cb), () => board.delete(cb)),
-      show: (s: OnboardStep | null) => void shown.push(s),
+      show: (on: boolean, why?: string) => void shown.push(on ? 'on' : `off:${why ?? ''}`),
       onSkip: (cb: () => void) => (skip.add(cb), () => skip.delete(cb)),
     },
   };
@@ -24,80 +24,92 @@ describe('onboarding by doing', () => {
   beforeEach(() => vi.useFakeTimers());
   afterEach(() => vi.useRealTimers());
 
-  it('the_box_step_completes_only_when_the_user_makes_a_box', async () => {
+  it('the_step_ends_at_the_drawn_box_and_nothing_follows_it', async () => {
+    const h = host([{ id: 'old' }]);
+    const o = new Onboarding(h.host);
+    let result: string | null = null;
+    void o.run().then((r) => (result = r));
+    expect(h.shown).toEqual(['on']);
+    h.changed(); // an ink stroke, a hover: no new card yet
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(result).toBeNull();
+    h.cards.push({ id: 'c1' });
+    h.changed();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(result).toBe('done');
+    // No second step ("Say its name" is gone): everything is down and nothing listens any more.
+    expect(h.shown).toEqual(['on', 'off:done']);
+    expect(o.showing).toBe(false);
+    expect(h.listeners()).toBe(0);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(h.shown).toEqual(['on', 'off:done']);
+  });
+
+  it('onboarding_never_blocks_the_round_it_ends_by_itself_after_20_s', async () => {
     const h = host();
     const o = new Onboarding(h.host);
     let result: string | null = null;
     void o.run().then((r) => (result = r));
-    expect(h.shown).toEqual(['box']);
-    h.changed(); // an ink stroke, a hover: no card yet
-    await vi.advanceTimersByTimeAsync(60_000); // no time pressure
+    await vi.advanceTimersByTimeAsync(ONBOARD_TIMEOUT_MS - 1);
     expect(result).toBeNull();
-    expect(o.showing).toBe('box');
-    h.cards.push({ id: 'c1', labelled: false });
-    h.changed();
-    await vi.advanceTimersByTimeAsync(0);
-    expect(result).toBe('done');
-    // Then "Say its name", until the first label.
-    expect(h.shown).toEqual(['box', 'name']);
-    h.cards[0]!.labelled = true;
-    h.changed();
-    expect(h.shown).toEqual(['box', 'name', null]);
-    expect(h.listeners()).toBe(0);
-  });
-
-  it('say_its_name_goes_away_after_8_s_without_a_label', async () => {
-    const h = host();
-    const o = new Onboarding(h.host);
-    void o.run();
-    h.cards.push({ id: 'c1', labelled: false });
-    h.changed();
-    await vi.advanceTimersByTimeAsync(NAME_STEP_MS - 1);
-    expect(o.showing).toBe('name');
     await vi.advanceTimersByTimeAsync(1);
-    expect(o.showing).toBeNull();
-    expect(h.shown.at(-1)).toBeNull();
+    expect(result).toBe('skipped');
+    expect(h.shown).toEqual(['on', 'off:timeout']);
+    expect(ONBOARD_TIMEOUT_MS).toBe(20_000);
   });
 
   it('skip_ends_it_with_one_pinch', async () => {
     const h = host();
-    const o = new Onboarding(h.host);
-    const r = o.run();
+    const r = new Onboarding(h.host).run();
     h.skip();
     await expect(r).resolves.toBe('skipped');
-    expect(h.shown).toEqual(['box', null]);
+    expect(h.shown).toEqual(['on', 'off:skipped']);
     expect(h.listeners()).toBe(0);
-    // Skipping the name line after the box changes nothing about the result.
-    const h2 = host();
-    const o2 = new Onboarding(h2.host);
-    const r2 = o2.run();
-    h2.cards.push({ id: 'c1', labelled: false });
-    h2.changed();
-    h2.skip();
-    await expect(r2).resolves.toBe('done');
-    expect(h2.shown).toEqual(['box', 'name', null]);
   });
 
-  it('cards_that_were_already_there_do_not_count_and_a_box_made_with_a_name_skips_the_name_line', async () => {
-    const h = host([{ id: 'old', labelled: true }]);
+  it('leaving_and_coming_back_shows_the_line_and_skip_again', async () => {
+    const h = host();
     const o = new Onboarding(h.host);
     const r = o.run();
-    h.changed();
-    expect(o.showing).toBe('box');
-    h.cards.push({ id: 'c1', labelled: true }); // pulled from the tray: it has its name
-    h.changed();
-    await expect(r).resolves.toBe('done');
-    expect(h.shown).toEqual(['box', null]);
-    expect(o.run()).toBe(r); // asked again (a second Enter): the same answer, nothing shown twice
+    expect(o.run()).toBe(r); // the second Enter: the same step
+    expect(h.shown).toEqual(['on', 'on']); // shown again (the desk prompt had taken the card)
+    h.skip();
+    await r;
+    expect(o.run()).toBe(r);
+    expect(h.shown).toEqual(['on', 'on', 'off:skipped']); // over: nothing comes back
+  });
+
+  it('the_clock_waits_while_the_user_is_out_of_the_headset_view', async () => {
+    const h = host();
+    const o = new Onboarding(h.host);
+    let result: string | null = null;
+    void o.run().then((r) => (result = r));
+    await vi.advanceTimersByTimeAsync(10_000);
+    o.suspend(); // the headset session ended
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(result).toBeNull(); // no round starts into an empty room
+    void o.run(); // back: the line again, and a fresh 20 s
+    await vi.advanceTimersByTimeAsync(ONBOARD_TIMEOUT_MS - 1);
+    expect(result).toBeNull();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(result).toBe('skipped');
+  });
+
+  it('closing_the_room_settles_a_waiting_run', async () => {
+    const h = host();
+    const o = new Onboarding(h.host);
+    const r = o.run();
+    o.dispose();
+    await expect(r).resolves.toBe('none');
+    expect(h.listeners()).toBe(0);
   });
 
   it('onboarding_skipped_when_done', () => {
-    // Only a first round with a sheet where boxes are cards, in the headset.
     expect(needsOnboarding({ kit: 'hld', done: false, preview: false })).toBe(true);
     expect(needsOnboarding({ kit: 'hld', done: true, preview: false })).toBe(false); // me.onboarding_done
     expect(needsOnboarding({ kit: null, done: false, preview: false })).toBe(false); // no board, no onboarding
     expect(needsOnboarding({ kit: 'coding', done: false, preview: false })).toBe(false);
     expect(needsOnboarding({ kit: 'hld', done: false, preview: true })).toBe(false);
-    expect(needsOnboarding({ kit: 'hld', done: undefined, preview: false })).toBe(false); // unknown: never in the way
+    expect(needsOnboarding({ kit: 'hld', done: undefined, preview: false })).toBe(false);
   });
 });

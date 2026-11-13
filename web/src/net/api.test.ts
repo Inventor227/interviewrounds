@@ -76,10 +76,23 @@ describe('api', () => {
       const twice = [new Response('x', { status: 504 }), new Response('x', { status: 502 })];
       const f2 = vi.fn(async () => twice.shift()!);
       vi.stubGlobal('fetch', f2);
-      const resume = api.resumeSession('s1').catch((e: unknown) => e);
+      const end = api.endSession('s1', 'user_ended').catch((e: unknown) => e);
       await vi.advanceTimersByTimeAsync(RETRY_AFTER_MS);
-      expect(await resume).toMatchObject({ status: 502 });
+      expect(await end).toMatchObject({ status: 502 });
       expect(f2).toHaveBeenCalledTimes(2);
+      // A resume is made again only after the server's own 503 (no new voices, not counted): after a 502 or 504
+      // it may already have happened, and a second one would count.
+      const f4 = vi.fn(async () => new Response('x', { status: 504 }));
+      vi.stubGlobal('fetch', f4);
+      await expect(api.resumeSession('s1')).rejects.toMatchObject({ status: 504 });
+      expect(f4).toHaveBeenCalledTimes(1);
+      const again = [new Response('x', { status: 503 }), new Response('{"session_id":"s1"}', { status: 200 })];
+      const f5 = vi.fn(async () => again.shift()!);
+      vi.stubGlobal('fetch', f5);
+      const resume = api.resumeSession('s1');
+      await vi.advanceTimersByTimeAsync(RETRY_AFTER_MS);
+      await expect(resume).resolves.toMatchObject({ session_id: 's1' });
+      expect(f5).toHaveBeenCalledTimes(2);
       const f3 = vi.fn(async () => new Response('x', { status: 503 }));
       vi.stubGlobal('fetch', f3);
       await expect(api.createSession({ mode: 'interview', round_id: 'r', length: 'short', level: 'mid', style: 'neutral', voice: 'fish' })).rejects.toMatchObject({ status: 503 });
