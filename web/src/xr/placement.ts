@@ -3,7 +3,8 @@
 // An index fingertip that rests still on the desk for 0.6 s sets the desk: its height (minus the finger pad) is the
 // desk top, the tip is the near edge centre of the sheet, and the head's yaw at that moment is the facing. A
 // controller does the same with its front tip, resting on the desk and pointing down at it: once the tip has been
-// still for 0.3 s a trigger pull places at once, and without the trigger the same 0.6 s rest as a finger does. A
+// still for 0.3 s a trigger pull places at once, and without the trigger the same 0.6 s rest as a finger does
+// ("still" is stricter for a controller: standing on a desk it barely moves, held in the air it always does). A
 // trigger pulled in the air, on the move, with the controller level, or while its ray is on a card or a button (the
 // usual way to "click" something) never places. The tip is where the controller's aim ray starts, the
 // front face of the controller body, so the desk top is the tip minus a few millimetres, not the grip 5 cm behind it.
@@ -106,11 +107,24 @@ const SPEED_EDGE_MS = 100;
 /** Below this window length the speed estimate is too noisy; the spread check covers it. */
 const SPEED_MIN_WINDOW_MS = 200;
 
+/** How still a tip must be to count as resting: its speed (m/s) and how far it may wander from the window's centre (m). */
+export interface RestLimits {
+  speed: number;
+  spread: number;
+}
+const FINGER_REST: RestLimits = { speed: DWELL_MAX_SPEED, spread: DWELL_MAX_SPREAD };
+/**
+ * A controller whose tip stands on a desk is held by the desk: it barely moves. One held in the air, however
+ * carefully, trembles a millimetre or two and drifts close to a centimetre a second. The tighter limits tell the
+ * two apart, so aiming down at the desk from above and pulling the trigger does not place a desk in mid air.
+ */
+export const CONTROLLER_REST: RestLimits = { speed: 0.006, spread: 0.002 };
+
 /**
  * How long (ms) the newest samples have been a resting desk touch. Walks back from the newest sample while the
  * window [i..last] stays still: speed under 2 cm/s and no wander beyond the jitter allowance.
  */
-export function restingMs(samples: readonly DwellSample[]): { ms: number; at: Vec3 | null } {
+export function restingMs(samples: readonly DwellSample[], limits: RestLimits = FINGER_REST): { ms: number; at: Vec3 | null } {
   const n = samples.length;
   if (n === 0) return { ms: 0, at: null };
   const last = samples[n - 1]!;
@@ -139,14 +153,14 @@ export function restingMs(samples: readonly DwellSample[]): { ms: number; at: Ve
       const oldest = centroid(samples, i, oldTo);
       const gap = Math.hypot(newest.p.x - oldest.p.x, newest.p.y - oldest.p.y, newest.p.z - oldest.p.z);
       const span = newest.t - oldest.t;
-      if (span > 0 && (gap / span) * 1000 >= DWELL_MAX_SPEED) break;
+      if (span > 0 && (gap / span) * 1000 >= limits.speed) break;
     }
     let spread = 0;
     for (let j = i; j < n; j++) {
       const t = samples[j]!.tip;
       spread = Math.max(spread, Math.hypot(t.x - c.x, t.y - c.y, t.z - c.z));
     }
-    if (spread > DWELL_MAX_SPREAD) break;
+    if (spread > limits.spread) break;
     best = dt;
     bestAt = c;
   }
@@ -213,6 +227,8 @@ export interface PlacementStatus {
   tip: Vec3 | null;
   /** How far that tip sits above the surface it rests on (a finger pad, a controller's front). */
   pad: number;
+  /** A controller's trigger was pulled this frame and placed nothing (its tip was not resting on the desk). */
+  missedPull?: boolean;
   hand: 'left' | 'right' | null;
   result: DeskPose | null;
 }
@@ -253,6 +269,7 @@ export class DeskPlacement {
     let bestPad = FINGER_PAD;
     let bestHand: 'left' | 'right' | null = null;
     const seen = { left: false, right: false };
+    let missedPull = false;
     /** One side's tip this frame: keeps its rest history and finishes on a full rest. */
     const rest = (side: 'left' | 'right', kind: 'hand' | 'controller', tip: Vec3, tips: Vec3[] | undefined, pad: number, pulled = false): PlacementStatus | null => {
       seen[side] = true;
@@ -262,7 +279,7 @@ export class DeskPlacement {
       hist.push({ t_ms, tip: { ...tip }, headY: head.pos.y, tips });
       // Keep the dwell window plus a little (the walk-back is quadratic in the samples kept).
       while (hist.length > 2 && hist[0]!.t_ms < t_ms - DWELL_MS - 150) hist.shift();
-      const r = restingMs(hist);
+      const r = restingMs(hist, kind === 'controller' ? CONTROLLER_REST : FINGER_REST);
       const dwell = detectDeskDwell(hist, r, pad);
       if (dwell) return this.finish(dwell.at, dwell.deskY, head, side, kind);
       // A controller's trigger, pulled once the tip has rested a moment: placed now, where it rests.
@@ -291,6 +308,7 @@ export class DeskPlacement {
       const was = this.trigger[c.hand];
       this.trigger[c.hand] = c.pressed;
       const pulled = c.pressed && was === false;
+      if (pulled) missedPull = true;
       // Only a controller that points down at the desk and is not aiming at a panel can be touching it: its tip is
       // then watched like a fingertip. Still for 0.3 s plus a trigger pull places; still for 0.6 s places by itself.
       if (c.dir.y > -CONTROLLER_DWELL_MIN_DOWN || c.busy) continue;
@@ -313,7 +331,7 @@ export class DeskPlacement {
       this.result = fallbackDesk(head);
       return { state: 'done', progress: 1, tip: null, pad: 0, hand: null, result: this.result };
     }
-    return { state: dwelling ? 'dwelling' : 'waiting', progress: bestProgress, tip: bestTip, pad: bestPad, hand: bestHand, result: null };
+    return { state: dwelling ? 'dwelling' : 'waiting', progress: bestProgress, tip: bestTip, pad: bestPad, hand: bestHand, result: null, ...(missedPull ? { missedPull } : {}) };
   }
 
   private finish(at: Vec3, deskY: number, head: HeadPose, hand: 'left' | 'right', kind: 'hand' | 'controller'): PlacementStatus {

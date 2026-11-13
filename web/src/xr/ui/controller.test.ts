@@ -8,7 +8,7 @@ import { NOTICES, type NoticeKind } from '../../session/notices';
 import { RoundUI } from './index';
 import { layoutDesk } from './layout';
 import { END_HOLD_MS, RoundBar } from './roundBar';
-import { PLACING_COPY, STATUS_COPY } from './statusCard';
+import { PLACING_COPY, PLACING_MISSED_LINE, STATUS_COPY } from './statusCard';
 import { button } from './style';
 import type { RoundAction } from './types';
 
@@ -207,7 +207,8 @@ describe('panels with a controller', () => {
 
   it('the_placement_prompt_names_the_action_for_the_input_in_use', () => {
     expect(PLACING_COPY.hands.title).toBe('Touch your desk with one finger');
-    expect(PLACING_COPY.controllers.title).toBe('Touch your desk with the controller tip and pull the trigger');
+    expect(PLACING_COPY.controllers.title).toBe('Rest the controller tip on your desk, then pull the trigger');
+    expect(PLACING_MISSED_LINE).toBe('Rest the tip on the desk first');
     expect(STATUS_COPY.placing).toBe(PLACING_COPY.hands);
     const ui = new RoundUI();
     ui.showPlacing('controllers');

@@ -41,8 +41,11 @@ export const STATUS_COPY: Record<StatusStage, { title: string; detail: string }>
 /** The placement prompt names the action for what the user holds: a finger, or a controller's tip and trigger. */
 export const PLACING_COPY: Record<'hands' | 'controllers', { title: string; detail: string }> = {
   hands: STATUS_COPY.placing,
-  controllers: { title: 'Touch your desk with the controller tip and pull the trigger', detail: 'The sheet goes where you touch.' },
+  controllers: { title: 'Rest the controller tip on your desk, then pull the trigger', detail: 'The sheet goes where the tip rests.' },
 };
+
+/** Shown once when a trigger pull during placement placed nothing. */
+export const PLACING_MISSED_LINE = 'Rest the tip on the desk first';
 
 export class StatusCard {
   readonly group = new Group();

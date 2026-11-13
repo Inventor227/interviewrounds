@@ -45,6 +45,7 @@ import { DEFAULT_STANDINS, loadStandIn, placeStandIn, type StandIn } from './sta
 import { SelectRelay, type SelectCallback } from './select';
 import { XR_FEATURES } from './sessionFeatures';
 import { RoundUI } from './ui';
+import { PLACING_MISSED_LINE } from './ui/statusCard';
 
 export type XRMode = 'ar' | 'preview';
 
@@ -484,7 +485,7 @@ export async function createXRApp(root: HTMLElement, opts: XRAppOptions): Promis
     return standinsLoading;
   };
 
-  let placing: { p: DeskPlacement; laidOut: HeadPose | null } | null = null;
+  let placing: { p: DeskPlacement; laidOut: HeadPose | null; toldRest?: boolean } | null = null;
   const lifecycle = new PlacementLifecycle({
     start: () => {
       placing = { p: new DeskPlacement(performance.now(), opts.placementFallbackMs), laidOut: null };
@@ -658,6 +659,13 @@ export async function createXRApp(root: HTMLElement, opts: XRAppOptions): Promis
         placing.laidOut = head;
       }
       const st = placing.p.update(now, head, handStates, controllerStates);
+      // A trigger pull that placed nothing (in the air, at the card, before the tip had settled): say what works, once.
+      if (st.missedPull && !placing.toldRest) {
+        placing.toldRest = true;
+        ui.layoutHint(head);
+        ui.showHint(PLACING_MISSED_LINE, now, 5000);
+        for (const c of controllerStates) if (c.tracked && c.pressed) haptics.pulse(c.hand, 'press');
+      }
       placementView.update(head, st, now);
       if (st.state === 'done' && st.result) {
         room.root.add(ui.status.group);

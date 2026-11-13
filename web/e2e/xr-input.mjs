@@ -45,7 +45,7 @@ const input = () =>
       models: ['left', 'right'].map((s) => !!a.world.input.xr.visualAdapters.controller[s].visual),
       standins: ['left', 'right'].map((s) => a.scene.getObjectByName(`controller-view-${s}`)?.getObjectByName('controller-standin')?.visible ?? null),
       placingFor: a.ui.placingFor,
-      hints: a.ui.hint.history.map((h) => h.line),
+      hints: a.ui.hint.history.map((h) => h.line).filter((l) => l !== 'Rest the tip on the desk first'),
       move: a.moveStatus(),
       pulses: a.hapticLog().map((p) => `${p.hand}:${p.name}`),
     };
@@ -149,6 +149,7 @@ await sleep(1500);
 await pull('right', 0.5);
 await sleep(1200);
 check('a trigger pull with the controller level does not place the desk', (await desk()) === null);
+check('and says once what works', (await app(() => globalThis.__xrApp.ui.hint.history.map((h) => h.line))).join('|') === 'Rest the tip on the desk first');
 await hold('right', TOUCH, below(TOUCH));
 await sleep(400);
 await pull('right', 0.4);

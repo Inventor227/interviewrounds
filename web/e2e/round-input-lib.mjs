@@ -17,7 +17,8 @@ export const inputState = () =>
       controllers: a.controllers().map((c) => ({ hand: c.hand, tracked: c.tracked, pressed: c.pressed, busy: c.busy })),
       hands: a.hands().map((h) => ({ hand: h.hand, tracked: h.tracked })),
       placingFor: a.ui.placingFor,
-      hints: a.ui.hint.history.map((h) => h.line),
+      // Without the one-time line after a trigger pull that placed nothing (the scripted pull at the prompt card).
+      hints: a.ui.hint.history.map((h) => h.line).filter((l) => l !== 'Rest the tip on the desk first'),
     };
   });
 
