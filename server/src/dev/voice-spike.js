@@ -27,6 +27,7 @@ async function api(path, body) {
 }
 
 const sessions = [];
+const panelistIds = [];
 let spikeSessionId = null;
 
 function watch(i, s, opts) {
@@ -34,7 +35,17 @@ function watch(i, s, opts) {
   s.on("statusChange", (status) => log("status", { ...tag, status }));
   s.on("modeChange", (mode) => log("mode", { ...tag, mode }));
   s.on("userTranscript", (e) => log("user_transcript", { ...tag, final: e.final, text: e.text }));
-  s.on("agentResponseDelta", (e) => log("agent_delta", { ...tag, delta: e.delta }));
+  // The first words of each reply confirm it to the server (the app's socket will do the same).
+  const confirmed = new Set();
+  s.on("agentResponseDelta", (e) => {
+    log("agent_delta", { ...tag, delta: e.delta });
+    if (!confirmed.has(e.segmentId) && e.text.trim()) {
+      confirmed.add(e.segmentId);
+      api(`/confirm?session_id=${spikeSessionId}`, { panelist_id: panelistIds[i], text: e.text })
+        .then((r) => log("confirm", { ...tag, ok: r.confirmed }))
+        .catch((err) => log("confirm_failed", { ...tag, message: String(err) }));
+    }
+  });
   s.on("agentResponse", (e) => log("agent_response", { ...tag, text: e.text }));
   s.on("message", (m) => log("message", { ...tag, role: m.role, text: m.text }));
   s.on("toolCallStarted", (e) => log("tool_started", { ...tag, name: e.toolName }));
@@ -57,8 +68,20 @@ function watch(i, s, opts) {
       lastLoud = t;
       if (opts.longAnswerMs && !longSent && t - speakingSince > opts.longAnswerMs) {
         longSent = true;
-        log("send", { ...tag, text: "[event: long_answer]", auto: true });
-        s.sendUserMessage("[event: long_answer]", { audio: true });
+        // The voice platform does not answer while the candidate is talking, so the mic closes for the cut-in:
+        // that ends the candidate's turn, and the reply is spoken over them. It opens again once the reply ends.
+        log("send", { ...tag, text: "[event: long_answer]", auto: true, mute: true });
+        s.setMicMuted(true).then(() => {
+          s.sendUserMessage("[event: long_answer]", { audio: true });
+          let spoke = false;
+          const reopen = setInterval(() => {
+            if (s.mode === "speaking") spoke = true;
+            if ((spoke && s.mode === "listening") || now() - t > 15000) {
+              clearInterval(reopen);
+              s.setMicMuted(false).then(() => log("mute", { ...tag, muted: false }));
+            }
+          }, 100);
+        });
       }
     }
   }, 20);
@@ -69,6 +92,7 @@ window.spike = {
   async create(body) {
     const r = await api("/session", body);
     spikeSessionId = r.session_id;
+    r.panelists.forEach((p, i) => { panelistIds[i] = p.panelist_id; });
     log("created", { session_id: r.session_id, panelists: r.panelists.map((p) => p.panelist_id) });
     return r;
   },
@@ -77,7 +101,7 @@ window.spike = {
     const s = await AgentSession.start({ sessionToken: token, microphone: opts.microphone ?? true });
     sessions[i] = s;
     watch(i, s, opts);
-    log("started", { s: i, fish_session_id: s.sessionId });
+    log("started", { s: i, fish_session_id: s.sessionId, status: s.status });
     try { await s.startAudio(); } catch (e) { log("start_audio_failed", { s: i, message: String(e) }); }
     return s.sessionId;
   },

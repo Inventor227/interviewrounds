@@ -35,6 +35,7 @@ pub fn routes() -> axum::Router<AppState> {
         .route("/dev/voice-spike/session", post(create_session))
         .route("/dev/voice-spike/state", get(session_state))
         .route("/dev/voice-spike/empty-next", post(empty_next))
+        .route("/dev/voice-spike/confirm", post(confirm))
 }
 
 #[derive(Deserialize)]
@@ -216,4 +217,29 @@ async fn empty_next(
     let session = app.registry.get(&id).ok_or(AppError::NotFound)?;
     session.lock().await.dev_empty_replies += 1;
     Ok(Json(json!({"ok": true})))
+}
+
+#[derive(Deserialize)]
+struct ConfirmBody {
+    panelist_id: String,
+    text: String,
+}
+
+/// The page saw the voice start playing a reply (what the app's socket will report): commit it now.
+async fn confirm(
+    State(app): State<AppState>,
+    Query(q): Query<KeyQuery>,
+    Json(body): Json<ConfirmBody>,
+) -> Result<Json<Value>, AppError> {
+    check_key(&app, &q.key)?;
+    let id = q.session_id.unwrap_or_default();
+    if !id.starts_with("spike-") {
+        return Err(AppError::NotFound);
+    }
+    let session = app.registry.get(&id).ok_or(AppError::NotFound)?;
+    let found = session
+        .lock()
+        .await
+        .confirm_spoken(&body.panelist_id, &body.text, Instant::now());
+    Ok(Json(json!({"confirmed": found})))
 }
