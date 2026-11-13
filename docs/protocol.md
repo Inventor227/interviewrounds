@@ -11,10 +11,22 @@ JSON; cookie `ir_id` identifies the device/user; all under same origin.
 - `GET /api/content/catalog` → `{roles, rounds:[RoundPublic], meeting_templates, personas:[PersonaPublic]}`
 - `POST /api/sessions` `{mode:"interview"|"meeting", round_id?, meeting_plan_id?, length:"short"|"full",
   level:"junior"|"mid"|"senior"|"staff", style:"warm"|"neutral"|"tough", voice:"fish"|"fake", parent_session_id?}` →
-  `CreateSessionRes {session_id, client_token, ws_url, round:RoundPublic, panel:[Panelist], floor, panel_mode:"swap"|"joined", limits}`
-  where `Panelist {panelist_id, persona_id, display_name, title, avatar_id, seat:0|1|2, voice:{transport:"fish", fish:{session_token, livekit_url}}|{transport:"fake"}|{transport:"fish_pending"}}`
-- `POST /api/sessions/{id}/panelists/{pid}/join` `{opening_line?}` → `{voice}` (swap mode hand-over)
-- `POST /api/sessions/{id}/resume` → `CreateSessionRes` (same `session_id`, new tokens)
+  `CreateSessionRes {session_id, client_token, ws_url, round:RoundPublic, panel:[Panelist], floor, panel_mode:"swap"|"joined", limits,
+  timing:{silence_wait_seconds, interrupt_after_seconds, target_minutes, hard_stop_minutes}}`
+  where `Panelist {panelist_id, persona_id, display_name, title, avatar_id, seat:0|1|2, voice:{transport:"fish", fish:{session_id, token,
+  livekit_url, expires_at, max_duration_seconds, ...}}|{transport:"fake"}|{transport:"fish_pending"}}`. `fish` is Fish's session
+  response passed through unchanged (give all of it to the Fish SDK). `ws_url` is a path (`/ws/session/{id}`). `timing` comes from
+  the round (`RoundPublic` strips it): `silence_wait_seconds` is already scaled by level (junior 0.75x, mid 1x, senior and staff
+  1.5x) and `interrupt_after_seconds` is the floor persona's own value when it has one. `client_token` is 64 hex characters.
+  Swap mode mints a Fish token for the floor panelist only (`fish_pending` for the others); joined mode mints one for everyone.
+  A cap refusal is `429 {status, code, message, resets_at}` where `code` is a `Limits.reason` value and `resets_at` is a
+  date-time or `null`.
+- `POST /api/sessions/{id}/panelists/{pid}/join` `{opening_line?}` → `{voice}` (swap mode hand-over; `voice` as in `Panelist`).
+  The server adds the opening line to the shared history as that panelist's turn, gives it to the new Fish session as
+  `first_message`, moves the floor, and ends the previous panelist's Fish session. `409` in joined mode.
+- `POST /api/sessions/{id}/resume` → `CreateSessionRes` (same `session_id`, new tokens). Allowed while the round is open
+  (`created`, `live` or `paused`; a started round stays open for 3 minutes without a socket), else `409`. Earlier tokens stop
+  working and their sockets close with `4401`; the interviewer's next turn knows the candidate is back.
 - `POST /api/sessions/{id}/end` `{reason:"completed"|"user_ended"|"time_limit"|"disconnected"|"headset_removed"}` → 202
 - `GET /api/sessions/{id}` → `{status:"created"|"live"|"paused"|"scoring"|"scored"|"failed"|"abandoned", report_ready}`
 - `GET /api/sessions/{id}/report` → `Report` (404 until ready)
@@ -67,14 +79,26 @@ Sequencing and acks:
 
 - Client → server: `hello {client_token, last_seq}` (first frame), `board.op {op_id, rev_base, src, op, args, at_ms}`,
   `transcript.mark {segment_id, panelist_id, first_at_ms, final_at_ms, text}`, `head.samples {samples:[{t_ms, yaw, pitch,
-  speaking, target}]}`, `voice.state {panelist_id, mode:"listening"|"thinking"|"speaking", at_ms}`,
+  speaking, target}]}`, `voice.state {panelist_id, mode:"listening"|"thinking"|"speaking", at_ms, latency?:{user_final_at_ms, thinking_at_ms,
+  first_text_at_ms}}` (`latency` once per turn, stored for the latency log),
   `ui.event {kind:"pause"|"resume"|"end"|"hint"|"skip_onboarding", reason?}`, `board.ghost_reject {op_id}` (dismiss a
   Scribe suggestion), `ping`
-- Server → client: `round.state {status, phase_id, phase_index, phases, elapsed_s, remaining_s, phase_remaining_s, brief:{question, lines}, floor}`,
+- Server → client: `round.state {status, phase_id, phase_index, phases:[{id, title?, minutes, uses_whiteboard}], elapsed_s,
+  remaining_s, phase_remaining_s, brief:{question, lines}, floor, time_check_due}`,
   `panel.hand_over {from, to, opening_line}`, `board.ack {op_id, rev}`, `board.ghosts {ghosts:[GhostOp]}`,
   `board.apply {op_id, rev, src, op, args}` (server-originated ops), `avatar.point_at {panelist_id, item_id}`,
   `round.ending {closing_line}`, `round.ended {reason}`, `report.progress {stage:"metrics"|"scoring"|"done", pct}`,
   `report.ready {session_id}`, `error {code, message, op_id?}` (`op_id` set for `op_rejected`), `pong`
+- `round.state` is a full snapshot and always has `seq: 0` (never buffered or replayed). The server sends one right after
+  `hello`, one on every change (status, phase, floor, brief), and one every second while the round is `live` or `paused`.
+  `elapsed_s` is round time without pauses; the clock also stops while no socket is connected and starts at the first
+  `hello` (status `created` until then). `time_check_due: true` is sent once per phase boundary, on the snapshot when the
+  current phase runs out of time, and again on the snapshot after a `hello` while that time check is still owed (no
+  `[event: time_check]` has reached the server since the boundary); it is `false` otherwise. On `true` the browser sends
+  `[event: time_check]`.
+- After `round.ended` the server closes every socket of the session with `4409`. A round with no socket for 3 minutes ends
+  with `round.ended {reason: "disconnected"}`; one past its `hard_stop_minutes` ends with `time_limit`. On a server restart
+  sockets close with `1012`.
 - Marker texts the browser sends into the voice session as a typed user turn: `[event: start]`, `[event: time_check]`,
   `[event: handover]`, `[event: resume]`, `[event: silence_check]`, `[event: ending]`, `[event: long_answer]` (sent when
   one candidate turn runs past the round's `interrupt_after_seconds`).
