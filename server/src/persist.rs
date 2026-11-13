@@ -511,6 +511,9 @@ pub async fn end_session(app: &AppState, id: Uuid, reason: &str) -> anyhow::Resu
     }
     drop(guard);
     tracing::info!(session_id = %id, reason, status, "session ended");
+    if spoke {
+        app.scoring_kick.notify_one();
+    }
     // The socket stays open through scoring (report.progress / report.ready); the hub closes itself after.
     if let Some(hub) = app.hubs.get(&key) {
         hub.finish(app, reason, spoke).await;

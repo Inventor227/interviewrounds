@@ -389,10 +389,9 @@ pub async fn load_scoring_input(
         .collect();
 
     // Pause/resume and hint events (`session_events`, added by a later migration; absent tables read as none).
-    let has_events: bool =
-        sqlx::query_scalar("select to_regclass('public.session_events') is not null")
-            .fetch_one(pool)
-            .await?;
+    let has_events: bool = sqlx::query_scalar("select to_regclass('session_events') is not null")
+        .fetch_one(pool)
+        .await?;
     let events: Vec<EventRow> = if has_events {
         sqlx::query_as(
             "select kind, at_ms, data, created_at from session_events \
@@ -978,11 +977,23 @@ async fn record_usage(
 /// Polls for `scoring` sessions without a report and scores each once at a time. Restart safe: a session that
 /// was mid-scoring when the server stopped is still `scoring` and is picked up again.
 pub fn spawn_worker(deps: ScoringDeps, every: Duration) -> tokio::task::JoinHandle<()> {
+    spawn_worker_with_kick(deps, every, Arc::new(tokio::sync::Notify::new()))
+}
+
+/// [`spawn_worker`], also woken at once by `kick` (a round just ended in `scoring`).
+pub fn spawn_worker_with_kick(
+    deps: ScoringDeps,
+    every: Duration,
+    kick: Arc<tokio::sync::Notify>,
+) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let mut tick = tokio::time::interval(every);
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
-            tick.tick().await;
+            tokio::select! {
+                _ = tick.tick() => {}
+                _ = kick.notified() => {}
+            }
             if let Err(err) = run_pending(&deps).await {
                 tracing::warn!(error = %format!("{err:#}"), "scoring sweep failed");
             }

@@ -44,6 +44,8 @@ pub struct AppState {
     pub timing: SessionTiming,
     /// Serialises reloading a session from the database into the registry.
     pub load_lock: Arc<tokio::sync::Mutex<()>>,
+    /// Wakes the scoring worker when a round ends in `scoring`.
+    pub scoring_kick: Arc<tokio::sync::Notify>,
 }
 
 impl AppState {
@@ -65,6 +67,7 @@ impl AppState {
             hubs: Hubs::default(),
             timing: SessionTiming::default(),
             load_lock: Arc::new(tokio::sync::Mutex::new(())),
+            scoring_kick: Arc::new(tokio::sync::Notify::new()),
             config: Arc::new(config),
             db,
         }

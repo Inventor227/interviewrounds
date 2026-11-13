@@ -67,8 +67,13 @@ async fn serve() -> anyhow::Result<()> {
         tracing::warn!(error = %format!("{err:#}"), "startup sweep failed");
     }
     persist::spawn_janitor(state.clone(), state.timing.janitor);
-    let scoring = scoring::ScoringDeps::from_app(&state).context("setting up scoring")?;
-    scoring::spawn_worker(scoring, Duration::from_secs(2));
+    // Report progress goes out on the session's socket; a round that ends wakes the worker at once.
+    let scoring = scoring::ScoringDeps::from_app(&state)
+        .context("setting up scoring")?
+        .with_events(std::sync::Arc::new(ir_server::ws::SocketReportEvents(
+            state.clone(),
+        )));
+    scoring::spawn_worker_with_kick(scoring, Duration::from_secs(2), state.scoring_kick.clone());
     let hubs = state.hubs.clone();
     let app = router(state);
 
