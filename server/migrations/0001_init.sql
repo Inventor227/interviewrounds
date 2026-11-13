@@ -24,7 +24,7 @@ create table settings (
     updated_at  timestamptz not null default now()
 );
 
--- Attendee setup and the plan Claude prepared for a meeting rehearsal.
+-- Attendee setup and the plan prepared for a meeting rehearsal.
 create table meeting_plans (
     id          uuid primary key default gen_random_uuid(),
     identity_id uuid not null references identities (id) on delete cascade,
@@ -111,17 +111,32 @@ create table head_batches (
 );
 create index head_batches_session_idx on head_batches (session_id, first_t_ms);
 
--- Every board op as received (idempotent by op_id) and the rev it produced once applied.
+-- Board op log (OpLogEntry): every op as received, accepted or rejected, and the
+-- rev it produced once applied.
+--   accepted: null = stored, not evaluated yet; true = applied; false = rejected
+--             (rejected ops and rejected ghosts are logged too).
+--   rev_base, at_ms: sent by clients; null for server-originated ops (interviewer
+--             or Scribe board.apply, ghost-reject rows).
+--   t_ms:     session time of the entry (ms since session start).
+-- One row per (session_id, op_id). Dedup follows board.op_ids, which holds only
+-- committed ops, so a rejected op_id may be sent again and re-evaluated. Writers
+-- upsert:
+--   insert ... on conflict (session_id, op_id) do update set ...
+--     where board_ops.accepted = false
+-- that is, do nothing when the existing row is accepted (or still pending), and
+-- update it when the existing row was rejected.
 create table board_ops (
     id         bigserial primary key,
     session_id uuid not null references sessions (id) on delete cascade,
     op_id      text not null,
-    rev_base   bigint not null,
+    rev_base   bigint,
     rev        bigint,
+    accepted   boolean,
     src        text not null,
     op         text not null,
     args       jsonb not null default '{}'::jsonb,
-    at_ms      bigint not null,
+    at_ms      bigint,
+    t_ms       bigint,
     created_at timestamptz not null default now(),
     unique (session_id, op_id)
 );
@@ -150,14 +165,14 @@ create index board_images_session_idx on board_images (session_id, created_at de
 -- Scored report (report.v1).
 create table reports (
     session_id     uuid primary key references sessions (id) on delete cascade,
-    schema_version text not null default 'report.v1',
+    schema_version text not null default '1.0',
     report         jsonb not null,
     model          text,
     created_at     timestamptz not null default now(),
     updated_at     timestamptz not null default now()
 );
 
--- Spend ledger: Fish minutes and Claude calls, used for caps and entitlements.
+-- Spend ledger: Fish minutes and model calls, used for caps and entitlements.
 create table usage_events (
     id                 bigserial primary key,
     identity_id        uuid references identities (id) on delete set null,

@@ -108,6 +108,57 @@ async fn board_ops_and_marks_are_unique_per_session() {
         .await
         .expect("same op_id in another session");
 
+    // Server-originated ops (interviewer or Scribe) carry no rev_base or at_ms.
+    sqlx::query(
+        "insert into board_ops (session_id, op_id, src, op, accepted, t_ms)
+         values ($1, 'srv-1', 'interviewer', 'add_card', true, 42)",
+    )
+    .bind(a)
+    .execute(&pool)
+    .await
+    .expect("server op without rev_base and at_ms");
+
+    // Upsert rule: a rejected op_id may be sent again and is re-evaluated;
+    // an accepted one is left alone.
+    sqlx::query(
+        "insert into board_ops (session_id, op_id, rev_base, src, op, at_ms, accepted)
+         values ($1, 'op-2', 0, 'hand', 'add_card', 20, false)",
+    )
+    .bind(a)
+    .execute(&pool)
+    .await
+    .unwrap();
+    let upsert = "insert into board_ops (session_id, op_id, rev_base, src, op, at_ms, accepted)
+                  values ($1, $2, 1, 'hand', 'add_card', 30, true)
+                  on conflict (session_id, op_id) do update
+                  set rev_base = excluded.rev_base, at_ms = excluded.at_ms,
+                      accepted = excluded.accepted
+                  where board_ops.accepted = false";
+    for op_id in ["op-2", "srv-1"] {
+        sqlx::query(upsert)
+            .bind(a)
+            .bind(op_id)
+            .execute(&pool)
+            .await
+            .unwrap_or_else(|e| panic!("upsert {op_id}: {e}"));
+    }
+    let rows: Vec<(String, Option<i64>, Option<bool>)> = sqlx::query_as(
+        "select op_id, rev_base, accepted from board_ops
+         where session_id = $1 and op_id in ('op-2', 'srv-1') order by op_id",
+    )
+    .bind(a)
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        rows,
+        vec![
+            ("op-2".to_string(), Some(1), Some(true)),
+            ("srv-1".to_string(), None, Some(true)),
+        ],
+        "rejected op re-evaluated, accepted op untouched"
+    );
+
     let insert_mark = "insert into marks (session_id, segment_id, first_at_ms, final_at_ms, text)
                        values ($1, 'seg-1', 100, 900, 'hello')";
     sqlx::query(insert_mark)
