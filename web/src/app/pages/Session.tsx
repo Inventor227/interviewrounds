@@ -7,12 +7,19 @@ import { useEffect, useRef, useState } from 'preact/hooks';
 import { useLocation } from 'preact-iso';
 import { DevConsole } from '../../session/DevConsole';
 import { isDebug } from '../../session/browser';
+import { NOTICES } from '../../session/notices';
 import type { ControllerState } from '../../session/ports';
 import { liveRoom, type LiveRoom } from '../../session/room';
 import type { StageSpans } from '../../session/timings';
 import type { ImmersiveHandle } from '../../xr/entry';
+import { loadMe } from '../components/data';
+import { clock } from '../components/format';
 import { Page } from '../components/Ui';
 import { takeLaunch } from '../launch';
+import { useNow } from './Home';
+
+/** Without a deadline from the server, a round left in the headset can be resumed for this long. */
+export const RESUME_OFFER_MS = 3 * 60 * 1000;
 
 type Taken = NonNullable<ReturnType<typeof takeLaunch>>;
 
@@ -22,15 +29,68 @@ export const STATE_LINE: Record<ControllerState, string> = {
   placing: 'Touch your desk where the sheet should go.',
   greeting: 'Your interviewer is saying hello.',
   live: 'Your round is live.',
-  paused: 'Paused. Press Resume when you are ready.',
+  paused: "Paused. Resume when you're ready.",
   ending: 'Wrapping up.',
   scoring: 'Writing your scorecard.',
   summary: 'Your scorecard is ready.',
   failed: 'The round could not start.',
 };
 
+/** A card of the room as one line of the page: title, then detail. */
+export function noticeLine(n: { title: string; detail: string }): string {
+  if (!n.detail) return n.title;
+  return /[.!?…]$/.test(n.title) ? `${n.title} ${n.detail}` : `${n.title}. ${n.detail}`;
+}
+
 /** Errors that end the round on this page; the rest show in the room or pass by themselves. */
-const FATAL = new Set(['connect_failed', 'session_expired', 'no_credit', 'socket_terminal', 'voice_lost', 'room_load_failed']);
+const FATAL = new Set(['connect_failed', 'session_expired', 'no_credit', 'socket_terminal', 'room_load_failed']);
+
+/**
+ * The round is held while the user is out of the headset view: how long they have to come back.
+ * The deadline is the server's (`me.resumable.expires_at`: the end of the pause budget); until it
+ * is known, and when the server names none, three minutes from the moment the view was lost.
+ */
+function ResumeOffer(props: { sessionId: string; onResume: () => void; onEnd: () => void; onExpired: () => void }) {
+  const now = useNow();
+  const [lostAt] = useState(() => Date.now());
+  const [deadline, setDeadline] = useState<number | null>(null);
+  const expired = useRef(false);
+  useEffect(() => {
+    let live = true;
+    loadMe(true)
+      .then((me) => {
+        const r = me.resumable;
+        if (live && r && r.session_id === props.sessionId) setDeadline(Date.parse(r.expires_at));
+      })
+      .catch(() => undefined);
+    return () => {
+      live = false;
+    };
+  }, [props.sessionId]);
+  const left = Math.max(0, ((deadline ?? lostAt + RESUME_OFFER_MS) - now) / 1000);
+  useEffect(() => {
+    if (left > 0 || expired.current) return;
+    expired.current = true;
+    props.onExpired();
+  }, [left]);
+  if (left <= 0) return null;
+  return (
+    <div class="state" role="region" aria-label="Resume your round" data-test="resume-offer">
+      <h2>Your round is paused</h2>
+      <p>
+        Your interviewer is waiting. You have <span class="num" data-test="resume-left">{clock(left)}</span> to come back.
+      </p>
+      <div class="row">
+        <button class="btn btn-primary btn-big" data-test="resume-round" onClick={props.onResume}>
+          Resume round
+        </button>
+        <button class="btn" data-test="end-from-page" onClick={props.onEnd}>
+          End the round
+        </button>
+      </div>
+    </div>
+  );
+}
 
 const SPAN_LABELS: [keyof StageSpans, string][] = [
   ['session_ms', 'Session'],
@@ -118,6 +178,9 @@ function LiveSession(props: { launch: Taken }) {
   const [session, setSession] = useState(props.launch.session);
   const [error, setError] = useState<{ code: string } | null>(null);
   const [note, setNote] = useState('');
+  const [notice, setNotice] = useState(controller.notice ?? null);
+  // The time to come back ran out on this page before the server said so.
+  const [expired, setExpired] = useState(false);
   // Whether the interviewer ever spoke: a failure before that is a round that never began.
   const [began, setBegan] = useState(controller.state === 'live');
   const [, bump] = useState(0);
@@ -136,6 +199,7 @@ function LiveSession(props: { launch: Taken }) {
         if (s === 'live') setBegan(true);
       }),
       controller.on('session', setSession),
+      controller.on('notice', setNotice),
       controller.on('error', (e) => {
         // The user ended the round before it began: nothing to show, back home.
         if ((e as { code: string }).code === 'cancelled') route('/');
@@ -144,7 +208,7 @@ function LiveSession(props: { launch: Taken }) {
       // The room's own buttons: leaving this page ends the headset session and frees the room.
       controller.on('action', (a) => {
         const sid = encodeURIComponent(current().session_id);
-        route(a === 'report' ? `/report/${sid}` : `/round/${encodeURIComponent(current().round.id)}?retry=${sid}`);
+        route(a === 'history' ? '/history' : a === 'report' ? `/report/${sid}` : `/round/${encodeURIComponent(current().round.id)}?retry=${sid}`);
       }),
       room?.onChange(() => bump((n) => n + 1)) ?? (() => undefined),
     ];
@@ -160,7 +224,13 @@ function LiveSession(props: { launch: Taken }) {
   const stage = useStage(room, preview || dev);
   const sid = encodeURIComponent(session.session_id);
   const over = state === 'scoring' || state === 'summary';
-  const lost = !!room?.sessionLost && !over && !preview && state !== 'failed';
+  const lost = !!room?.sessionLost && !over && !preview && state !== 'failed' && state !== 'ending';
+  // Before the round began there is nothing to resume: the way back is the start itself.
+  const lostBefore = lost && (state === 'idle' || state === 'placing');
+  const lostPaused = lost && !lostBefore;
+  const endedPaused = (over || state === 'ending') && (controller.endedWhilePaused || expired);
+  // In the preview the cards of the room are on the canvas; the page says the same in words.
+  const card = preview && notice && !over ? NOTICES[notice] : null;
   const retryEnter = !lost && state !== 'failed' && (error?.code === 'xr_enter_failed' || error?.code === 'placement_failed');
   const failed = !over && (state === 'failed' || (!!error && FATAL.has(error.code)));
   // Before the first word there is no round to lose and no report to see: offer the start again.
@@ -175,9 +245,14 @@ function LiveSession(props: { launch: Taken }) {
 
   return (
     <Page test="session" title={props.launch.title ?? session.round.title ?? 'Live round'} lede={lede} wide={preview}>
-      {!failed && (
+      {!failed && !lostPaused && !endedPaused && (
         <p class="note" role="status" data-test="session-state" data-state={state}>
-          {STATE_LINE[state]}
+          {card ? noticeLine(card) : STATE_LINE[state]}
+        </p>
+      )}
+      {endedPaused && (
+        <p class="note" role="status" data-test="ended-paused" data-state={state}>
+          {expired && !controller.endedWhilePaused ? 'This round has ended. Your report is being written.' : 'The round ended while paused. Your report is being written.'}
         </p>
       )}
       {retryEnter && (
@@ -187,9 +262,9 @@ function LiveSession(props: { launch: Taken }) {
           </button>
         </div>
       )}
-      {lost && (
+      {lostBefore && (
         <div class="row">
-          {/* Through the controller: before the round began this is the start itself, later a paused round to resume. */}
+          {/* Through the controller: before the round began this is the start itself. */}
           <button class="btn btn-primary btn-big" data-test="return-to-room" onClick={() => back(() => controller.returnToRoom())}>
             Return to the room
           </button>
@@ -198,10 +273,22 @@ function LiveSession(props: { launch: Taken }) {
           </button>
         </div>
       )}
-      {over && (
+      {lostPaused && (
+        // The headset view is gone but the round is held: one tap goes back in, places the desk and carries on.
+        <ResumeOffer
+          sessionId={session.session_id}
+          onResume={() => back(() => controller.returnToRoom())}
+          onEnd={() => controller.end()}
+          onExpired={() => {
+            setExpired(true);
+            controller.end('headset_removed');
+          }}
+        />
+      )}
+      {(over || (endedPaused && state === 'ending')) && (
         <div class="row">
           <a class="btn btn-primary" data-test="see-report" href={`/report/${sid}`}>
-            See full report
+            {endedPaused ? 'See report' : 'See full report'}
           </a>
         </div>
       )}
