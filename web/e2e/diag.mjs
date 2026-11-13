@@ -32,20 +32,21 @@ function xr(action, input) {
   });
 }
 
-/** A full-length screenshot of the 2D page at the given width. */
-async function pageShot(name, width = 1000) {
+/** A screenshot of the 2D page from a step down, at most `height` tall (very tall viewports crash the browser). */
+async function pageShot(name, from = null, height = 1800, width = 1000) {
   const file = path.join(DIR, `dg-shot-${++n}.mjs`);
   writeFileSync(
     file,
     `export default async function ({ page, frame }) {
   const target = frame ?? page.mainFrame();
-  await target.evaluate(() => window.scrollTo(0, 0));
-  const h = await target.evaluate(() => document.documentElement.scrollHeight);
-  await page.setViewportSize({ width: ${width}, height: Math.min(Math.max(h, 700), 7000) });
+  await page.setViewportSize({ width: ${width}, height: ${height} });
+  await page.waitForTimeout(300);
+  await target.evaluate((sel) => (sel ? document.querySelector(sel).scrollIntoView() : window.scrollTo(0, 0)), ${JSON.stringify(from)});
   await page.waitForTimeout(400);
   await page.screenshot({ path: ${JSON.stringify(path.join(SHOTS, `${name}.png`))} });
+  await target.evaluate(() => window.scrollTo(0, 0));
   await page.setViewportSize({ width: 512, height: 512 });
-  return h;
+  return 'ok';
 }
 `,
   );
@@ -160,4 +161,4 @@ await sleep(2000);
 const r = await results();
 console.log('results', JSON.stringify(r));
 writeFileSync(path.join(SHOTS, 'diag-xr-results.json'), JSON.stringify(r, null, 1));
-console.log('2d results', JSON.stringify(await pageShot('diag-7-results')));
+console.log('2d results', JSON.stringify(await pageShot('diag-7-results', '[data-test="diag-xr"]', 1900)));
