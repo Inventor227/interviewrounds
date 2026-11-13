@@ -20,6 +20,7 @@ const Z = new Vector3(0, 0, 1);
 const qa = new Quaternion();
 const qb = new Quaternion();
 const qc = new Quaternion();
+const qd = new Quaternion();
 const qRoot = new Quaternion();
 const qRootInv = new Quaternion();
 const va = new Vector3();
@@ -220,8 +221,9 @@ export class Rig {
     // At most 80° of swing, scaled by w.
     const ang = 2 * Math.acos(Math.min(1, Math.abs(qa.w)));
     const t = ang > 1e-5 ? (Math.min(ang, MathUtils.degToRad(80)) / ang) * w : w;
-    qa.slerpQuaternions(qb.identity(), qa, t);
-    rotateWorld(arm.upper, qa);
+    // (slerp from identity into a separate quaternion: slerpQuaternions must not read and write the same one)
+    qd.identity().slerp(qa, t);
+    rotateWorld(arm.upper, qd);
   }
 
   /** Converts a world point into the root frame. */
