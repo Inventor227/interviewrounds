@@ -1315,3 +1315,191 @@ async fn me_resumable_lists_a_paused_round_with_its_socket_connected() {
     })
     .await;
 }
+
+// ---------- restart and replaced sessions (socket layer) ----------
+
+#[tokio::test]
+async fn a_restart_mid_round_is_logged_as_a_pause_and_the_return_as_a_resume() {
+    let slow = || SessionTiming {
+        offline_limit: Duration::from_secs(30),
+        ..timing()
+    };
+    let app = live::test_app(Options {
+        timing: slow(),
+        ..Options::default()
+    })
+    .await;
+    let base = app.serve().await;
+    let (_, id, token) = new_session(&app, "fake").await;
+    let uuid = Uuid::parse_str(&id).unwrap();
+    let mut ws = hello(&base, &id, &token, 0).await;
+    frame_of(&mut ws, "round.state", WAIT)
+        .await
+        .expect("round.state");
+    said_something(&app, &id).await;
+    live::eventually("the live snapshot saved", WAIT, || async {
+        sqlx::query_scalar::<_, bool>(
+            "select status = 'live' and started_at is not null and live_state is not null \
+             from sessions where id = $1",
+        )
+        .bind(uuid)
+        .fetch_one(&app.state.db)
+        .await
+        .unwrap()
+    })
+    .await;
+    // The old process goes away with its socket; it is forgotten as a restart would.
+    drop(ws);
+    live::eventually("the drop logged", WAIT, || async {
+        ui_events(&app, &id)
+            .await
+            .iter()
+            .any(|d| d["reason"] == "disconnected")
+    })
+    .await;
+    app.state.registry.remove(&id);
+    app.state.hubs.remove(&id);
+    let before_restart = ui_events(&app, &id).await.len();
+
+    // A new process loads the round when the page says hello again.
+    let app2 = restarted(&app, slow()).await;
+    let base2 = app2.serve().await;
+    let mut ws = hello(&base2, &id, &token, 0).await;
+    let st = frame_of(&mut ws, "round.state", WAIT)
+        .await
+        .expect("round.state after the restart");
+    assert_eq!(st["d"]["status"], "live", "{st}");
+    let after = ui_events(&app2, &id).await;
+    let new: Vec<&Value> = after[before_restart..].iter().collect();
+    assert_eq!(
+        new.iter()
+            .filter(|d| d["kind"] == "pause" && d["reason"] == "restart")
+            .count(),
+        1,
+        "{new:?}"
+    );
+    assert!(
+        new.iter().all(|d| d["kind"] != "resume"),
+        "no resume before the user is back: {new:?}"
+    );
+    // The reconnect alone does not run the clock.
+    let held = round_ms(&app2, &id).await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(
+        round_ms(&app2, &id).await.abs_diff(held) <= 5,
+        "the clock ran before the user was back"
+    );
+
+    // The user is back: the clock runs and the server logs the return once (with its round time), after the restart
+    // pause. The page's own event is stored as sent, next to it.
+    send(
+        &mut ws,
+        "ui.event",
+        1,
+        json!({"kind": "resume", "reason": "back"}),
+    )
+    .await;
+    live::eventually("the return logged", WAIT, || async {
+        ui_events(&app2, &id)
+            .await
+            .iter()
+            .any(|d| d["kind"] == "resume" && d.get("at_ms").is_some())
+    })
+    .await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(
+        round_ms(&app2, &id).await > held + 100,
+        "the clock runs again"
+    );
+    let all = ui_events(&app2, &id).await;
+    let restart_at = all
+        .iter()
+        .position(|d| d["kind"] == "pause" && d["reason"] == "restart")
+        .unwrap();
+    let resumes: Vec<usize> = all
+        .iter()
+        .enumerate()
+        .filter(|(_, d)| d["kind"] == "resume" && d.get("at_ms").is_some())
+        .map(|(i, _)| i)
+        .collect();
+    assert!(resumes.iter().any(|&i| i > restart_at), "{all:?}");
+    assert_eq!(
+        resumes.iter().filter(|&&i| i > restart_at).count(),
+        1,
+        "logged once: {all:?}"
+    );
+    assert_eq!(status(&app2, &id).await, ("live".to_string(), None));
+}
+
+#[tokio::test]
+async fn a_hello_for_a_replaced_session_never_goes_live() {
+    let app = live::test_app(Options {
+        timing: timing(),
+        ..Options::default()
+    })
+    .await;
+    let base = app.serve().await;
+    let db_state = |id: Uuid| {
+        let db = app.state.db.clone();
+        async move {
+            sqlx::query_as::<_, (String, Option<DateTime<Utc>>)>(
+                "select status, started_at from sessions where id = $1",
+            )
+            .bind(id)
+            .fetch_one(&db)
+            .await
+            .unwrap()
+        }
+    };
+
+    // Replaced before the hello, where this process's memory could not see it (another process, or the replace
+    // without the in-memory handle): the database has it ended, memory still has it waiting to start.
+    let (_, id, token) = new_session(&app, "fake").await;
+    let uuid = Uuid::parse_str(&id).unwrap();
+    let ended = sqlx::query(
+        "update sessions set status = 'abandoned', ended_reason = 'user_ended', ended_at = now() \
+         where id = $1 and status = 'created' and started_at is null",
+    )
+    .bind(uuid)
+    .execute(&app.state.db)
+    .await
+    .unwrap();
+    assert_eq!(ended.rows_affected(), 1);
+    let mut ws = hello(&base, &id, &token, 0).await;
+    assert_eq!(
+        live::close_code(&mut ws, WAIT).await,
+        Some(4409),
+        "closed as ended"
+    );
+    let (st, started) = db_state(uuid).await;
+    assert_eq!(st, "abandoned", "never flipped live");
+    assert!(started.is_none(), "the round clock never started");
+
+    // Replaced while the hello lands: the go-live write finds no session waiting to start (0 rows).
+    let (_, id, token) = new_session(&app, "fake").await;
+    let uuid = Uuid::parse_str(&id).unwrap();
+    for sql in [
+        "create function skip_go_live() returns trigger language plpgsql as $$ \
+         begin if new.status = 'live' and old.status = 'created' then return null; end if; return new; end $$",
+        "create trigger skip_go_live before update on sessions for each row execute function skip_go_live()",
+    ] {
+        sqlx::query(sql).execute(&app.state.db).await.unwrap();
+    }
+    let handle = app.state.registry.get(&id).expect("in memory");
+    let mut ws = hello(&base, &id, &token, 0).await;
+    assert_eq!(
+        live::close_code(&mut ws, WAIT).await,
+        Some(4409),
+        "closed as replaced"
+    );
+    assert_eq!(
+        handle.lock().await.status,
+        ir_server::orchestrator::SessionStatus::Abandoned,
+        "memory follows the database"
+    );
+    let (st, started) = db_state(uuid).await;
+    assert_ne!(st, "live");
+    assert!(started.is_none());
+    // A turn for it is refused too: it never runs.
+    assert_ne!(app.turn(&token, &id, "Hello?").await.status, StatusCode::OK);
+}

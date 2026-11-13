@@ -2393,3 +2393,109 @@ async fn meeting_prompts_and_notes_never_call_the_candidate_the_user() {
         );
     }
 }
+
+#[tokio::test]
+async fn meeting_live_prompts_never_describe_tools_and_the_director_keeps_them() {
+    const TOOLS: [&str; 6] = [
+        "show_question",
+        "next_phase",
+        "point_at",
+        "give_hint",
+        "hand_over",
+        "end_round",
+    ];
+    let catalog = catalog();
+    // An AI chair with two attendees (the pitch), a meeting the candidate runs with one attendee (the review), and
+    // the exec update as the rules alone build it.
+    let (s, plan) = pitch_plan(&catalog);
+    let chaired = meeting_session("m-tools", &catalog, MeetingState::from_parts(&s, &plan));
+    let llm = FakeLlm::new();
+    llm.create_json(
+        model_plan(
+            false,
+            Some("Ravi"),
+            vec![model_attendee("Ravi", &[], &["Whether this is fair"], -1)],
+            "Hey, thanks for setting this up.",
+        )
+        .to_string(),
+    );
+    let review = prepare(llm.as_ref(), &catalog, &review_setup())
+        .await
+        .unwrap();
+    let led = meeting_session(
+        "m-tools-led",
+        &catalog,
+        MeetingState::from_parts(&review_setup(), &review),
+    );
+    let llm = FakeLlm::new();
+    llm.create_err();
+    llm.create_err();
+    let exec = prepare(llm.as_ref(), &catalog, &exec_setup())
+        .await
+        .unwrap();
+    let rules_only = meeting_session(
+        "m-tools-exec",
+        &catalog,
+        MeetingState::from_parts(&exec_setup(), &exec),
+    );
+    let mut checked = 0;
+    for mut st in [chaired, led, rules_only] {
+        assert!(st.panel.len() >= 2 || st.id == "m-tools-led", "{}", st.id);
+        let full = (st.round.target_minutes * 60.0) as u64;
+        // The opening and the decision phase (its notes change near the end).
+        for remaining in [full - 10, 60] {
+            with_remaining(&mut st, remaining);
+            for p in st.panel.clone() {
+                let live_text: String = p.system.iter().map(|b| b.text.as_str()).collect();
+                let req = build_live_request(
+                    &st,
+                    &p.panelist_id,
+                    &UserInput::Speech("We grew fifteen percent a month.".into()),
+                    Instant::now(),
+                );
+                let sent: String = req.system.iter().map(|b| b.text.as_str()).collect();
+                let last_note = req.messages.last().map(Message::text).unwrap_or_default();
+                for t in TOOLS {
+                    assert!(
+                        !live_text.contains(t),
+                        "{} {}: live prompt names {t}",
+                        st.id,
+                        p.panelist_id
+                    );
+                    assert!(
+                        !sent.contains(t),
+                        "{} {}: live request names {t}",
+                        st.id,
+                        p.panelist_id
+                    );
+                    assert!(
+                        !last_note.contains(t),
+                        "{} {}: turn note names {t}: {last_note}",
+                        st.id,
+                        p.panelist_id
+                    );
+                }
+                assert!(req.tools.is_empty(), "the live call carries no tools");
+                assert!(
+                    !live_text.contains("[[tool:"),
+                    "{}: a marker is left",
+                    st.id
+                );
+                assert!(
+                    p.director_system.contains("hand_over")
+                        || p.director_system.contains("end_round"),
+                    "{} {}: the director lost the tool rules",
+                    st.id,
+                    p.panelist_id
+                );
+                assert!(
+                    !p.director_system.contains("[[tool:"),
+                    "{}: a marker is left",
+                    st.id
+                );
+                checked += 1;
+            }
+        }
+    }
+    assert!(checked >= 8, "{checked} prompts checked");
+}
