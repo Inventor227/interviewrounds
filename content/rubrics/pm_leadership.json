@@ -1,0 +1,97 @@
+{
+  "id": "rubric.pm_leadership",
+  "round_types": [
+    "pm_leadership"
+  ],
+  "title": "Leadership",
+  "scale": {
+    "1": {
+      "label": "below",
+      "name": "Below the bar",
+      "meaning": "Concerning for this level; this alone would likely block an offer."
+    },
+    "2": {
+      "label": "developing",
+      "name": "Developing",
+      "meaning": "Some signal, but clear gaps for this level."
+    },
+    "3": {
+      "label": "meets_bar",
+      "name": "Meets the bar",
+      "meaning": "What a solid candidate at the chosen level shows."
+    },
+    "4": {
+      "label": "above_bar",
+      "name": "Above the bar",
+      "meaning": "Would read as the next level up."
+    }
+  },
+  "level_bar": {
+    "junior": "Associate level: leading their own feature, influencing a small group of engineers and a designer.",
+    "mid": "Leading a product area with one team; influencing peers and their manager.",
+    "senior": "Leading across two or more teams; handling senior stakeholders and saying no with data.",
+    "staff": "Setting direction for an org or a group of teams; changing how decisions are made."
+  },
+  "competencies": [
+    {
+      "id": "ownership",
+      "name": "Ownership and impact",
+      "weight": 1,
+      "looks_for": "Decisions they owned, grounded in users and goals, with a measurable product or business result.",
+      "descriptors": {
+        "1": "Vague role in the story; no result or a result that is not theirs, or takes credit for others' work when probed.",
+        "2": "Owned some decisions; the result has no number or clear outcome.",
+        "3": "Clear decisions they owned, grounded in user needs and data, with a measurable result.",
+        "4": "Result at or above the level's scope, with clear learning applied to later work."
+      }
+    },
+    {
+      "id": "scope",
+      "name": "Scope for level",
+      "weight": 1,
+      "looks_for": "Whether the stories match the scope expected at the chosen level.",
+      "descriptors": {
+        "1": "Clearly below the level, for example task level stories for a senior role.",
+        "2": "One level below what the role expects.",
+        "3": "Matches the level: own feature at junior, a product area with one team at mid, two or more teams at senior, an org or group of teams at staff.",
+        "4": "Above the level's scope, with the candidate clearly leading it."
+      }
+    },
+    {
+      "id": "influence",
+      "name": "Influence and conflict",
+      "weight": 1,
+      "looks_for": "Getting people who do not report to them to move: aligning on goals, using data, saying no with an alternative, handling disagreement.",
+      "descriptors": {
+        "1": "Gets their way by authority or escalation only, or blames engineering, design or leadership.",
+        "2": "Some alignment, but resolves conflict mainly by escalating or by giving in.",
+        "3": "Aligns people on goals and data, says no with an alternative path, and describes the other side fairly.",
+        "4": "Turns disagreement into a better product decision and keeps strong relationships across functions."
+      }
+    },
+    {
+      "id": "communication",
+      "name": "Communication and self-awareness",
+      "weight": 1,
+      "looks_for": "Clear structure, direct answers to probes, honest lessons.",
+      "descriptors": {
+        "1": "Rambling with no structure, or defensive under probing.",
+        "2": "Weak structure; lessons are thin or generic.",
+        "3": "Clear situation, action and result; handles probes directly; an honest lesson.",
+        "4": "Concise, adapts depth to the question, and shows a real change in behaviour since."
+      }
+    }
+  ],
+  "scoring_notes": [
+    "Score the director's challenge phase on whether they held their position with reasons or updated with reasons; both can score well.",
+    "Polished delivery is not evidence. Specific actions, numbers and fair descriptions of others are.",
+    "Red flags are only the items in red_flags. Weak, wrong or incomplete answers lower the matching competency score and are never red flags."
+  ],
+  "red_flags": [
+    "Makes up facts and keeps defending them after being questioned",
+    "Story details change when probed, showing the experience was invented",
+    "Hostile, insulting or disrespectful toward the interviewer",
+    "Refuses to engage with the questions",
+    "Integrity issue, such as reading answers from another source or getting outside help during the round"
+  ]
+}

@@ -1,0 +1,285 @@
+/* Design tokens. Light theme: warm off-white pages, one deep accent, no gradients. */
+:root {
+  --bg: #faf8f5;
+  --surface: #ffffff;
+  --ink: #1c1b1a;
+  --muted: #6b6760;
+  --accent: #1f4e79;
+  --accent-ink: #ffffff;
+  --good: #2e7d4f;
+  --warn: #b26b00;
+  --bad: #a23b2a;
+  --line: #e7e3dc;
+
+  /* Headset panels: dark glass over passthrough with large light text. */
+  --glass: rgba(20, 22, 26, 0.78);
+  --glass-ink: #f4f2ee;
+
+  --radius: 14px;
+  --font: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --base: 17px;
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --space-7: 48px;
+  --space-8: 64px;
+
+  --shadow: 0 1px 2px rgba(28, 27, 26, 0.04), 0 4px 16px rgba(28, 27, 26, 0.06);
+  --page-max: 960px;
+
+  color-scheme: light;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  font-size: var(--base);
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--font);
+  font-size: 1rem;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+}
+
+h1,
+h2,
+h3 {
+  line-height: 1.2;
+  margin: 0 0 var(--space-3);
+  letter-spacing: -0.01em;
+}
+h1 {
+  font-size: 2rem;
+  font-weight: 700;
+}
+h2 {
+  font-size: 1.4rem;
+  font-weight: 650;
+}
+p {
+  margin: 0 0 var(--space-4);
+}
+
+a {
+  color: var(--accent);
+}
+
+:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
+/* ---------- Layout ---------- */
+
+.shell {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  max-width: var(--page-max);
+  width: 100%;
+  margin: 0 auto;
+  padding: var(--space-4) var(--space-4);
+}
+
+.wordmark {
+  font-weight: 700;
+  font-size: 1.05rem;
+  color: var(--ink);
+  text-decoration: none;
+  letter-spacing: -0.01em;
+}
+
+.nav {
+  display: flex;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+}
+.nav a {
+  color: var(--muted);
+  text-decoration: none;
+  font-size: 0.95rem;
+}
+.nav a:hover,
+.nav a[aria-current='page'] {
+  color: var(--ink);
+}
+
+.page {
+  flex: 1;
+  max-width: var(--page-max);
+  width: 100%;
+  margin: 0 auto;
+  padding: var(--space-6) var(--space-4) var(--space-8);
+}
+
+.lede {
+  color: var(--muted);
+  font-size: 1.1rem;
+  max-width: 36em;
+}
+
+/* ---------- Surfaces ---------- */
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: var(--space-5);
+}
+
+.tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: var(--space-4);
+  margin-top: var(--space-5);
+}
+
+.tile {
+  display: block;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: var(--space-5);
+  color: var(--ink);
+  text-decoration: none;
+  min-height: 120px;
+  transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+.tile:hover {
+  border-color: var(--accent);
+  box-shadow: var(--shadow);
+}
+.tile strong {
+  display: block;
+  font-size: 1.1rem;
+  margin-bottom: var(--space-2);
+}
+.tile span {
+  color: var(--muted);
+  font-size: 0.95rem;
+}
+
+.placeholder {
+  margin-top: var(--space-5);
+  color: var(--muted);
+  border-style: dashed;
+  box-shadow: none;
+  background: transparent;
+}
+
+.meta {
+  font-size: 0.9rem;
+  color: var(--muted);
+}
+.meta code {
+  font-size: 0.85rem;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 1px 6px;
+  color: var(--ink);
+}
+
+/* ---------- Controls ---------- */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  min-height: 48px;
+  padding: 0 var(--space-5);
+  border-radius: var(--radius);
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+  font-weight: 600;
+  text-decoration: none;
+  cursor: pointer;
+}
+.btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.btn-primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+}
+
+.row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  align-items: center;
+}
+
+/* ---------- Status colours ---------- */
+
+.good {
+  color: var(--good);
+}
+.warn {
+  color: var(--warn);
+}
+.bad {
+  color: var(--bad);
+}
+
+/* ---------- Headset panels (DOM overlays and previews) ---------- */
+
+.glass {
+  background: var(--glass);
+  color: var(--glass-ink);
+  border-radius: var(--radius);
+  padding: var(--space-5);
+  font-size: 1.25rem;
+}
+
+.xr-stage {
+  margin-top: var(--space-5);
+  aspect-ratio: 16 / 9;
+  width: 100%;
+  border-radius: var(--radius);
+  overflow: hidden;
+  background: var(--glass);
+}
+
+@media (max-width: 560px) {
+  h1 {
+    font-size: 1.6rem;
+  }
+  .page {
+    padding-top: var(--space-5);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    transition: none !important;
+  }
+}

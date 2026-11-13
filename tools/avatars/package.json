@@ -1,0 +1,15 @@
+{
+  "name": "avatar-tools",
+  "private": true,
+  "type": "module",
+  "description": "Rocketbox to GLB avatar pipeline: post-processing, animation library and checks.",
+  "scripts": {
+    "verify": "node verify.mjs"
+  },
+  "dependencies": {
+    "@gltf-transform/core": "4.5.1",
+    "@gltf-transform/extensions": "4.5.1",
+    "@gltf-transform/functions": "4.5.1",
+    "meshoptimizer": "1.2.0"
+  }
+}

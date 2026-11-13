@@ -1,0 +1,53 @@
+{
+  "id": "sde.coding.short",
+  "title": "Coding",
+  "summary": "Talk through one problem: approach, cost, then put the solution lines in order and dry run it.",
+  "role": "sde",
+  "round_type": "coding",
+  "length": "short",
+  "target_minutes": 8,
+  "hard_stop_minutes": 9,
+  "silence_wait_seconds": 60,
+  "interrupt_after_seconds": 120,
+  "panel": {
+    "lead": "persona.maya",
+    "second": null,
+    "second_enters_phase": null
+  },
+  "phases": [
+    {
+      "id": "problem",
+      "title": "Problem",
+      "minutes": 1.5,
+      "goal": "Introduce yourself in one line, state the problem once and call show_question. Answer clarifying questions briefly; do not prompt for them."
+    },
+    {
+      "id": "approach",
+      "title": "Approach",
+      "minutes": 2.5,
+      "goal": "Get an approach plus its time and space cost. Brute force only: ask once if they can do better. Stuck: hint ladder, one level at a time.",
+      "must_cover": [
+        "approach",
+        "complexity"
+      ]
+    },
+    {
+      "id": "dry_run",
+      "title": "Dry run",
+      "minutes": 3,
+      "goal": "The code panel shows the solution lines shuffled with one or two decoys. Ask them to order the lines, set aside the decoys, and walk one small input through.",
+      "uses_whiteboard": true
+    },
+    {
+      "id": "twist",
+      "title": "Twist",
+      "minutes": 1,
+      "goal": "Give the twist in one or two sentences; they answer in words. One follow up, then close and call end_round."
+    }
+  ],
+  "rubric_id": "rubric.coding",
+  "question_pool": "bank.coding",
+  "hands": "code_panel",
+  "board_kit": "coding",
+  "full_version": "sde.coding.full"
+}

@@ -1,0 +1,75 @@
+{
+  "id": "sde.coding.full",
+  "title": "Coding",
+  "summary": "One problem and a follow up, thought out loud: clarify, approach, dictate code, test it, then a twist.",
+  "role": "sde",
+  "round_type": "coding",
+  "length": "full",
+  "target_minutes": 30,
+  "hard_stop_minutes": 33,
+  "silence_wait_seconds": 60,
+  "interrupt_after_seconds": 120,
+  "panel": {
+    "lead": "persona.maya",
+    "second": null,
+    "second_enters_phase": null
+  },
+  "phases": [
+    {
+      "id": "intro",
+      "title": "Intro",
+      "minutes": 1,
+      "goal": "Introduce yourself and the format in under twenty seconds: one problem, maybe a follow up, think out loud."
+    },
+    {
+      "id": "problem",
+      "title": "Problem",
+      "minutes": 3,
+      "goal": "State the problem once and call show_question. Answer clarifying questions briefly and only what was asked. If none come within a minute, do not prompt."
+    },
+    {
+      "id": "approach",
+      "title": "Approach",
+      "minutes": 6,
+      "goal": "Let them propose. Ask for time and space. Brute force only: 'Can we do better?' once. Stuck: hint ladder, one level at a time, call give_hint.",
+      "must_cover": [
+        "approach",
+        "complexity"
+      ]
+    },
+    {
+      "id": "implement",
+      "title": "Code",
+      "minutes": 10,
+      "goal": "They dictate code into the panel. Stay quiet; at most one 'why' question. Flag a bug only by asking about a specific input, with point_at on the line.",
+      "uses_whiteboard": true
+    },
+    {
+      "id": "test",
+      "title": "Test",
+      "minutes": 5,
+      "goal": "Ask how they would check it works. If they skip edge cases, ask for one. Ask them to trace a small input line by line.",
+      "must_cover": [
+        "edge_cases",
+        "trace"
+      ]
+    },
+    {
+      "id": "twist",
+      "title": "Twist",
+      "minutes": 4,
+      "goal": "Give the twist that changes a constraint. Ask what changes in their approach and its cost."
+    },
+    {
+      "id": "wrap",
+      "title": "Wrap up",
+      "minutes": 1,
+      "goal": "'That's time. Any questions for me?' Answer one briefly, close in one line, call end_round."
+    }
+  ],
+  "rubric_id": "rubric.coding",
+  "question_pool": "bank.coding",
+  "hands": "code_panel",
+  "board_kit": "coding",
+  "short_version": "sde.coding.short"
+}

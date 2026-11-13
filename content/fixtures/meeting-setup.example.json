@@ -1,0 +1,26 @@
+{
+  "template_id": "exec_update",
+  "goal": "Get approval to move one engineer from the payments team for six weeks.",
+  "user_role": "Engineering lead for the mobile launch",
+  "attendees": [
+    {
+      "name": "Dana",
+      "role": "VP of Engineering",
+      "cares_about": ["launch date", "bottom line first"],
+      "personality": "skeptical",
+      "decision_power": "approver"
+    },
+    {
+      "name": "Owen",
+      "role": "Payments lead",
+      "cares_about": ["his team's roadmap"],
+      "personality": "neutral",
+      "likely_objections": ["Losing an engineer delays the refunds work"]
+    }
+  ],
+  "length": "short",
+  "key_facts": ["Launch is slipping 3 weeks", "One extra engineer brings it back to 1 week late"],
+  "ask": "One payments engineer for six weeks",
+  "notes": "Status: QA found 40 open bugs, 12 of them blockers.",
+  "difficulty": "realistic"
+}

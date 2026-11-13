@@ -1,0 +1,56 @@
+{
+  "schema": "ir.board.v1",
+  "round": { "id": "s_01JDEMO0000000000000000001", "type": "hld", "question_id": "hld_url_shortener", "language": null },
+  "rev": 42,
+  "size": { "w": 64, "h": 40 },
+  "brief": { "question": "Design a URL shortener", "lines": ["100M new URLs per day", "Reads are 100x writes"] },
+  "items": [
+    { "id": "n1", "kind": "component", "type": "client", "label": "Mobile app", "x": 4, "y": 18, "w": 8, "h": 5, "group": null },
+    { "id": "n2", "kind": "component", "type": "lb", "label": "LB", "x": 16, "y": 18, "w": 8, "h": 5 },
+    { "id": "n3", "kind": "component", "type": "service", "label": "Shortener", "x": 28, "y": 18, "w": 8, "h": 5, "notes": ["stateless", "base62"] },
+    { "id": "n4", "kind": "component", "type": "cache", "label": "Redis", "x": 28, "y": 6, "w": 8, "h": 5 },
+    { "id": "n5", "kind": "component", "type": "kv", "label": "URL store", "x": 42, "y": 18, "w": 8, "h": 5 },
+    {
+      "id": "c1", "kind": "class", "label": "ParkingLot", "class_kind": "class",
+      "fields": [{ "id": "c1_f1", "vis": "-", "name": "levels", "type": "List<Level>" }],
+      "methods": [{ "id": "c1_m1", "vis": "+", "name": "park", "params": [{ "name": "v", "type": "Vehicle" }], "returns": "Ticket" }],
+      "x": 6, "y": 6, "w": 14, "h": 12
+    },
+    {
+      "id": "c2", "kind": "class", "label": "Level", "class_kind": "class",
+      "fields": [{ "id": "c2_f1", "vis": "-", "name": "spots", "type": "List<Spot>" }],
+      "methods": [],
+      "x": 6, "y": 26, "w": 12, "h": 8
+    },
+    { "id": "s1", "kind": "sticky", "lane": "pain", "text": "Can't find parking near office", "group": "g1", "votes": 2, "quad": null, "x": 20, "y": 10 },
+    { "id": "g1", "kind": "group", "label": "Parking", "x": 18, "y": 8, "w": 20, "h": 14 },
+    { "id": "m1", "kind": "metric", "role": "north_star", "label": "Weekly active riders", "x": 26, "y": 2 },
+    { "id": "i1", "kind": "ink", "points": [[12.1, 30.4], [12.6, 30.9]], "recognized": null },
+    { "id": "k1", "kind": "interviewer_card", "title": "Signal", "body": "Checkout conversion -8% WoW since Tue", "x": 46, "y": 28 }
+  ],
+  "edges": [
+    { "id": "e1", "from": "n1", "to": "n2", "dir": "->", "label": null, "rel": null },
+    { "id": "e2", "from": "n3", "to": "n4", "dir": "->", "label": "read-through", "rel": null },
+    { "id": "e3", "from": "c2", "to": "c1", "dir": "->", "label": "1..*", "rel": "has_a" }
+  ],
+  "code": {
+    "language": "python",
+    "lines": [
+      { "id": "l1", "indent": 0, "text": "def two_sum(nums, target):", "src": "scribe" },
+      { "id": "l2", "indent": 1, "text": "seen = {}", "src": "scribe" },
+      { "id": "l3", "indent": 1, "text": "for i, x in enumerate(nums):", "src": "scribe" }
+    ],
+    "approach": ["Hash map of value to index", "One pass"],
+    "complexity": { "time": "O(n)", "space": "O(n)" },
+    "trace": [{ "line": "l3", "t": 812.4 }]
+  },
+  "meeting": {
+    "agenda": [{ "id": "a1", "text": "Problem", "done": true, "t": 95.0 }],
+    "numbers": [{ "id": "k_price", "label": "Price per seat", "value": "$12 a month" }],
+    "shown": [{ "kind": "slide", "ref": 4, "t": 300.2 }],
+    "parked": ["What is the payback period?"]
+  },
+  "focus": "n4",
+  "ghosts": [{ "op_id": "g_7f2c", "src": "scribe", "op": "edge.create", "args": { "id": "e4", "from": "n3", "to": "n5" } }],
+  "op_ids": ["o_001", "o_002", "o_003"]
+}

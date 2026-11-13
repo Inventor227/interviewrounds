@@ -1,0 +1,46 @@
+{
+  "id": "sde.object_design.short",
+  "title": "Object design",
+  "summary": "Scope a small system, name its core classes on the sheet, then handle one change request.",
+  "role": "sde",
+  "round_type": "object_design",
+  "length": "short",
+  "target_minutes": 7,
+  "hard_stop_minutes": 8,
+  "silence_wait_seconds": 60,
+  "interrupt_after_seconds": 120,
+  "panel": {
+    "lead": "persona.maya",
+    "second": null,
+    "second_enters_phase": null
+  },
+  "phases": [
+    {
+      "id": "requirements",
+      "title": "Requirements",
+      "minutes": 2,
+      "goal": "Introduce yourself in one line, state the problem and call show_question. Let them list actors and use cases. Ask once what is out of scope if it keeps growing.",
+      "must_cover": [
+        "use_cases"
+      ]
+    },
+    {
+      "id": "classes",
+      "title": "Classes",
+      "minutes": 3,
+      "goal": "They name four to six core classes and what each owns. If one class holds everything, ask what it is responsible for, with point_at.",
+      "uses_whiteboard": true
+    },
+    {
+      "id": "extension",
+      "title": "Extension",
+      "minutes": 2,
+      "goal": "Give the extension request. Ask what changes in their model and how many classes they would edit. Close and call end_round."
+    }
+  ],
+  "rubric_id": "rubric.object_design",
+  "question_pool": "bank.object_design",
+  "hands": "class_cards",
+  "board_kit": "lld",
+  "full_version": "sde.object_design.full"
+}

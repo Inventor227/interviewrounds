@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rounds.dijmo.com/schema/persona.schema.json",
+  "title": "Persona",
+  "description": "One file per interviewer or chair in content/personas/. Names are fictional.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id", "display_name", "title", "avatar_id", "voice_id", "style", "warmth", "pushback", "hint_generosity", "speech_habits", "never"
+  ],
+  "properties": {
+    "id": { "type": "string", "pattern": "^persona\\.[a-z]+$" },
+    "display_name": { "type": "string", "minLength": 1, "maxLength": 24 },
+    "title": { "type": "string", "minLength": 1, "maxLength": 48, "description": "Role played, e.g. \"Staff Engineer\"." },
+    "avatar_id": { "enum": ["f01", "f02", "f03", "m02", "m04", "m05"] },
+    "voice_id": { "type": "string", "minLength": 1, "description": "Key into content/voices.json." },
+    "style": { "enum": ["warm", "neutral", "tough"] },
+    "warmth": { "type": "integer", "minimum": 0, "maximum": 3 },
+    "pushback": { "type": "integer", "minimum": 0, "maximum": 3 },
+    "hint_generosity": { "type": "integer", "minimum": 0, "maximum": 3 },
+    "interrupts_after_seconds": { "type": ["integer", "null"], "minimum": 0, "description": "Overrides the round's interrupt_after_seconds when set." },
+    "behaviour": { "type": "string", "description": "How this person runs a round (prompt text)." },
+    "cut_in_keywords": { "type": "array", "items": { "type": "string" }, "description": "Panel second: words in the user's answer that let this person cut in." },
+    "speech_habits": { "type": "array", "items": { "type": "string" } },
+    "never": { "type": "array", "items": { "type": "string" } }
+  }
+}
