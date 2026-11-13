@@ -1,0 +1,311 @@
+#!/usr/bin/env node
+// End-to-end smoke round against a deployed server, with the fake voice (no voice platform session).
+//
+//   DEV_KEY=... node tools/smoke/round.mjs [--origin https://rounds.dijmo.com] [--out <dir>]
+//
+// Creates a short system design round, opens the session socket, plays the browser's part (typed events, four
+// answers through the custom LLM endpoint, playback reports, three board ops and a focus), ends the round, waits for
+// the headset card and the report, then checks the report against content/schema/report.v1.schema.json.
+// Writes events.json (every frame and call, timed), report.json and summary.json to --out. Exit 0 on success.
+// The model calls are real (live turns, director, Scribe, scoring). DEV_KEY is never printed.
+
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import Ajv2020 from "ajv/dist/2020.js";
+import addFormats from "ajv-formats";
+
+const HERE = dirname(fileURLToPath(import.meta.url));
+const REPO = resolve(HERE, "../..");
+
+const args = process.argv.slice(2);
+const opt = (name, dflt) => {
+  const i = args.indexOf(name);
+  return i >= 0 ? args[i + 1] : dflt;
+};
+const ORIGIN = opt("--origin", process.env.SMOKE_ORIGIN || "https://rounds.dijmo.com").replace(/\/+$/, "");
+const OUT = resolve(opt("--out", join(process.cwd(), "smoke-out")));
+const DEV_KEY = process.env.DEV_KEY;
+if (!DEV_KEY) {
+  console.error("smoke: DEV_KEY is required (the fake voice is dev-only)");
+  process.exit(2);
+}
+
+const ANSWERS = [
+  "Let me scope it first. I'd assume a few million users, mostly reads, and a burst of traffic at peak. " +
+    "The key requirements are that nobody loses data, reads stay fast under that burst, and writes are never " +
+    "applied twice. I'd target about two hundred milliseconds at the ninety ninth percentile for reads and accept " +
+    "a little staleness on screens that only display data.",
+  "Clients hit a load balancer in front of a stateless API service. The API service writes to Postgres, which is " +
+    "the source of truth, and I'd put a Redis cache in front of it for the hot reads, so most of the read traffic " +
+    "never touches the database. Writes use a conditional update so the same row can only change once.",
+  "For the burst I'd add a Kafka queue between the API service and the workers that do the slow part, so the API " +
+    "can answer quickly and the workers drain the queue at a steady rate. Every message carries an idempotency key, " +
+    "so a retry or a duplicate delivery does nothing the second time.",
+  "If Redis goes down the reads fall back to Postgres read replicas, slower but still correct, and the load " +
+    "balancer sheds the lowest priority traffic first. I'd watch queue depth, cache hit rate and the error rate, " +
+    "and page someone when the queue keeps growing for more than a few minutes.",
+];
+
+const t0 = Date.now();
+const now = () => Date.now() - t0;
+const log = [];
+const record = (dir, type, data) => log.push({ t_ms: now(), dir, type, data });
+const say = (msg) => console.log(`[${(now() / 1000).toFixed(1)}s] ${msg}`);
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+let cookie = "";
+async function api(method, path, body, extra = {}) {
+  const headers = { Accept: "application/json", ...extra };
+  if (cookie) headers.Cookie = cookie;
+  if (body) headers["Content-Type"] = "application/json";
+  const started = now();
+  const res = await fetch(`${ORIGIN}${path}`, { method, headers, body: body ? JSON.stringify(body) : undefined });
+  const set = res.headers.get("set-cookie");
+  if (set) {
+    const m = set.match(/ir_id=[^;]+/);
+    if (m) cookie = m[0];
+  }
+  const text = await res.text();
+  let data = null;
+  try { data = text ? JSON.parse(text) : null; } catch { data = text; }
+  record("http", `${method} ${path.replace(/[0-9a-f-]{36}/g, ":id")}`, { status: res.status, ms: now() - started });
+  return { status: res.status, data };
+}
+
+// ---------- socket ----------
+const frames = [];
+const waiters = [];
+let ws;
+let clientSeq = 0;
+let closeCode = null;
+
+let lastState = "";
+function onFrame(f) {
+  frames.push({ t_ms: now(), f });
+  if (f.t === "round.state") {
+    // Snapshots arrive every second; only changes of phase, floor, brief or status are logged.
+    const sig = JSON.stringify([f.d.status, f.d.phase_index, f.d.floor, f.d.brief]);
+    if (sig !== lastState) record("in", f.t, f.d);
+    lastState = sig;
+  } else if (f.t !== "pong") {
+    record("in", f.t, f.d);
+  }
+  for (const w of [...waiters]) {
+    if (w.pred(f)) {
+      waiters.splice(waiters.indexOf(w), 1);
+      w.resolve(f);
+    }
+  }
+}
+
+function waitFrame(pred, ms, what) {
+  const seen = frames.find((x) => x.t_ms >= (pred.since ?? 0) && pred(x.f));
+  if (seen) return Promise.resolve(seen.f);
+  return new Promise((resolveP, reject) => {
+    const w = { pred, resolve: (f) => { clearTimeout(timer); resolveP(f); } };
+    const timer = setTimeout(() => {
+      waiters.splice(waiters.indexOf(w), 1);
+      reject(new Error(`timed out after ${ms} ms waiting for ${what}`));
+    }, ms);
+    waiters.push(w);
+  });
+}
+
+/** Waits for a frame that arrives from now on. */
+function next(pred, ms, what) {
+  return new Promise((resolveP, reject) => {
+    const w = { pred, resolve: (f) => { clearTimeout(timer); resolveP(f); } };
+    const timer = setTimeout(() => {
+      waiters.splice(waiters.indexOf(w), 1);
+      reject(new Error(`timed out after ${ms} ms waiting for ${what}`));
+    }, ms);
+    waiters.push(w);
+  });
+}
+
+function send(t, d) {
+  const seq = t === "hello" || t === "ping" ? 0 : ++clientSeq;
+  ws.send(JSON.stringify({ t, seq, d }));
+  record("out", t, d);
+  return seq;
+}
+
+// ---------- the voice turn (what the voice platform would send) ----------
+const history = [];
+async function turn(sessionId, token, text, label) {
+  const messages = [...history, { role: "user", content: text }];
+  const started = now();
+  const res = await fetch(`${ORIGIN}/v1/chat/completions`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json", Accept: "text/event-stream" },
+    body: JSON.stringify({
+      model: "interview-rounds",
+      stream: true,
+      messages,
+      fishaudio_extra_body: { session_id: sessionId, panelist_id: "p1" },
+    }),
+  });
+  if (!res.ok) throw new Error(`turn ${label}: HTTP ${res.status} ${await res.text()}`);
+  let reply = "";
+  let ttft = null;
+  const decoder = new TextDecoder();
+  let buf = "";
+  for await (const chunk of res.body) {
+    buf += decoder.decode(chunk, { stream: true });
+    let i;
+    while ((i = buf.indexOf("\n")) >= 0) {
+      const line = buf.slice(0, i).trim();
+      buf = buf.slice(i + 1);
+      if (!line.startsWith("data:")) continue;
+      const payload = line.slice(5).trim();
+      if (payload === "[DONE]") continue;
+      try {
+        const delta = JSON.parse(payload).choices?.[0]?.delta?.content;
+        if (delta) {
+          if (ttft === null) ttft = now() - started;
+          reply += delta;
+        }
+      } catch { /* keep-alive or comment */ }
+    }
+  }
+  const total = now() - started;
+  history.push({ role: "user", content: text }, { role: "assistant", content: reply });
+  record("turn", label, { user: text, reply, ttft_ms: ttft, total_ms: total });
+  say(`${label}: first text ${ttft} ms, ${total} ms: "${reply}"`);
+  return { reply, ttft, total };
+}
+
+function spoken(reply) {
+  // The browser reports the first words as the voice plays them.
+  send("voice.spoken", { panelist_id: "p1", text_prefix: reply.slice(0, 60) });
+}
+
+async function main() {
+  mkdirSync(OUT, { recursive: true });
+  const summary = { origin: ORIGIN, started_at: new Date(t0).toISOString(), checks: {} };
+  const check = (name, ok, detail) => {
+    summary.checks[name] = { ok: !!ok, ...(detail !== undefined ? { detail } : {}) };
+    say(`${ok ? "PASS" : "FAIL"} ${name}${detail !== undefined ? `: ${JSON.stringify(detail)}` : ""}`);
+  };
+
+  const me = await api("GET", "/api/me");
+  check("guest identity", me.status === 200 && cookie, { status: me.status });
+  const created = await api(
+    "POST",
+    "/api/sessions",
+    { mode: "interview", round_id: "sde.system_design.short", length: "short", level: "mid", style: "neutral", voice: "fake" },
+    { "X-Dev-Key": DEV_KEY },
+  );
+  if (created.status !== 200) throw new Error(`create: HTTP ${created.status} ${JSON.stringify(created.data)}`);
+  const { session_id: id, client_token: token, ws_url } = created.data;
+  summary.session_id = id;
+  say(`session ${id}`);
+
+  const wsOrigin = ORIGIN.replace(/^http/, "ws");
+  ws = new WebSocket(`${wsOrigin}${ws_url}`, { headers: { Origin: ORIGIN } });
+  ws.onmessage = (ev) => onFrame(JSON.parse(typeof ev.data === "string" ? ev.data : ev.data.toString()));
+  ws.onclose = (ev) => { closeCode = ev.code; record("in", "close", { code: ev.code, reason: ev.reason }); };
+  await new Promise((r, j) => { ws.onopen = r; ws.onerror = j; });
+  send("hello", { client_token: token, last_seq: 0 });
+  const ping = setInterval(() => { if (ws.readyState === 1) send("ping", {}); }, 15000);
+
+  const state = await waitFrame((f) => f.t === "round.state", 5000, "round.state");
+  check("brief card before the opener", state.d.brief?.question && state.d.brief.lines?.length > 0, state.d.brief);
+
+  const opener = await turn(id, token, "[event: start]", "opener");
+  spoken(opener.reply);
+
+  const turns = [];
+  // Answer 1, then the board.
+  let r = await turn(id, token, ANSWERS[0], "answer 1");
+  turns.push(r);
+  spoken(r.reply);
+  const ops = [
+    { op_id: "smoke-o1", src: "hand", op: "item.create", args: { id: "n1", kind: "component", type: "service", label: "API service", x: 6, y: 16, w: 8, h: 5 } },
+    { op_id: "smoke-o2", src: "hand", op: "item.create", args: { id: "n2", kind: "component", type: "db", label: "Postgres", x: 30, y: 16, w: 8, h: 5 } },
+    { op_id: "smoke-o3", src: "hand", op: "edge.create", args: { id: "e1", from: "n1", to: "n2" } },
+  ];
+  const acks = [];
+  for (const op of ops) {
+    const ack = next((f) => f.t === "board.ack" && f.d.op_id === op.op_id, 5000, `ack ${op.op_id}`);
+    send("board.op", { ...op, rev_base: acks.length, at_ms: Date.now() });
+    acks.push((await ack).d);
+  }
+  check("board ops acked with revs 1..3", acks.map((a) => a.rev).join(",") === "1,2,3", acks);
+  send("board.focus", { item_id: "n1" });
+
+  // Answer 2 names components: the Scribe should suggest some after playback.
+  r = await turn(id, token, ANSWERS[1], "answer 2");
+  turns.push(r);
+  const ghostsAfter2 = next((f) => f.t === "board.ghosts" && f.d.ghosts?.length > 0, 15000, "board.ghosts");
+  const spokenAt = now();
+  spoken(r.reply);
+  let ghosts = null;
+  try {
+    ghosts = await ghostsAfter2;
+    check("Scribe ghosts after an answer naming components", true, { ms_after_playback: now() - spokenAt, ghosts: ghosts.d.ghosts.map((g) => `${g.op} ${g.args?.label ?? g.args?.text ?? g.args?.id ?? ""}`) });
+  } catch (e) {
+    check("Scribe ghosts after an answer naming components", false, e.message);
+  }
+
+  for (const [i, text] of ANSWERS.slice(2).entries()) {
+    r = await turn(id, token, text, `answer ${i + 3}`);
+    turns.push(r);
+    spoken(r.reply);
+    await sleep(1500);
+  }
+
+  // The user ends the round: the interviewer says goodbye, then the round ends.
+  send("ui.event", { kind: "end", reason: "user_ended" });
+  const ended = next((f) => f.t === "round.ended", 40000, "round.ended");
+  const closing = await turn(id, token, "[event: ending]", "closing");
+  spoken(closing.reply);
+  const endedF = await ended;
+  const endedAt = now();
+  check("round ended", endedF.d.reason === "user_ended", endedF.d);
+
+  const card = next((f) => f.t === "report.progress" && f.d.stage === "card", 120000, "headset card");
+  const ready = next((f) => (f.t === "report.ready") || (f.t === "error" && f.d.code === "report_failed"), 150000, "report.ready");
+  try {
+    const c = await card;
+    check("headset card", !!c.d.card?.one_line, { ms_after_end: now() - endedAt, card: c.d.card });
+  } catch (e) {
+    check("headset card", false, e.message);
+  }
+  const done = await ready;
+  check("report ready", done.t === "report.ready", { ms_after_end: now() - endedAt, frame: done.t });
+  clearInterval(ping);
+  await sleep(1500);
+  check("socket closed 4409 after the report", closeCode === 4409, { close: closeCode });
+  if (ws.readyState === 1) ws.close();
+
+  const rep = await api("GET", `/api/sessions/${id}/report`);
+  writeFileSync(join(OUT, "report.json"), JSON.stringify(rep.data, null, 2) + "\n");
+  const ajv = new Ajv2020({ allErrors: true, strict: false });
+  addFormats(ajv);
+  const schema = JSON.parse(readFileSync(join(REPO, "content/schema/report.v1.schema.json"), "utf8"));
+  const valid = rep.status === 200 && ajv.validate(schema, rep.data);
+  check("report matches report.v1", valid, valid ? { verdict: rep.data.headline?.verdict, summary: rep.data.headline?.summary } : ajv.errors?.slice(0, 5) ?? rep.status);
+
+  const ttfts = [opener, ...turns, closing].map((t) => t.ttft).filter((x) => x !== null);
+  summary.timings = {
+    turn_first_text_ms: ttfts,
+    turn_first_text_p50_ms: ttfts.sort((a, b) => a - b)[Math.floor(ttfts.length / 2)],
+    total_s: Math.round(now() / 100) / 10,
+  };
+  summary.ok = Object.values(summary.checks).every((c) => c.ok);
+  writeFileSync(join(OUT, "events.json"), JSON.stringify(log, null, 2) + "\n");
+  writeFileSync(join(OUT, "summary.json"), JSON.stringify(summary, null, 2) + "\n");
+  say(`${summary.ok ? "SMOKE OK" : "SMOKE FAILED"}; artifacts in ${OUT}`);
+  process.exit(summary.ok ? 0 : 1);
+}
+
+main().catch((err) => {
+  try {
+    mkdirSync(OUT, { recursive: true });
+    writeFileSync(join(OUT, "events.json"), JSON.stringify(log, null, 2) + "\n");
+  } catch { /* nothing more to save */ }
+  console.error(`smoke: ${err.message}`);
+  process.exit(1);
+});
