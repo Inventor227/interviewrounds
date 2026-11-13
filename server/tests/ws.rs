@@ -1,0 +1,463 @@
+//! The session socket: hello and close codes, acks and dedupe per client token, replay by server seq, the round
+//! clock and time checks, and ending a round whose browser is gone. Needs Postgres (remote.sh --pg).
+
+mod common;
+
+use std::time::Duration;
+
+use axum::http::{Method, StatusCode};
+use common::live::{self, Next, Options, frame_of, hello, send, short_req};
+use ir_server::orchestrator::Turn;
+use ir_server::ws::SessionTiming;
+use serde_json::{Value, json};
+use uuid::Uuid;
+
+const WAIT: Duration = Duration::from_secs(3);
+
+async fn new_session(app: &live::TestApp, voice: &str) -> (String, String, String) {
+    let cookie = app.guest().await;
+    let res = app.create(&cookie, short_req(voice)).await;
+    assert_eq!(res.status, StatusCode::OK, "{}", res.body);
+    (
+        cookie,
+        res.body["session_id"].as_str().unwrap().to_string(),
+        res.body["client_token"].as_str().unwrap().to_string(),
+    )
+}
+
+fn op(op_id: &str) -> Value {
+    json!({"op_id": op_id, "rev_base": 0, "src": "hand", "op": "item.create",
+           "args": {"id": op_id, "kind": "component", "label": "API"}, "at_ms": 1200})
+}
+
+#[tokio::test]
+async fn ws_rejects_bad_hellos_with_close_codes() {
+    let app = live::test_app(Options::default()).await;
+    let base = app.serve().await;
+    let (_, id, token) = new_session(&app, "fake").await;
+
+    let mut ws = hello(&base, &Uuid::new_v4().to_string(), &token, 0).await;
+    assert_eq!(live::close_code(&mut ws, WAIT).await, Some(4404));
+    let mut ws = hello(&base, "not-a-uuid", &token, 0).await;
+    assert_eq!(live::close_code(&mut ws, WAIT).await, Some(4404));
+    let mut ws = hello(&base, &id, &"0".repeat(64), 0).await;
+    assert_eq!(live::close_code(&mut ws, WAIT).await, Some(4401));
+    // The first frame must be hello.
+    let mut ws = live::connect(&base, &id).await;
+    send(&mut ws, "ping", 0, json!({})).await;
+    assert_eq!(live::close_code(&mut ws, WAIT).await, Some(4401));
+}
+
+#[tokio::test]
+async fn ws_acks_and_persists_board_op() {
+    let app = live::test_app(Options::default()).await;
+    let base = app.serve().await;
+    let (_, id, token) = new_session(&app, "fake").await;
+    let uuid = Uuid::parse_str(&id).unwrap();
+
+    let mut ws = hello(&base, &id, &token, 0).await;
+    // A snapshot right after hello; the round has started.
+    let state = frame_of(&mut ws, "round.state", WAIT)
+        .await
+        .expect("round.state");
+    assert_eq!(state["seq"], 0);
+    assert_eq!(state["d"]["status"], "live");
+    assert_eq!(state["d"]["time_check_due"], false);
+    assert_eq!(state["d"]["phases"][1]["uses_whiteboard"], true);
+    let (status, started): (String, Option<chrono::DateTime<chrono::Utc>>) =
+        sqlx::query_as("select status, started_at from sessions where id = $1")
+            .bind(uuid)
+            .fetch_one(&app.state.db)
+            .await
+            .unwrap();
+    assert_eq!(status, "live");
+    assert!(started.is_some());
+
+    send(&mut ws, "board.op", 1, op("op-a")).await;
+    let ack = frame_of(&mut ws, "board.ack", WAIT)
+        .await
+        .expect("board.ack");
+    assert_eq!(ack["d"], json!({"op_id": "op-a", "rev": 1}));
+    assert!(
+        ack["seq"].as_u64().unwrap() >= 1,
+        "acks are numbered: {ack}"
+    );
+    assert_eq!(ack["ack"], 1);
+
+    let row: (String, Option<bool>, Option<i64>, Option<i64>, Value) = sqlx::query_as(
+        "select src, accepted, rev, t_ms, args from board_ops where session_id = $1 and op_id = 'op-a'",
+    )
+    .bind(uuid)
+    .fetch_one(&app.state.db)
+    .await
+    .unwrap();
+    assert_eq!(row.0, "hand");
+    assert_eq!(row.1, None, "stored, not evaluated yet");
+    assert_eq!(row.2, Some(1));
+    assert!(row.3.is_some());
+    assert_eq!(row.4["label"], "API");
+
+    // The same frame again (same seq) and the same op under a new seq: neither is stored or acked twice.
+    send(&mut ws, "board.op", 1, op("op-a")).await;
+    send(&mut ws, "board.op", 2, op("op-a")).await;
+    send(&mut ws, "board.op", 3, op("op-b")).await;
+    let ack = frame_of(&mut ws, "board.ack", WAIT)
+        .await
+        .expect("second ack");
+    assert_eq!(ack["d"], json!({"op_id": "op-b", "rev": 2}));
+    assert_eq!(ack["ack"], 3);
+    let n: i64 = sqlx::query_scalar("select count(*) from board_ops where session_id = $1")
+        .bind(uuid)
+        .fetch_one(&app.state.db)
+        .await
+        .unwrap();
+    assert_eq!(n, 2);
+
+    // Other frames are stored too; an op without op_id is answered and not stored.
+    send(
+        &mut ws,
+        "transcript.mark",
+        4,
+        json!({"segment_id": "s1", "panelist_id": "p1",
+        "first_at_ms": 100, "final_at_ms": 900, "text": "hello"}),
+    )
+    .await;
+    send(
+        &mut ws,
+        "head.samples",
+        5,
+        json!({"samples": [
+        {"t_ms": 0, "yaw": 1.0, "pitch": 0.0, "speaking": true, "target": "p1"},
+        {"t_ms": 200, "yaw": 2.0, "pitch": 0.0, "speaking": true, "target": "p1"}]}),
+    )
+    .await;
+    send(
+        &mut ws,
+        "voice.state",
+        6,
+        json!({"panelist_id": "p1", "mode": "speaking", "at_ms": 5000,
+        "latency": {"user_final_at_ms": 3000, "thinking_at_ms": 3400, "first_text_at_ms": 4300}}),
+    )
+    .await;
+    send(
+        &mut ws,
+        "board.op",
+        7,
+        json!({"src": "hand", "op": "item.create"}),
+    )
+    .await;
+    let err = frame_of(&mut ws, "error", WAIT).await.expect("error frame");
+    assert_eq!(err["d"]["code"], "op_rejected");
+    send(&mut ws, "ping", 0, json!({})).await;
+    let pong = frame_of(&mut ws, "pong", WAIT).await.expect("pong");
+    assert_eq!(pong["seq"], 0);
+    assert_eq!(pong["ack"], 7);
+    let counts: (i64, i64, i64) = sqlx::query_as(
+        "select (select count(*) from marks), (select count(*) from head_batches), \
+                (select count(*) from session_events where kind = 'voice.state' and data ? 'latency')",
+    )
+    .fetch_one(&app.state.db)
+    .await
+    .unwrap();
+    assert_eq!(counts, (1, 1, 1));
+    // The processed record is kept per token.
+    live::eventually("client seq saved", WAIT, || async {
+        let seq: i64 = sqlx::query_scalar("select last_client_seq from session_tokens")
+            .fetch_one(&app.state.db)
+            .await
+            .unwrap();
+        seq == 7
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn ws_resume_replays_from_last_seq() {
+    let app = live::test_app(Options::default()).await;
+    let base = app.serve().await;
+    let (cookie, id, token) = new_session(&app, "fake").await;
+
+    let mut ws = hello(&base, &id, &token, 0).await;
+    send(&mut ws, "board.op", 1, op("op-1")).await;
+    let a1 = frame_of(&mut ws, "board.ack", WAIT).await.unwrap();
+    send(&mut ws, "board.op", 2, op("op-2")).await;
+    let a2 = frame_of(&mut ws, "board.ack", WAIT).await.unwrap();
+    let (s1, s2) = (a1["seq"].as_u64().unwrap(), a2["seq"].as_u64().unwrap());
+    assert!(s2 > s1);
+    drop(ws);
+
+    // Same token, saw up to s1: the server replays from s1 + 1 and remembers what it processed.
+    let mut ws = hello(&base, &id, &token, s1).await;
+    let replay = frame_of(&mut ws, "board.ack", WAIT)
+        .await
+        .expect("replayed ack");
+    assert_eq!(replay["seq"].as_u64().unwrap(), s2);
+    assert_eq!(replay["d"]["op_id"], "op-2");
+    assert_eq!(replay["ack"], 2);
+    // The client replays its unacked frame; it is a duplicate for this token.
+    send(&mut ws, "board.op", 2, op("op-2")).await;
+    send(&mut ws, "ping", 0, json!({})).await;
+    loop {
+        match live::next(&mut ws, WAIT).await.expect("frames") {
+            Next::Frame(f) if f["t"] == "pong" => break,
+            Next::Frame(f) => assert_ne!(f["t"], "board.ack", "duplicate acked again: {f}"),
+            Next::Closed(c) => panic!("closed {c:?}"),
+        }
+    }
+
+    // A reloaded page resumes: the old token is closed with 4401, the new one starts its count at 1 and gets
+    // the whole buffer replayed.
+    let res = app
+        .call(
+            Method::POST,
+            &format!("/api/sessions/{id}/resume"),
+            Some(&cookie),
+            None,
+        )
+        .await;
+    assert_eq!(res.status, StatusCode::OK, "{}", res.body);
+    let new_token = res.body["client_token"].as_str().unwrap().to_string();
+    assert_eq!(live::close_code(&mut ws, WAIT).await, Some(4401));
+
+    let mut ws = hello(&base, &id, &new_token, 0).await;
+    let first = frame_of(&mut ws, "board.ack", WAIT).await.unwrap();
+    assert_eq!(first["seq"].as_u64().unwrap(), s1);
+    assert_eq!(first["ack"], 0, "a fresh record for the new token");
+    let second = frame_of(&mut ws, "board.ack", WAIT).await.unwrap();
+    assert_eq!(second["seq"].as_u64().unwrap(), s2);
+    send(&mut ws, "board.op", 1, op("op-3")).await;
+    let a3 = frame_of(&mut ws, "board.ack", WAIT).await.unwrap();
+    assert_eq!(a3["d"], json!({"op_id": "op-3", "rev": 3}));
+    assert_eq!(a3["ack"], 1);
+    assert!(a3["seq"].as_u64().unwrap() > s2);
+
+    // The old token cannot come back.
+    let mut old = hello(&base, &id, &token, 0).await;
+    assert_eq!(live::close_code(&mut old, WAIT).await, Some(4401));
+}
+
+fn quick() -> SessionTiming {
+    SessionTiming {
+        tick: Duration::from_millis(50),
+        offline_limit: Duration::from_millis(400),
+        start_limit: Duration::from_secs(600),
+        hello_timeout: Duration::from_secs(2),
+        ending_grace: Duration::from_secs(60),
+        janitor: Duration::from_secs(60),
+    }
+}
+
+#[tokio::test]
+async fn abandoned_after_3_minutes_offline() {
+    // The 3 minute limit, shortened.
+    let app = live::test_app(Options {
+        timing: quick(),
+        ..Options::default()
+    })
+    .await;
+    let base = app.serve().await;
+
+    // A round where the candidate never spoke: abandoned.
+    let (_, quiet, quiet_token) = new_session(&app, "fake").await;
+    // A round with an answer: scored as far as it went.
+    let (_, spoke, spoke_token) = new_session(&app, "fish").await;
+    {
+        let handle = app.state.registry.get(&spoke).unwrap();
+        handle.lock().await.turns.push(Turn {
+            speaker: "candidate".into(),
+            text: "We shard by user id.".into(),
+            at_ms: 500,
+            interrupted: false,
+            heard: None,
+        });
+    }
+    for (id, token) in [(&quiet, &quiet_token), (&spoke, &spoke_token)] {
+        let mut ws = hello(&base, id, token, 0).await;
+        frame_of(&mut ws, "round.state", WAIT)
+            .await
+            .expect("connected");
+        drop(ws);
+    }
+    // Still within the window right after the drop.
+    let status = |id: String| {
+        let db = app.state.db.clone();
+        async move {
+            sqlx::query_as::<_, (String, Option<String>)>(
+                "select status, ended_reason from sessions where id = $1",
+            )
+            .bind(Uuid::parse_str(&id).unwrap())
+            .fetch_one(&db)
+            .await
+            .unwrap()
+        }
+    };
+    assert_eq!(status(quiet.clone()).await.0, "live");
+
+    live::eventually("both rounds ended", Duration::from_secs(5), || async {
+        status(quiet.clone()).await.0 != "live" && status(spoke.clone()).await.0 != "live"
+    })
+    .await;
+    assert_eq!(
+        status(quiet.clone()).await,
+        ("abandoned".into(), Some("disconnected".into()))
+    );
+    assert_eq!(
+        status(spoke.clone()).await,
+        ("scoring".into(), Some("disconnected".into()))
+    );
+    // The turn made it to the database, and the ended session refuses sockets with 4409.
+    let n: i64 =
+        sqlx::query_scalar("select count(*) from turns where session_id = $1 and speaker = 'user'")
+            .bind(Uuid::parse_str(&spoke).unwrap())
+            .fetch_one(&app.state.db)
+            .await
+            .unwrap();
+    assert_eq!(n, 1);
+    let mut ws = hello(&base, &spoke, &spoke_token, 0).await;
+    assert_eq!(live::close_code(&mut ws, WAIT).await, Some(4409));
+    assert!(app.state.registry.get(&spoke).is_none());
+    // Its Fish minutes were settled.
+    live::eventually("Fish settled", WAIT, || async {
+        let n: i64 =
+            sqlx::query_scalar("select count(*) from usage_events where provider = 'fish'")
+                .fetch_one(&app.state.db)
+                .await
+                .unwrap();
+        n == 1
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn ending_sends_round_ended_then_4409() {
+    let app = live::test_app(Options::default()).await;
+    let base = app.serve().await;
+    let (_, id, token) = new_session(&app, "fake").await;
+    let mut ws = hello(&base, &id, &token, 0).await;
+    frame_of(&mut ws, "round.state", WAIT).await.unwrap();
+    send(
+        &mut ws,
+        "ui.event",
+        1,
+        json!({"kind": "end", "reason": "user_ended"}),
+    )
+    .await;
+    let ended = frame_of(&mut ws, "round.ended", WAIT)
+        .await
+        .expect("round.ended");
+    assert_eq!(ended["d"], json!({"reason": "user_ended"}));
+    assert!(ended["seq"].as_u64().unwrap() >= 1);
+    assert_eq!(live::close_code(&mut ws, WAIT).await, Some(4409));
+}
+
+#[tokio::test]
+async fn pause_stops_the_clock_and_time_check_is_flagged_once() {
+    let mut catalog = live::fixture_catalog();
+    // A first phase of 0.6 s.
+    catalog
+        .rounds
+        .get_mut("sde.system_design.short")
+        .unwrap()
+        .phases[0]
+        .minutes = 0.01;
+    let app = live::test_app(Options {
+        timing: quick(),
+        catalog,
+        ..Options::default()
+    })
+    .await;
+    let base = app.serve().await;
+    let (_, id, token) = new_session(&app, "fake").await;
+    let mut ws = hello(&base, &id, &token, 0).await;
+
+    let mut flagged = Vec::new();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+    while tokio::time::Instant::now() < deadline {
+        if let Some(Next::Frame(f)) = live::next(&mut ws, Duration::from_millis(200)).await
+            && f["t"] == "round.state"
+        {
+            assert_eq!(f["seq"], 0, "round.state is a snapshot");
+            if f["d"]["time_check_due"] == true {
+                flagged.push(f["d"]["phase_index"].clone());
+            }
+        }
+    }
+    assert_eq!(flagged, vec![json!(0)], "one time check for the boundary");
+
+    // After [event: time_check] arrives, nothing is owed (a reconnect does not ask again).
+    {
+        let handle = app.state.registry.get(&id).unwrap();
+        let mut st = handle.lock().await;
+        let at_ms = st.elapsed_ms(std::time::Instant::now());
+        st.turns.push(Turn {
+            speaker: "app".into(),
+            text: "[event: time_check]".into(),
+            at_ms,
+            interrupted: false,
+            heard: None,
+        });
+    }
+    drop(ws);
+    let mut ws = hello(&base, &id, &token, 0).await;
+    let snap = frame_of(&mut ws, "round.state", WAIT).await.unwrap();
+    assert_eq!(snap["d"]["time_check_due"], false);
+
+    // Pause: the clock stops.
+    send(&mut ws, "ui.event", 1, json!({"kind": "pause"})).await;
+    let mut paused = None;
+    while paused.is_none() {
+        let f = frame_of(&mut ws, "round.state", WAIT).await.unwrap();
+        if f["d"]["status"] == "paused" {
+            paused = Some(f);
+        }
+    }
+    let handle = app.state.registry.get(&id).unwrap();
+    let before = handle.lock().await.elapsed_ms(std::time::Instant::now());
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    let after = handle.lock().await.elapsed_ms(std::time::Instant::now());
+    assert_eq!(before, after);
+    let db_status: String = sqlx::query_scalar("select status from sessions where id = $1")
+        .bind(Uuid::parse_str(&id).unwrap())
+        .fetch_one(&app.state.db)
+        .await
+        .unwrap();
+    assert_eq!(db_status, "paused");
+    send(&mut ws, "ui.event", 2, json!({"kind": "resume"})).await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(handle.lock().await.elapsed_ms(std::time::Instant::now()) > after);
+}
+
+#[tokio::test]
+async fn me_offers_resume_after_a_drop() {
+    let app = live::test_app(Options::default()).await;
+    let base = app.serve().await;
+    let (cookie, id, token) = new_session(&app, "fake").await;
+    let me = |c: String| {
+        let app = &app;
+        async move { app.call(Method::GET, "/api/me", Some(&c), None).await.body }
+    };
+    // Not started yet: nothing to resume.
+    assert!(me(cookie.clone()).await["resumable"].is_null());
+    let mut ws = hello(&base, &id, &token, 0).await;
+    frame_of(&mut ws, "round.state", WAIT).await.unwrap();
+    // Connected: nothing to resume either.
+    assert!(me(cookie.clone()).await["resumable"].is_null());
+    drop(ws);
+    let mut offer = Value::Null;
+    for _ in 0..40 {
+        offer = me(cookie.clone()).await["resumable"].clone();
+        if !offer.is_null() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert_eq!(offer["session_id"], id.as_str());
+    assert_eq!(offer["round_title"], "System design");
+    let expires: chrono::DateTime<chrono::Utc> =
+        offer["expires_at"].as_str().unwrap().parse().unwrap();
+    let left = expires - chrono::Utc::now();
+    assert!(
+        left > chrono::Duration::seconds(170) && left <= chrono::Duration::seconds(180),
+        "{left}"
+    );
+}

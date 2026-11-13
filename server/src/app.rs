@@ -15,14 +15,16 @@ use tower_http::services::{ServeDir, ServeFile};
 use tower_http::set_header::SetResponseHeaderLayer;
 use tower_http::trace::TraceLayer;
 
+use crate::api;
 use crate::claude::ClaudeClient;
 use crate::config::Config;
+use crate::content::Catalog;
 use crate::db;
 use crate::error::AppError;
 use crate::fish::FishClient;
-use crate::orchestrator::{
-    LlmApi, MemorySessionAuth, OrchestratorOptions, Registry, SessionAuth, oai,
-};
+use crate::orchestrator::{LlmApi, OrchestratorOptions, Registry, SessionAuth, oai};
+use crate::persist::DbSessionAuth;
+use crate::ws::{self, Hubs, SessionTiming};
 
 /// Shared state for every handler.
 #[derive(Clone)]
@@ -34,19 +36,52 @@ pub struct AppState {
     pub registry: Registry,
     pub session_auth: Arc<dyn SessionAuth>,
     pub orchestrator: OrchestratorOptions,
+    /// Rounds, personas, prompts (`content/`).
+    pub catalog: Arc<Catalog>,
+    /// Socket hubs of live sessions.
+    pub hubs: Hubs,
+    pub timing: SessionTiming,
+    /// Serialises reloading a session from the database into the registry.
+    pub load_lock: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl AppState {
+    /// State with the real clients. The content folder is loaded leniently here (tests run without one);
+    /// `serve` loads it strictly first.
     pub fn new(db: PgPool, config: Config) -> Self {
+        let catalog = Catalog::load(&config.content_dir).unwrap_or_else(|err| {
+            tracing::warn!(error = %format!("{err:#}"), "content not loaded; no rounds available");
+            Catalog::default()
+        });
         AppState {
-            db,
             llm: Arc::new(ClaudeClient::new(&config)),
             fish: FishClient::new(&config),
             registry: Registry::new(),
-            session_auth: Arc::new(MemorySessionAuth::default()),
+            session_auth: Arc::new(DbSessionAuth::new(db.clone())),
             orchestrator: OrchestratorOptions::default(),
+            catalog: Arc::new(catalog),
+            hubs: Hubs::default(),
+            timing: SessionTiming::default(),
+            load_lock: Arc::new(tokio::sync::Mutex::new(())),
             config: Arc::new(config),
+            db,
         }
+    }
+
+    pub fn with_catalog(mut self, catalog: Catalog) -> Self {
+        self.catalog = Arc::new(catalog);
+        self
+    }
+
+    /// Replaces the Fish client (tests point it at a mock server).
+    pub fn with_fish(mut self, fish: FishClient) -> Self {
+        self.fish = fish;
+        self
+    }
+
+    pub fn with_timing(mut self, timing: SessionTiming) -> Self {
+        self.timing = timing;
+        self
     }
 
     /// Replaces the model client (tests use a scripted one).
@@ -83,6 +118,8 @@ pub fn router(state: AppState) -> Router {
         .layer(middleware::from_fn(static_cache_headers));
 
     Router::new()
+        .merge(api::routes(&state))
+        .route("/ws/session/{id}", get(ws::ws_handler))
         .nest("/assets", assets)
         .route("/healthz", get(healthz))
         // Fish custom LLM endpoint (and the fake-voice path from the browser).
