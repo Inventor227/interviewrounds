@@ -17,6 +17,7 @@ use tower_http::trace::TraceLayer;
 
 use crate::claude::ClaudeClient;
 use crate::config::Config;
+use crate::content::Catalog;
 use crate::db;
 use crate::error::AppError;
 use crate::fish::FishClient;
@@ -34,11 +35,18 @@ pub struct AppState {
     pub registry: Registry,
     pub session_auth: Arc<dyn SessionAuth>,
     pub orchestrator: OrchestratorOptions,
+    /// Rounds, personas, prompts (`content/`).
+    pub catalog: Arc<Catalog>,
 }
 
 impl AppState {
     pub fn new(db: PgPool, config: Config) -> Self {
+        let catalog = Catalog::load(&config.content_dir).unwrap_or_else(|err| {
+            tracing::warn!(error = %format!("{err:#}"), "content not loaded; no rounds available");
+            Catalog::default()
+        });
         AppState {
+            catalog: Arc::new(catalog),
             db,
             llm: Arc::new(ClaudeClient::new(&config)),
             fish: FishClient::new(&config),
@@ -47,6 +55,11 @@ impl AppState {
             orchestrator: OrchestratorOptions::default(),
             config: Arc::new(config),
         }
+    }
+
+    pub fn with_catalog(mut self, catalog: Catalog) -> Self {
+        self.catalog = Arc::new(catalog);
+        self
     }
 
     /// Replaces the model client (tests use a scripted one).
@@ -78,6 +91,7 @@ pub fn router(state: AppState) -> Router {
         .layer(middleware::from_fn(static_cache_headers));
 
     Router::new()
+        .merge(crate::api::routes())
         .route("/healthz", get(healthz))
         // Fish custom LLM endpoint (and the fake-voice path from the browser).
         .route("/v1/chat/completions", post(oai::chat_completions))
