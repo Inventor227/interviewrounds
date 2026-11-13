@@ -127,7 +127,10 @@ export class XrTest {
     this.overlay?.tex.dispose();
     this.overlay?.mesh.geometry.dispose();
     (this.overlay?.mesh.material as MeshBasicMaterial | undefined)?.dispose();
-    for (const r of this.rings) r.geometry.dispose();
+    for (const r of this.rings) {
+      r.geometry.dispose();
+      (r.material as MeshBasicMaterial).dispose();
+    }
     this.app.destroy();
   }
 

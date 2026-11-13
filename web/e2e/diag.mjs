@@ -107,11 +107,13 @@ const results = () => page(() => globalThis.__diagXr.test.results);
 
 await waitReady();
 await go('/diag?offer=1&quick=1&fallback=120');
-for (let i = 0; i < 45; i++) {
-  if ((await page(() => document.querySelector('[data-test="diag-xr-state"]')?.dataset.stage).catch(() => null)) === 'idle') break;
-  await sleep(2000);
-}
+const xrStage = () => page(() => document.querySelector('[data-test="diag-xr-state"]')?.dataset.stage).catch(() => null);
+for (let i = 0; i < 45 && (await xrStage()) !== 'unloaded'; i++) await sleep(2000);
+// Nothing 3D exists until Load.
+console.log('world before load', await page(() => !!globalThis.__diagXr));
 console.log('2d page', JSON.stringify(await pageShot('diag-1-page')));
+await page(() => document.querySelector('[data-test="diag-xr-load"]').click());
+for (let i = 0; i < 45 && (await xrStage()) !== 'idle'; i++) await sleep(2000);
 
 // The Start tap enters through the app; the tooling accepts the offered session if the tap alone did not.
 await page(() => document.querySelector('[data-test="diag-xr-run"]').click());
@@ -162,3 +164,6 @@ const r = await results();
 console.log('results', JSON.stringify(r));
 writeFileSync(path.join(SHOTS, 'diag-xr-results.json'), JSON.stringify(r, null, 1));
 console.log('2d results', JSON.stringify(await pageShot('diag-7-results', '[data-test="diag-xr"]', 1900)));
+// The room is freed after the run: its canvas is gone from the page.
+console.log('canvas after run', await page(() => document.querySelectorAll('.diag-stage canvas').length));
+

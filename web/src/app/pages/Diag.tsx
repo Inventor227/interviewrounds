@@ -103,31 +103,32 @@ export function Diag() {
     void playTone(tone_).then((r) => setAuto((a) => ({ ...a, without_tap: r })));
   }, [tone_]);
 
-  // 4 and 5. XR (created ahead so the tap only enters)
+  // 4 and 5. XR. The room is built on its own tap (Load), so nothing renders during the other steps; the Start tap
+  // then only enters (the headset needs that tap's activation). A finished or ended run is torn down, so every run
+  // starts from a fresh room.
   const stage = useRef<HTMLDivElement>(null);
+  const xrRef = useRef<XrTest | null>(null);
   const [xr, setXr] = useState<XrTest | null>(null);
-  const [xrState, setXrState] = useState<{ stage: XrStage | 'loading' | 'none'; line: string }>({ stage: 'loading', line: 'Loading the room.' });
+  const [xrState, setXrState] = useState<{ stage: XrStage | 'checking' | 'unloaded' | 'loading' | 'none'; line: string }>({ stage: 'checking', line: 'Checking.' });
   const [xrRes, setXrRes] = useState<XrResults | null>(null);
+  const dropXr = () => {
+    const t = xrRef.current;
+    xrRef.current = null;
+    setXr(null);
+    t?.destroy();
+  };
   useEffect(() => {
     let live = true;
-    let made: XrTest | null = null;
-    import('../../diag/xrTest')
-      .then((m) =>
-        m.createXrTest(stage.current as HTMLElement, (s, line) => {
-          setXrState({ stage: s, line });
-          if (made) setXrRes(structuredClone(made.results));
-        }),
-      )
-      .then((t) => {
-        made = t;
-        if (!live) return t?.destroy();
-        setXr(t);
-        setXrState(t ? { stage: 'idle', line: 'Ready.' } : { stage: 'none', line: 'This browser cannot open passthrough (immersive-ar).' });
+    import('../../xr/entry')
+      .then((m) => m.pickMode())
+      .then((mode) => {
+        if (!live) return;
+        setXrState(mode === 'ar' ? { stage: 'unloaded', line: 'Tap Load the room, then Start.' } : { stage: 'none', line: 'This browser cannot open passthrough (immersive-ar).' });
       })
-      .catch((e: Error) => live && setXrState({ stage: 'none', line: `The room did not load: ${e.message}` }));
+      .catch(() => live && setXrState({ stage: 'none', line: 'This browser cannot open passthrough (immersive-ar).' }));
     return () => {
       live = false;
-      made?.destroy();
+      dropXr();
     };
   }, []);
   useEffect(() => {
@@ -135,6 +136,31 @@ export function Diag() {
     const id = setInterval(() => setXrRes(structuredClone(xr.results)), 1000);
     return () => clearInterval(id);
   }, [xr]);
+  const loadXr = async () => {
+    if (xrRef.current) return;
+    setXrState({ stage: 'loading', line: 'Loading the room.' });
+    try {
+      const m = await import('../../diag/xrTest');
+      let made: XrTest | null = null;
+      const t = await m.createXrTest(stage.current as HTMLElement, (st, line) => {
+        const done = st === 'done' || st === 'ended' || st === 'failed';
+        setXrState({ stage: st, line: done ? `${line} Load the room to run it again.` : line });
+        if (made) setXrRes(structuredClone(made.results));
+        // Copy the numbers, then free the room once the session has had a moment to close.
+        if (done) setTimeout(() => made && xrRef.current === made && dropXr(), 0);
+      });
+      made = t;
+      if (!t) {
+        setXrState({ stage: 'none', line: 'This browser cannot open passthrough (immersive-ar).' });
+        return;
+      }
+      xrRef.current = t;
+      setXr(t);
+      setXrState({ stage: 'idle', line: 'Ready. Sit at your desk and tap Start.' });
+    } catch (e) {
+      setXrState({ stage: 'unloaded', line: `The room did not load: ${e instanceof Error ? e.message : String(e)}` });
+    }
+  };
 
   // 6. echo
   const [key, setKey] = useState(devKey.get());
@@ -144,9 +170,15 @@ export function Diag() {
   const [echoRun, setEchoRun] = useState<EchoRun | null>(null);
   const [echoErr, setEchoErr] = useState('');
   const [positional, setPositional] = useState(false);
+  const echoStarting = useRef(false);
+  // Step 6 is for the team: shown with ?dev=1 or once a key is kept in this tab.
+  const showEcho = useMemo(() => new URLSearchParams(location.search).get('dev') === '1' || !!devKey.get(), []);
   useEffect(() => () => echo?.stop(), [echo]);
 
   const startEcho = async () => {
+    // A double tap (or two pinch selects) must not mint two paid sessions.
+    if (echoStarting.current) return;
+    echoStarting.current = true;
     setConfirming(false);
     setEchoErr('');
     setEchoRun(null);
@@ -163,6 +195,8 @@ export function Diag() {
       setEchoRun(await t.start(voice, { positional }));
     } catch (e) {
       setEchoErr(e instanceof DiagError ? `${e.code}: ${e.message}` : String(e));
+    } finally {
+      echoStarting.current = false;
     }
   };
 
@@ -209,7 +243,6 @@ export function Diag() {
   const x = xrRes;
   const h = x?.hands;
   const e = echoRun?.results;
-  const xrBusy = !['idle', 'done', 'ended', 'failed', 'none', 'loading'].includes(xrState.stage);
 
   return (
     <Page test="diag" title="Device check" lede="Run each step in order. Every step has one button. Send the results at the end.">
@@ -296,23 +329,29 @@ export function Diag() {
         n={4}
         test="xr"
         title="Room, people and frame rate"
-        hint="Sit at your desk. Tap Start, then touch the desk where the sheet should go. Sit still for 30 seconds while the frame test runs."
+        hint="Sit at your desk. Tap Load the room, then Start, then touch the desk where the sheet should go. Sit still for 30 seconds while the frame test runs."
       >
         <div class="row">
-          <button
-            class="btn btn-primary btn-big"
-            data-test="diag-xr-run"
-            disabled={!xr || xrBusy}
-            onClick={() => {
-              if (mic.running) {
-                setMicRes(mic.stop());
-                setMicOn(false);
-              }
-              xr?.enter(performance.now());
-            }}
-          >
-            Start the headset test
-          </button>
+          {!xr ? (
+            <button class="btn btn-primary btn-big" data-test="diag-xr-load" disabled={xrState.stage === 'checking' || xrState.stage === 'none' || xrState.stage === 'loading'} onClick={() => void loadXr()}>
+              Load the room
+            </button>
+          ) : (
+            <button
+              class="btn btn-primary btn-big"
+              data-test="diag-xr-run"
+              disabled={xrState.stage !== 'idle'}
+              onClick={() => {
+                if (mic.running) {
+                  setMicRes(mic.stop());
+                  setMicOn(false);
+                }
+                xr.enter(performance.now());
+              }}
+            >
+              Start the headset test
+            </button>
+          )}
         </div>
         <p class="meta" data-test="diag-xr-state" data-stage={xrState.stage} aria-live="polite">
           {xrState.line}
@@ -379,14 +418,20 @@ export function Diag() {
         n={6}
         test="echo"
         title="Echo and talking over"
-        hint="Uses the paid voice service for about a minute. Use the headset speakers, no headphones. Stay silent while she reads. When she asks you to, talk over her."
+        hint={
+          showEcho
+            ? 'Uses the paid voice service for about a minute. Use the headset speakers, no headphones. Stay silent while she reads. When she asks you to, talk over her.'
+            : 'Step 6 is for our team.'
+        }
       >
+        {showEcho && (
+          <>
         <div class="field">
           <label for="diag-key">Dev key</label>
           <input id="diag-key" type="password" autocomplete="off" value={key} onInput={(ev) => setKey(ev.currentTarget.value)} data-test="diag-key" />
         </div>
         <div class="field field-toggle">
-          <label for="diag-positional">Second run: her voice through 3D audio (positional)</label>
+          <label for="diag-positional">Play her voice through 3D audio (positional)</label>
           <input
             id="diag-positional"
             type="checkbox"
@@ -451,6 +496,8 @@ export function Diag() {
               ['Her audio quiet after', fmt(e?.barge.audio_stop_after_onset_ms, ' ms')],
             ]}
           />
+        )}
+                </>
         )}
       </Step>
 
