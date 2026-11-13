@@ -12,6 +12,9 @@ import planFixture from '../../../../content/fixtures/meeting-plan.example.json'
 import reportFixture from '../../../../content/fixtures/report.example.json';
 import type {
   Catalog,
+  CreateSessionReq,
+  CreateSessionRes,
+  Length,
   HistoryItem,
   MeetingPlanPublic,
   MeetingSetup,
@@ -223,6 +226,40 @@ export function fakePlan(setup: MeetingSetup): MeetingPlanPublic {
   };
 }
 
+// ---------- sessions ----------
+
+function capFor(me: Me, length: Length): Response | null {
+  const l = me.limits;
+  const reason = l.reason && !(l.reason === 'guest_full_used' && length === 'short') ? l.reason : null;
+  return reason ? fail(429, reason, 'Limit reached', { resets_at: l.resets_at }) : null;
+}
+
+export function sessionResFor(id: string, roundId: string, me: Me): CreateSessionRes {
+  const catalog = fakeCatalog();
+  const round = catalog.rounds.find((r) => r.id === roundId) ?? catalog.rounds[0]!;
+  const lead = catalog.personas.find((p) => p.id === round.panel.lead) ?? catalog.personas[0]!;
+  return {
+    session_id: id,
+    client_token: `tok_${id}`,
+    ws_url: `/ws/session/${id}`,
+    round,
+    panel: [
+      {
+        panelist_id: 'p1',
+        persona_id: lead.id,
+        display_name: lead.display_name,
+        title: lead.title,
+        avatar_id: lead.avatar_id,
+        seat: 1,
+        voice: { transport: 'fake' },
+      },
+    ],
+    floor: 'p1',
+    panel_mode: 'swap',
+    limits: me.limits,
+  };
+}
+
 // ---------- fetch ----------
 
 export interface FakeCall {
@@ -261,6 +298,7 @@ export function createFakeServer(opts: FakeServerOptions = {}): FakeServer {
   const calls: FakeCall[] = [];
   let shareSlug: string | null = null;
   let lastScoringPoll = 0;
+  let created = 0;
 
   const route = async (method: string, url: URL, body: unknown): Promise<Response> => {
     const key = `${method} ${url.pathname}`;
@@ -289,6 +327,21 @@ export function createFakeServer(opts: FakeServerOptions = {}): FakeServer {
     }
     if (key === 'GET /api/me/history') return json(200, scenario === 'empty' ? [] : fakeHistory(role));
     if (key === 'GET /api/me/skills') return json(200, scenario === 'empty' ? { competencies: [] } : fakeSkills());
+    if (key === 'POST /api/sessions') {
+      const req = body as CreateSessionReq;
+      const capped = capFor(state.me, req.length);
+      if (capped) return capped;
+      return json(200, sessionResFor(`s_new_${++created}`, req.mode === 'meeting' ? 'meeting.short' : req.round_id ?? 'sde.system_design.short', state.me));
+    }
+    if (method === 'POST' && (m = p.match(/^\/api\/sessions\/([^/]+)\/(retry|resume)$/))) {
+      const id = decodeURIComponent(m[1]!);
+      if (m[2] === 'retry') {
+        const capped = capFor(state.me, 'short');
+        if (capped) return capped;
+        return json(200, sessionResFor(`s_retry_${++created}`, 'sde.system_design.short', state.me));
+      }
+      return json(200, sessionResFor(id, 'sde.system_design.short', state.me));
+    }
     if (key === 'POST /api/meetings/prepare') {
       const setup = body as MeetingSetup;
       if (!setup?.goal || !setup.attendees?.length) return fail(422, 'invalid', 'A goal and one attendee are needed');

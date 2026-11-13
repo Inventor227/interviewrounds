@@ -26,7 +26,6 @@ import { capFromError, capFromMe, loadCatalog, loadMe, toApiError, useAsync } fr
 import { ReadyPanel, useHeadset, useMic, type Mic, type XrState } from '../components/Ready';
 import { Disclosure, ErrorState, Loading, Monogram, Page, Segmented } from '../components/Ui';
 import { isFake } from '../fake/mode';
-import { launchNow } from '../launch';
 
 const MAX_PEOPLE = 3;
 const MAX_FACTS = 8;
@@ -242,7 +241,6 @@ function Prepared(props: {
   xr: XrState;
 }) {
   const { plan } = props.res;
-  const { route } = useLocation();
   const [kept, setKept] = useState<boolean[][]>(() => plan.attendees.map((a) => (a.likely_objections ?? []).map(() => true)));
   const changed = kept.some((row) => row.some((k) => !k));
   const { mic, xr } = props;
@@ -322,30 +320,25 @@ function Prepared(props: {
       <ReadyPanel
         mic={mic}
         xr={xr}
-        questUrl={`${location.origin}/meeting/new`}
+        questUrl={`${location.origin}/meeting/new${props.draft.template === 'custom' ? '' : `?template=${props.draft.template}`}`}
+        questNote={props.draft.template === 'custom' ? 'It opens a new setup: your people and goal stay on this device.' : 'It opens the same template. Your edits stay on this device.'}
         busy={props.busy || changed}
         error={props.error}
-        startLabel={xr === 'none' ? 'Preview on this screen' : 'Start the meeting'}
+        me={props.me}
+        title="Meeting rehearsal"
+        enterLabel={xr === 'none' ? 'Preview on this screen' : 'Enter the meeting room'}
         blocked={cap ? <CapNotice reason={cap.reason} resetsAt={cap.resetsAt} isGuest={props.me?.identity.kind !== 'user'} signInAvailable={props.me?.sign_in_available} /> : undefined}
-        onStart={({ preview, mic: stream }) =>
-          launchNow(
-            {
-              kind: 'new',
-              preview,
-              mic: stream,
-              title: 'Meeting rehearsal',
-              req: {
-                mode: 'meeting',
-                meeting_plan_id: props.res.meeting_plan_id,
-                length: props.draft.length,
-                level: props.me?.settings.default_level ?? 'mid',
-                style,
-                voice: isFake() ? 'fake' : 'fish',
-              },
-            },
-            route,
-          )
-        }
+        input={{
+          kind: 'new',
+          req: {
+            mode: 'meeting',
+            meeting_plan_id: props.res.meeting_plan_id,
+            length: props.draft.length,
+            level: props.me?.settings.default_level ?? 'mid',
+            style,
+            voice: isFake() ? 'fake' : 'fish',
+          },
+        }}
       />
     </div>
   );
@@ -354,7 +347,13 @@ function Prepared(props: {
 // ---------- Page ----------
 
 function SetupForm(props: { catalog: Catalog; me?: Me }) {
-  const first = props.catalog.meeting_templates.find((t) => t.id === 'investor_pitch') ?? props.catalog.meeting_templates[0] ?? null;
+  const { query } = useLocation();
+  const wanted = query.template ?? 'investor_pitch';
+  const first =
+    props.catalog.meeting_templates.find((t) => t.id === wanted) ??
+    props.catalog.meeting_templates.find((t) => t.id === 'investor_pitch') ??
+    props.catalog.meeting_templates[0] ??
+    null;
   const [d, setD] = useState<Draft>(() => draftFrom(first));
   const [errors, setErrors] = useState<SetupErrors>({});
   const [busy, setBusy] = useState(false);

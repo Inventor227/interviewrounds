@@ -11,7 +11,8 @@ import { clock } from '../components/format';
 import { askMic, holdMic, useHeadset } from '../components/Ready';
 import { Streak } from '../components/Streak';
 import { Monogram } from '../components/Ui';
-import { launchNow } from '../launch';
+import { isFake } from '../fake/mode';
+import { prepareLaunch, type PrepareInput } from '../launch';
 import { HowItWorks } from './Onboarding';
 
 export function useNow(everyMs = 1000): number {
@@ -23,8 +24,7 @@ export function useNow(everyMs = 1000): number {
   return now;
 }
 
-function ResumeBanner(props: { r: NonNullable<Me['resumable']>; preview: boolean }) {
-  const { route } = useLocation();
+function ResumeBanner(props: { r: NonNullable<Me['resumable']> }) {
   const now = useNow();
   const left = Math.max(0, (Date.parse(props.r.expires_at) - now) / 1000);
   if (left <= 0) return null;
@@ -37,14 +37,9 @@ function ResumeBanner(props: { r: NonNullable<Me['resumable']>; preview: boolean
           scored as far as it went.
         </p>
       </div>
-      <button
-        type="button"
-        class="btn btn-primary"
-        data-test="resume"
-        onClick={() => launchNow({ kind: 'resume', sessionId: props.r.session_id, preview: props.preview, title: props.r.round_title }, route)}
-      >
+      <a class="btn btn-primary" href={`/resume/${encodeURIComponent(props.r.session_id)}`} data-test="resume">
         Resume round
-      </button>
+      </a>
     </div>
   );
 }
@@ -107,20 +102,47 @@ export function Home() {
   const guest = m?.identity.kind !== 'user';
   const href = `/round/${PRESET_ROUND}`;
 
-  // The mic prompt rides on this tap, so the Start page needs only one more: Enter the room.
+  // Phase A rides on this tap (the mic prompt, then the session and the room load), so the Start
+  // page needs only one more: Enter the room.
   const onStart = async (e: MouseEvent) => {
     if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
     e.preventDefault();
+    // The router's link handler ignores preventDefault: keep it from moving on before the prompt.
+    e.stopPropagation();
     if (asking) return;
     setAsking(true);
-    holdMic(await askMic());
+    const from = location.pathname;
+    const out = await askMic();
     setAsking(false);
+    // The user went elsewhere while the prompt was open: do not pull them back.
+    if (location.pathname !== from) {
+      out.stream?.getTracks().forEach((t) => t.stop());
+      return;
+    }
+    if (out.stream) {
+      const preview = xr === 'none';
+      const input: PrepareInput = {
+        kind: 'new',
+        req: {
+          mode: 'interview',
+          round_id: PRESET_ROUND,
+          length: 'short',
+          level: m?.settings.default_level ?? 'mid',
+          style: m?.settings.default_style ?? 'neutral',
+          voice: isFake() ? 'fake' : 'fish',
+        },
+      };
+      void prepareLaunch(input, { mic: out.stream, preview, title: 'System design' });
+      holdMic({ state: 'allowed', stream: null });
+    } else {
+      holdMic(out);
+    }
     route(href);
   };
 
   return (
     <section class="pg home" data-test="page-home" aria-labelledby="h-home">
-      {m?.resumable && <ResumeBanner r={m.resumable} preview={xr === 'none'} />}
+      {m?.resumable && <ResumeBanner r={m.resumable} />}
 
       <div class="hero">
         <div class="hero-main">

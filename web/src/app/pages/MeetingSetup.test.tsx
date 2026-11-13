@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import type { MeetingSetup } from '../../shared/types';
-import { peekLaunch, takeLaunch } from '../launch';
-import { $, $$, cleanup, click, renderApp, stubNavigator, typeInto, useFakeServer } from '../test-utils';
+import { launchState } from '../launch';
+import { $, $$, cleanup, click, renderApp, stubNavigator, typeInto, useFakeServer, waitFor } from '../test-utils';
 
 const prepares = (server: ReturnType<typeof useFakeServer>) =>
   server.calls.filter((c) => c.method === 'POST' && c.path === '/api/meetings/prepare').map((c) => c.body as MeetingSetup);
@@ -55,6 +55,7 @@ describe('MeetingSetup', () => {
       const root = await renderApp('/meeting/new');
       await click($(root, 'prepare'));
       await click($(root, 'mic-allow'));
+      await waitFor(() => launchState().status === 'ready');
       const kept = prepares(server)[0]!.attendees[0]!.likely_objections!.length;
       expect(($(root, 'start-preview') as HTMLButtonElement).disabled).toBe(false);
       await click($$(root, 'objection-keep')[0]!);
@@ -62,6 +63,11 @@ describe('MeetingSetup', () => {
       await click($(root, 'apply-objections'));
       const second = prepares(server)[1]!;
       expect(second.attendees[0]!.likely_objections).toHaveLength(kept - 1);
+      // The plan changed, so the session made for the old one is dropped: phase A again.
+      expect(launchState().status).toBe('idle');
+      expect(($(root, 'start-preview') as HTMLButtonElement).disabled).toBe(true);
+      await click($(root, 'mic-allow'));
+      await waitFor(() => launchState().status === 'ready');
       expect(($(root, 'start-preview') as HTMLButtonElement).disabled).toBe(false);
     } finally {
       r1();
@@ -73,18 +79,20 @@ describe('MeetingSetup', () => {
     const r1 = stubNavigator('xr', undefined);
     const r2 = stubNavigator('mediaDevices', { getUserMedia: async () => ({ getTracks: () => [] }) });
     try {
-      takeLaunch();
-      useFakeServer();
+      const server = useFakeServer();
       const root = await renderApp('/meeting/new');
       await click($(root, 'prepare'));
       expect(($(root, 'start-preview') as HTMLButtonElement).disabled).toBe(true);
       await click($(root, 'mic-allow'));
-      await click($(root, 'start-preview'));
-      expect(peekLaunch()).toMatchObject({
-        kind: 'new',
-        preview: true,
-        req: { mode: 'meeting', meeting_plan_id: 'mp_demo', length: 'short' },
+      await waitFor(() => launchState().status === 'ready');
+      expect(server.calls.find((c) => c.method === 'POST' && c.path === '/api/sessions')?.body).toMatchObject({
+        mode: 'meeting',
+        meeting_plan_id: 'mp_demo',
+        length: 'short',
       });
+      expect(launchState().status).toBe('ready');
+      await click($(root, 'start-preview'));
+      expect(location.pathname).toMatch(/^\/session\//);
     } finally {
       r1();
       r2();

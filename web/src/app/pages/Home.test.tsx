@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { fakeMe } from '../fake/server';
-import { peekLaunch } from '../launch';
 import { $, cleanup, click, renderApp, useFakeServer } from '../test-utils';
 
 describe('Home', () => {
@@ -11,8 +10,8 @@ describe('Home', () => {
     const root = await renderApp('/');
     expect($(root, 'resume-banner')).not.toBeNull();
     await click($(root, 'resume'));
-    expect(peekLaunch()).toMatchObject({ kind: 'resume', sessionId: 's_resume' });
-    expect(location.pathname).toBe('/session/s_resume');
+    expect(location.pathname).toBe('/resume/s_resume');
+    expect($(root, 'page-resume')).not.toBeNull();
   });
 
   it('home_hides_resume_when_nothing_to_resume', async () => {

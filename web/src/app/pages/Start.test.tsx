@@ -1,7 +1,8 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'preact/test-utils';
-import { peekLaunch, takeLaunch } from '../launch';
-import { $, cleanup, click, renderApp, settle, stubNavigator, useFakeServer } from '../test-utils';
+import type { CreateSessionReq } from '../../shared/types';
+import { fakeMe, sessionResFor } from '../fake/server';
+import { $, cleanup, click, renderApp, settle, stubNavigator, testRuntime, useFakeServer, waitFor } from '../test-utils';
 
 const restores: (() => void)[] = [];
 const stub = (k: string, v: unknown) => restores.push(stubNavigator(k, v));
@@ -21,18 +22,20 @@ function micThat(result: 'grant' | 'deny' | 'none') {
 }
 
 const withHeadset = (ok: boolean) => stub('xr', { isSessionSupported: vi.fn(async () => ok) });
+const creates = (server: ReturnType<typeof useFakeServer>) =>
+  server.calls.filter((c) => c.method === 'POST' && c.path === '/api/sessions').map((c) => c.body as CreateSessionReq);
+const enterBtn = (root: HTMLElement) => ($(root, 'start-round') ?? $(root, 'start-preview')) as HTMLButtonElement;
+const launchOf = (root: HTMLElement) => $(root, 'ready')?.dataset.launch;
+const settled = (root: HTMLElement) => waitFor(() => ['ready', 'failed'].includes(launchOf(root) ?? ''));
 
 describe('Start', () => {
-  beforeEach(() => {
-    takeLaunch();
-    useFakeServer({ scenario: '1' });
-  });
   afterEach(() => {
     cleanup();
     for (const r of restores.splice(0)) r();
   });
 
   it('start_shows_denied_state_when_mic_blocked', async () => {
+    const server = useFakeServer({ scenario: '1' });
     micThat('deny');
     withHeadset(true);
     const root = await renderApp('/round/sde.system_design.short');
@@ -40,46 +43,12 @@ describe('Start', () => {
     await click($(root, 'mic-allow'));
     expect($(root, 'mic-step')?.dataset.state).toBe('denied');
     expect($(root, 'mic-denied')).not.toBeNull();
-    expect(($(root, 'start-round') as HTMLButtonElement).disabled).toBe(true);
-  });
-
-  it('start_needs_the_mic_before_enter_the_room', async () => {
-    const gum = micThat('grant');
-    withHeadset(true);
-    const root = await renderApp('/round/sde.system_design.short');
-    const enter = $(root, 'start-round') as HTMLButtonElement;
-    expect(enter.disabled).toBe(true);
-    await click(enter);
-    expect(peekLaunch()).toBeNull();
-    expect(gum).not.toHaveBeenCalled();
-    await click($(root, 'mic-allow'));
-    expect(gum).toHaveBeenCalledTimes(1);
-    expect(($(root, 'start-round') as HTMLButtonElement).disabled).toBe(false);
-    expect($(root, 'hands-note')).not.toBeNull();
-  });
-
-  it('start_skips_the_mic_tap_when_home_already_asked', async () => {
-    const gum = micThat('grant');
-    withHeadset(true);
-    const root = await renderApp('/');
-    await click($(root, 'try-quick'));
-    expect(location.pathname).toBe('/round/sde.system_design.short');
-    expect(gum).toHaveBeenCalledTimes(1);
-    expect($(root, 'mic-step')?.dataset.state).toBe('on');
-    await click($(root, 'start-round'));
-    expect(peekLaunch()).toMatchObject({ kind: 'new', req: { round_id: 'sde.system_design.short', level: 'mid', style: 'neutral' } });
-    expect(gum).toHaveBeenCalledTimes(1);
-  });
-
-  it('start_shows_denied_state_when_home_was_refused', async () => {
-    micThat('deny');
-    withHeadset(true);
-    const root = await renderApp('/');
-    await click($(root, 'try-quick'));
-    expect($(root, 'mic-denied')).not.toBeNull();
+    expect(enterBtn(root).disabled).toBe(true);
+    expect(creates(server)).toHaveLength(0);
   });
 
   it('start_shows_no_mic_state', async () => {
+    useFakeServer({ scenario: '1' });
     micThat('none');
     withHeadset(true);
     const root = await renderApp('/round/sde.system_design.short');
@@ -87,7 +56,71 @@ describe('Start', () => {
     expect($(root, 'mic-none')).not.toBeNull();
   });
 
+  it('phase_a_on_the_mic_tap_prepares_without_entering_xr', async () => {
+    const server = useFakeServer({ scenario: '1' });
+    const gum = micThat('grant');
+    withHeadset(true);
+    const root = await renderApp('/round/sde.system_design.short');
+    expect(enterBtn(root).disabled).toBe(true);
+    await click(enterBtn(root));
+    expect(location.pathname).toBe('/round/sde.system_design.short');
+
+    await click($(root, 'mic-allow'));
+    await settled(root);
+    expect(gum).toHaveBeenCalledTimes(1);
+    expect(creates(server)).toEqual([
+      { mode: 'interview', round_id: 'sde.system_design.short', length: 'short', level: 'mid', style: 'neutral', voice: 'fish' },
+    ]);
+    expect(testRuntime.xrPreload).toHaveBeenCalledTimes(1);
+    expect(testRuntime.xrEnter).not.toHaveBeenCalled();
+    expect(launchOf(root)).toBe('ready');
+    expect(enterBtn(root).disabled).toBe(false);
+    expect($(root, 'hands-note')).not.toBeNull();
+  });
+
+  it('phase_b_requests_xr_inside_the_enter_tap', async () => {
+    useFakeServer({ scenario: '1' });
+    micThat('grant');
+    withHeadset(true);
+    const root = await renderApp('/round/sde.system_design.short');
+    await click($(root, 'mic-allow'));
+    await settled(root);
+    act(() => enterBtn(root).click());
+    // Synchronously inside the tap: the XR request is already made, nothing awaited before it.
+    expect(testRuntime.xrEnter).toHaveBeenCalledTimes(1);
+    await settle();
+    expect(location.pathname).toBe('/session/s_new_1');
+    expect($(root, 'session-state')?.dataset.state).toBe('placing');
+  });
+
+  it('home_tap_does_phase_a_so_start_needs_only_enter', async () => {
+    const server = useFakeServer({ scenario: '1' });
+    const gum = micThat('grant');
+    withHeadset(true);
+    const root = await renderApp('/');
+    await click($(root, 'try-quick'));
+    expect(location.pathname).toBe('/round/sde.system_design.short');
+    await settled(root);
+    expect(gum).toHaveBeenCalledTimes(1);
+    expect(creates(server)).toHaveLength(1);
+    expect(launchOf(root)).toBe('ready');
+    act(() => enterBtn(root).click());
+    expect(testRuntime.xrEnter).toHaveBeenCalledTimes(1);
+    expect(gum).toHaveBeenCalledTimes(1);
+  });
+
+  it('start_shows_denied_state_when_home_was_refused', async () => {
+    const server = useFakeServer({ scenario: '1' });
+    micThat('deny');
+    withHeadset(true);
+    const root = await renderApp('/');
+    await click($(root, 'try-quick'));
+    expect($(root, 'mic-denied')).not.toBeNull();
+    expect(creates(server)).toHaveLength(0);
+  });
+
   it('start_falls_back_to_preview_without_webxr', async () => {
+    useFakeServer({ scenario: '1' });
     micThat('grant');
     stub('xr', undefined);
     const root = await renderApp('/round/sde.system_design.short');
@@ -95,12 +128,14 @@ describe('Start', () => {
     expect($(root, 'qr')?.dataset.text).toContain('/round/sde.system_design.short');
     expect($(root, 'start-round')).toBeNull();
     await click($(root, 'mic-allow'));
+    await settled(root);
+    expect(testRuntime.xrEnter).not.toHaveBeenCalled();
     await click($(root, 'start-preview'));
-    expect(peekLaunch()).toMatchObject({ kind: 'new', preview: true, req: { mode: 'interview', round_id: 'sde.system_design.short', length: 'short' } });
-    expect(location.pathname).toBe('/session/new');
+    expect(location.pathname).toBe('/session/s_new_1');
   });
 
   it('start_falls_back_to_preview_when_ar_is_unsupported', async () => {
+    useFakeServer({ scenario: '1' });
     micThat('grant');
     withHeadset(false);
     const root = await renderApp('/round/sde.coding.short');
@@ -108,43 +143,80 @@ describe('Start', () => {
     expect($(root, 'start-preview')).not.toBeNull();
   });
 
-  it('start_hands_over_inside_the_tap_when_the_mic_is_on', async () => {
-    micThat('grant');
-    withHeadset(true);
-    const root = await renderApp('/round/sde.system_design.short');
-    await click($(root, 'mic-allow'));
-    expect($(root, 'mic-step')?.dataset.state).toBe('on');
-    // No await between the tap and the hand-over: XR entry needs the tap's activation.
-    act(() => $(root, 'start-round')!.click());
-    const l = peekLaunch();
-    expect(l).toMatchObject({ kind: 'new', preview: false, req: { level: 'mid', style: 'neutral', voice: 'fish' } });
-    expect(l?.mic).toBeTruthy();
-    await settle();
-  });
-
   it('start_adjust_changes_level_and_style', async () => {
+    const server = useFakeServer({ scenario: '1' });
     micThat('grant');
     withHeadset(true);
     const root = await renderApp('/round/sde.system_design.short');
     await click(root.querySelector('[data-test="level-senior"]'));
     await click(root.querySelector('[data-test="style-tough"]'));
     await click($(root, 'mic-allow'));
-    await click($(root, 'start-round'));
-    expect(peekLaunch()).toMatchObject({ req: { level: 'senior', style: 'tough' } });
+    await settled(root);
+    expect(creates(server)[0]).toMatchObject({ level: 'senior', style: 'tough' });
   });
 
-  it('start_retry_launches_a_retry_of_the_parent_session', async () => {
+  it('start_adjust_after_prepare_drops_the_prepared_round', async () => {
+    useFakeServer({ scenario: '1' });
+    micThat('grant');
+    withHeadset(true);
+    const root = await renderApp('/round/sde.system_design.short');
+    await click($(root, 'mic-allow'));
+    await settled(root);
+    expect(launchOf(root)).toBe('ready');
+    await click(root.querySelector('[data-test="level-staff"]'));
+    expect(launchOf(root)).toBe('none');
+    expect(enterBtn(root).disabled).toBe(true);
+  });
+
+  it('start_prepare_failure_offers_another_try', async () => {
+    let fail = true;
+    const server = useFakeServer({
+      scenario: '1',
+      routes: {
+        'POST /api/sessions': () =>
+          fail ? new Response('', { status: 503 }) : sessionResFor('s_new_2', 'sde.system_design.short', fakeMe('1')),
+      },
+    });
+    micThat('grant');
+    withHeadset(true);
+    const root = await renderApp('/round/sde.system_design.short');
+    await click($(root, 'mic-allow'));
+    await settled(root);
+    expect(launchOf(root)).toBe('failed');
+    expect($(root, 'prepare-failed')).not.toBeNull();
+    expect(enterBtn(root).disabled).toBe(true);
+    fail = false;
+    await click($(root, 'mic-allow'));
+    await waitFor(() => launchOf(root) === 'ready');
+    expect(server.calls.filter((c) => c.path === '/api/sessions')).toHaveLength(2);
+  });
+
+  it('start_retry_posts_retry_in_phase_a', async () => {
+    const server = useFakeServer({ scenario: '1' });
     micThat('grant');
     withHeadset(true);
     const root = await renderApp('/round/sde.system_design.short?retry=s_parent');
     expect($(root, 'retry-note')).not.toBeNull();
     await click($(root, 'mic-allow'));
-    await click($(root, 'start-round'));
-    expect(peekLaunch()).toMatchObject({ kind: 'retry', parentSessionId: 's_parent' });
+    await settled(root);
+    expect(server.calls.some((c) => c.method === 'POST' && c.path === '/api/sessions/s_parent/retry')).toBe(true);
+    expect(creates(server)).toHaveLength(0);
+    expect(launchOf(root)).toBe('ready');
   });
 
-  it('start_shows_cap_notice_instead_of_start', async () => {
-    cleanup();
+  it('start_leaving_the_page_drops_the_prepared_round', async () => {
+    useFakeServer({ scenario: '1' });
+    micThat('grant');
+    withHeadset(true);
+    const root = await renderApp('/round/sde.system_design.short');
+    await click($(root, 'mic-allow'));
+    await settled(root);
+    await click(root.querySelector('a[href="/history"]'));
+    const { launchState } = await import('../launch');
+    expect(launchState().status).toBe('idle');
+  });
+
+  it('start_shows_cap_notice_instead_of_enter', async () => {
     useFakeServer({ scenario: 'capped' });
     micThat('grant');
     withHeadset(true);
@@ -154,6 +226,7 @@ describe('Start', () => {
   });
 
   it('start_says_when_a_round_does_not_exist', async () => {
+    useFakeServer({ scenario: '1' });
     const root = await renderApp('/round/nope.short');
     expect($(root, 'round-missing')).not.toBeNull();
   });

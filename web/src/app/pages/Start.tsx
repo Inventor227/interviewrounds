@@ -12,7 +12,7 @@ import { LEVEL_NAMES, ROLE_NAMES, STYLE_NAMES } from '../components/format';
 import { ReadyPanel, useHeadset, useMic } from '../components/Ready';
 import { Disclosure, ErrorState, Loading, Monogram, Page, Segmented } from '../components/Ui';
 import { isFake } from '../fake/mode';
-import { launchNow } from '../launch';
+import type { PrepareInput } from '../launch';
 
 const pick = <T extends string>(v: string | undefined, all: readonly T[], fallback: T): T =>
   v && (all as readonly string[]).includes(v) ? (v as T) : fallback;
@@ -43,22 +43,10 @@ function StartBody(props: { round: RoundPublic; catalog: Catalog; me?: Me }) {
     route(`/round/${other.id}${qs ? `?${qs}` : ''}`, true);
   };
 
-  const onStart = ({ preview, mic: stream }: { preview: boolean; mic: MediaStream | null }) => {
-    if (retryOf) {
-      launchNow({ kind: 'retry', parentSessionId: retryOf, preview, mic: stream, title: round.title }, route);
-      return;
-    }
-    launchNow(
-      {
-        kind: 'new',
-        preview,
-        mic: stream,
-        title: round.title,
-        req: { mode: 'interview', round_id: round.id, length: round.length, level, style, voice: isFake() ? 'fake' : 'fish' },
-      },
-      route,
-    );
-  };
+  const voice = isFake() ? 'fake' : 'fish';
+  const input: PrepareInput = retryOf
+    ? { kind: 'retry', parentSessionId: retryOf, voice }
+    : { kind: 'new', req: { mode: 'interview', round_id: round.id, length: round.length, level, style, voice } };
 
   const lengthLabel = round.length === 'short' ? 'Quick' : 'Full';
   return (
@@ -138,8 +126,10 @@ function StartBody(props: { round: RoundPublic; catalog: Catalog; me?: Me }) {
         mic={mic}
         xr={xr}
         questUrl={questUrl}
-        onStart={onStart}
-        startLabel={retryOf ? (xr === 'none' ? 'Retry on this screen' : 'Start the retry') : undefined}
+        input={input}
+        title={round.title}
+        me={me}
+        enterLabel={retryOf ? (xr === 'none' ? 'Retry on this screen' : 'Enter the room for the retry') : undefined}
         blocked={
           cap ? (
             <CapNotice reason={cap.reason} resetsAt={cap.resetsAt} isGuest={me?.identity.kind !== 'user'} signInAvailable={me?.sign_in_available} />

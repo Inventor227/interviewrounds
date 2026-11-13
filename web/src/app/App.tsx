@@ -2,6 +2,7 @@ import type { ComponentChildren } from 'preact';
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { LocationProvider, Route, Router, lazy, useLocation } from 'preact-iso';
 import type { ImmersiveHandle } from '../xr/entry';
+import { takeLaunch } from './launch';
 import { History } from './pages/History';
 import { Home } from './pages/Home';
 import { MeetingSetup } from './pages/MeetingSetup';
@@ -10,6 +11,7 @@ import { PickRole } from './pages/PickRole';
 import { PickRound } from './pages/PickRound';
 import { Pricing } from './pages/Pricing';
 import { Report } from './pages/Report';
+import { Resume } from './pages/Resume';
 import { Settings } from './pages/Settings';
 import { Start } from './pages/Start';
 
@@ -40,6 +42,7 @@ export const ROUTES = {
   settings: '/settings',
   pricing: '/pricing',
   notSupported: '/not-supported',
+  resume: '/resume/:id',
   devAvatar: '/dev/avatar',
 } as const;
 
@@ -57,7 +60,50 @@ function Page(props: { test: string; title: string; lede: string; children?: Com
   );
 }
 
+/** Placeholder for the live session page (the session lane replaces it). It takes the round the
+ *  Enter tap started (app/launch.ts) and shows its state; without one it offers the bare room. */
 function Session(props: { id?: string }) {
+  const [launch] = useState(takeLaunch);
+  return launch ? <LiveSession launch={launch} /> : <BareRoom id={props.id} />;
+}
+
+function LiveSession(props: { launch: NonNullable<ReturnType<typeof takeLaunch>> }) {
+  const { controller } = props.launch;
+  const [state, setState] = useState(controller.state);
+  const [error, setError] = useState<{ code: string } | null>(null);
+  useEffect(() => {
+    const offs = [controller.on('state', setState), controller.on('error', (e) => setError(e as { code: string }))];
+    return () => {
+      offs.forEach((o) => o());
+      void controller.dispose();
+    };
+  }, [controller]);
+  const retryEnter = error?.code === 'xr_enter_failed' || error?.code === 'placement_failed';
+  return (
+    <Page test="session" title={props.launch.title ?? 'Live round'} lede="Your round is running in the headset.">
+      <p class="meta" data-test="session-state" data-state={state}>
+        State <code>{state}</code>
+      </p>
+      {retryEnter && (
+        <div class="row">
+          <button
+            class="btn btn-primary btn-big"
+            data-test="enter-room"
+            onClick={() => {
+              setError(null);
+              controller.enter().catch(() => undefined);
+            }}
+          >
+            Enter the room
+          </button>
+        </div>
+      )}
+      {error && !retryEnter && <p class="meta bad">Something went wrong ({error.code}).</p>}
+    </Page>
+  );
+}
+
+function BareRoom(props: { id?: string }) {
   const stage = useRef<HTMLDivElement>(null);
   const [handle, setHandle] = useState<ImmersiveHandle | null>(null);
   const [note, setNote] = useState('');
@@ -155,6 +201,7 @@ export function App() {
             <Route path={ROUTES.settings} component={Settings} />
             <Route path={ROUTES.pricing} component={Pricing} />
             <Route path={ROUTES.notSupported} component={NotSupported} />
+            <Route path={ROUTES.resume} component={Resume} />
             {AvatarDev ? [<Route key="dev-avatar" path={ROUTES.devAvatar} component={AvatarDev} />] : []}
             <Route default component={NotFound} />
           </Router>

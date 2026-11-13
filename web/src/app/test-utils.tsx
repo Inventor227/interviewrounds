@@ -3,16 +3,55 @@
 
 import { render, type VNode } from 'preact';
 import { act } from 'preact/test-utils';
-import { vi } from 'vitest';
+import { vi, type Mock } from 'vitest';
 import { App } from './App';
 import { resetDataCache } from './components/data';
 import { createFakeServer, type FakeServer, type FakeServerOptions } from './fake/server';
+import { discardLaunch, registerRuntime, takeLaunch } from './launch';
+import { api } from '../net/api';
+import type { SocketPort } from '../session/ports';
 
 const roots: HTMLElement[] = [];
+
+/** The XR side of the round runtime the page tests register: spies, and a placement that never
+ *  finishes, so enter() stops right after the XR request. */
+export interface TestRuntime {
+  log: string[];
+  xrEnter: Mock<() => Promise<void>>;
+  xrPreload: Mock<() => Promise<void>>;
+}
+export let testRuntime: TestRuntime;
+
+function installTestRuntime(): void {
+  const log: string[] = [];
+  const rt: TestRuntime = {
+    log,
+    xrEnter: vi.fn(async (): Promise<void> => void log.push('xr.enter')),
+    xrPreload: vi.fn(async (): Promise<void> => void log.push('xr.preload')),
+  };
+  testRuntime = rt;
+  const socket: SocketPort = { connect: async () => {}, send: () => {}, on: () => () => {}, close: () => {} };
+  registerRuntime(() => ({
+    api,
+    makeSocket: () => socket,
+    makeTransport: () => {
+      throw new Error('no voices in page tests');
+    },
+    xr: {
+      preload: rt.xrPreload,
+      enter: rt.xrEnter,
+      place: () => new Promise<void>(() => {}),
+      ui: { setRoundState() {}, showSummary() {}, setStatus() {}, onAction: () => () => {} },
+      room: { seatPoses: () => [] },
+    },
+    media: { getMic: async () => ({ getTracks: () => [] }) as unknown as MediaStream, resumeAudio: async () => {} },
+  }));
+}
 
 export function useFakeServer(opts: FakeServerOptions = {}): FakeServer {
   const server = createFakeServer(opts);
   vi.stubGlobal('fetch', server.fetch);
+  installTestRuntime();
   return server;
 }
 
@@ -22,6 +61,17 @@ export async function settle(rounds = 8): Promise<void> {
     await act(async () => {
       if (vi.isFakeTimers()) await vi.advanceTimersByTimeAsync(1);
       else await new Promise((r) => setTimeout(r, 0));
+    });
+  }
+}
+
+/** Settles until `cond` holds (or fails after `ms`). For work behind a lazy import. */
+export async function waitFor(cond: () => boolean, ms = 3000): Promise<void> {
+  const end = Date.now() + ms;
+  while (!cond()) {
+    if (Date.now() > end) throw new Error('waitFor: condition not met');
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 10));
     });
   }
 }
@@ -48,6 +98,9 @@ export async function renderNode(node: VNode): Promise<HTMLElement> {
 
 export function cleanup(): void {
   for (const r of roots.splice(0)) act(() => render(null, r));
+  discardLaunch();
+  void takeLaunch()?.controller.dispose();
+  registerRuntime(null);
   document.body.innerHTML = '';
   vi.unstubAllGlobals();
 }

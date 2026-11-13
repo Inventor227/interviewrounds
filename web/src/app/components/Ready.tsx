@@ -1,12 +1,17 @@
 // The last steps before a round: microphone, headset, Start. Used by the round Start page and
 // the meeting setup page.
 //
-// Two explicit taps: "Allow microphone" (the prompt and the designed blocked states), then
-// "Enter the room", which hands the round to the session page inside that tap (app/launch.ts),
-// so no prompt ever eats the user activation that entering XR needs.
+// Two explicit taps (app/launch.ts): "Allow microphone" or "Get the room ready" (phase A: the
+// prompt with its designed blocked states, then the session and the room load), then "Enter the
+// room" (phase B: only the XR request), so nothing slow ever eats the activation XR needs.
 
 import type { ComponentChildren } from 'preact';
 import { useEffect, useRef, useState } from 'preact/hooks';
+import { useLocation } from 'preact-iso';
+import type { Me } from '../../shared/types';
+import { discardLaunch, enterLaunch, launchKey, launchState, prepareLaunch, useLaunch, type PrepareInput } from '../launch';
+import { CapNotice } from './CapNotice';
+import { capFromError } from './data';
 import { getAudioContext } from '../../voice/audio';
 import { MIC_CONSTRAINTS } from '../../voice/transport';
 import { Qr } from './Qr';
@@ -62,9 +67,10 @@ export interface Mic {
 }
 
 export function useMic(): Mic {
-  const first = useRef(takeHeld());
-  const [state, setState] = useState<MicState>(() => first.current?.state ?? (hasGetUserMedia() ? 'unknown' : 'unsupported'));
-  const stream = useRef<MediaStream | null>(first.current?.stream ?? null);
+  // Lazy, so only the first render takes a held stream (a later render would drop it unstopped).
+  const [first] = useState(takeHeld);
+  const [state, setState] = useState<MicState>(() => first?.state ?? (hasGetUserMedia() ? 'unknown' : 'unsupported'));
+  const stream = useRef<MediaStream | null>(first?.stream ?? null);
   const meterEl = useRef<HTMLElement | null>(null);
   const stopMeter = useRef<(() => void) | null>(null);
 
@@ -166,7 +172,7 @@ const MIC_TEXT: Record<MicState, { title: string; body?: string }> = {
   unsupported: { title: 'This browser cannot use a microphone here' },
 };
 
-export function MicStep(props: { mic: Mic }) {
+export function MicStep(props: { mic: Mic; action?: ComponentChildren; handedOver?: boolean }) {
   const { mic } = props;
   const s = mic.state;
   const t = MIC_TEXT[s];
@@ -182,16 +188,12 @@ export function MicStep(props: { mic: Mic }) {
       <div class="step-body" ref={ref} tabIndex={-1} aria-live="polite">
         <h3 class="step-title">{t.title}</h3>
         {t.body && <p class="step-text">{t.body}</p>}
-        {s === 'on' && (
+        {s === 'on' && !props.handedOver && (
           <div class="meter" ref={mic.meter} data-test="mic-meter" aria-hidden="true">
             <span />
           </div>
         )}
-        {s === 'unknown' && (
-          <button type="button" class="btn btn-primary btn-big" onClick={() => void mic.ask()} data-test="mic-allow">
-            Allow microphone
-          </button>
-        )}
+        {!blocked && props.action}
         {s === 'denied' && <MicDenied onRetry={() => void mic.ask()} />}
         {s === 'none' && (
           <div class="help" data-test="mic-none">
@@ -291,7 +293,7 @@ export function useHeadset(forcePreview = false): XrState {
   return state;
 }
 
-export function HeadsetStep(props: { xr: XrState; questUrl: string }) {
+export function HeadsetStep(props: { xr: XrState; questUrl: string; questNote?: string }) {
   const { xr } = props;
   return (
     <li class={`step ${xr === 'ready' ? 'step-ok' : ''}`} data-test="headset-step" data-state={xr}>
@@ -323,6 +325,7 @@ export function HeadsetStep(props: { xr: XrState; questUrl: string }) {
                 <p class="url" data-test="quest-url">
                   {props.questUrl.replace(/^https?:\/\//, '')}
                 </p>
+                {props.questNote && <p class="fine">{props.questNote}</p>}
               </div>
             </div>
           </div>
@@ -338,53 +341,122 @@ export function ReadyPanel(props: {
   mic: Mic;
   xr: XrState;
   questUrl: string;
-  /** Rendered instead of the Start button, e.g. a CapNotice. */
+  /** One line under the QR code (what opening it on the Quest keeps). */
+  questNote?: string;
+  /** What to prepare; null while it is not known yet (no meeting plan). */
+  input: PrepareInput | null;
+  title?: string;
+  /** Rendered instead of the Enter button, e.g. a CapNotice. */
   blocked?: ComponentChildren;
-  /** Called inside the Start tap with the mic stream (when it is live) and whether this is a 2D preview. */
-  onStart: (opts: { preview: boolean; mic: MediaStream | null }) => void;
-  startLabel?: string;
-  /** One line under the Start button once it is ready. */
+  enterLabel?: string;
+  /** One line under the Enter button once it is ready. */
   hint?: ComponentChildren;
+  /** Something on the page is not settled (e.g. edits to apply first). */
   busy?: boolean;
   error?: ComponentChildren;
+  me?: Me;
 }) {
-  const { mic, xr } = props;
+  const { mic, xr, input } = props;
+  const { route } = useLocation();
   const preview = xr === 'none';
   const blocked = micBlocked(mic.state);
+  const launch = useLaunch();
+  const key = input ? launchKey(input, preview) : null;
+  const mine = launch.status !== 'idle' && launch.key === key ? launch : null;
 
-  const micReady = mic.state === 'on' || mic.state === 'allowed';
-  // Synchronous on purpose: this tap's activation is what lets the session page enter XR.
-  const start = () => {
-    if (micReady) props.onStart({ preview, mic: mic.take() });
+  // A prepared round for other inputs (Adjust changed, plan changed) is stale: drop it. Leaving
+  // the page without entering drops ours too.
+  useEffect(() => {
+    if (launch.status !== 'idle' && launch.key !== key) discardLaunch();
+  }, [key, launch.status === 'idle' ? null : launch.key]);
+  const keyRef = useRef(key);
+  keyRef.current = key;
+  useEffect(
+    () => () => {
+      const now = launchState();
+      if (now.status !== 'idle' && now.key === keyRef.current) discardLaunch();
+    },
+    [],
+  );
+
+  // Phase A: the mic (one prompt at most), then the session and the room.
+  const phaseA = async () => {
+    if (!input || props.busy) return;
+    const stream = await mic.ask();
+    if (!stream) return;
+    void prepareLaunch(input, { mic: mic.take(), preview, title: props.title });
+  };
+  // Phase B: synchronous, so the XR request runs inside this tap.
+  const phaseB = () => {
+    if (mine?.status === 'ready') enterLaunch(route);
   };
 
+  const preparing = mine?.status === 'preparing';
+  const ready = mine?.status === 'ready';
+  const failed = mine?.status === 'failed' ? mine.error : null;
+  const cap = failed ? capFromError(failed) : null;
+  const micReady = mic.state === 'on' || mic.state === 'allowed';
+  const showPhaseA = !blocked && !preparing && !ready && mic.state !== 'asking';
+
+  const phaseAButton = showPhaseA ? (
+    <button
+      type="button"
+      class="btn btn-primary btn-big"
+      onClick={() => void phaseA()}
+      disabled={!input || props.busy || xr === 'checking'}
+      data-test="mic-allow"
+    >
+      {failed ? 'Try again' : micReady ? 'Get the room ready' : 'Allow microphone'}
+    </button>
+  ) : null;
+
   return (
-    <div class="ready" data-test="ready">
+    <div class="ready" data-test="ready" data-launch={mine?.status ?? 'none'}>
       <ol class="steps">
-        <MicStep mic={mic} />
-        <HeadsetStep xr={xr} questUrl={props.questUrl} />
+        <MicStep mic={mic} action={phaseAButton} handedOver={!!mine} />
+        <HeadsetStep xr={xr} questUrl={props.questUrl} questNote={props.questNote} />
       </ol>
       {props.error}
-      {props.blocked ?? (
-        <div class="start-row">
-          <button
-            type="button"
-            class="btn btn-primary btn-big"
-            data-test={preview ? 'start-preview' : 'start-round'}
-            disabled={!micReady || xr === 'checking' || props.busy}
-            onClick={start}
-          >
-            {props.startLabel ?? (preview ? 'Preview on this screen' : 'Enter the room')}
-          </button>
-          {blocked ? (
-            <p class="fine">Turn the microphone on first. Everything else is ready.</p>
-          ) : !micReady ? (
-            <p class="fine">Allow the microphone first.</p>
-          ) : props.hint ? (
-            <p class="fine">{props.hint}</p>
-          ) : null}
-        </div>
-      )}
+      {cap ? (
+        <CapNotice reason={cap.reason} resetsAt={cap.resetsAt} isGuest={props.me?.identity.kind !== 'user'} signInAvailable={props.me?.sign_in_available} />
+      ) : failed ? (
+        <p class="note-warn" role="alert" data-test="prepare-failed">
+          {prepareFailText(failed)}
+        </p>
+      ) : null}
+      {props.blocked ??
+        (cap ? null : (
+          <div class="start-row">
+            <button
+              type="button"
+              class="btn btn-primary btn-big"
+              data-test={preview ? 'start-preview' : 'start-round'}
+              disabled={!ready || props.busy}
+              aria-describedby="enter-note"
+              onClick={phaseB}
+            >
+              {props.enterLabel ?? (preview ? 'Preview on this screen' : 'Enter the room')}
+            </button>
+            <p class="fine" id="enter-note" aria-live="polite" data-test="enter-note">
+              {blocked
+                ? 'Turn the microphone on first. Everything else is ready.'
+                : preparing
+                  ? 'Getting the room ready.'
+                  : ready
+                    ? (props.hint ?? (preview ? 'Ready.' : 'Ready. Put on your headset if it is not on yet.'))
+                    : 'Allow the microphone first. The room gets ready in a few seconds.'}
+            </p>
+          </div>
+        ))}
     </div>
   );
+}
+
+function prepareFailText(err: unknown): string {
+  const code = (err as { code?: string } | null)?.code;
+  const status = (err as { status?: number } | null)?.status;
+  if (code === 'network' || status === 0) return 'We could not reach the server. Check your connection, then try again.';
+  if (code === 'room_load_failed') return 'The room did not load on this device. Try again.';
+  if (code === 'mic_denied' || code === 'no_mic' || code === 'mic_busy') return 'The microphone stopped working. Check it, then try again.';
+  return 'The round could not be set up. Try again.';
 }
