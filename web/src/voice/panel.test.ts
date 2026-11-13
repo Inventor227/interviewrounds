@@ -2,14 +2,28 @@ import { describe, expect, it, vi } from 'vitest';
 import type { Panelist } from '../shared/types';
 import { PanelController } from './panel';
 import { panelist, ScriptedTransport, sessionRes } from './testkit';
-import type { TransportOptions } from './transport';
+import type { TransportOptions, VoiceTransport } from './transport';
 
-function setup(mode: 'swap' | 'joined', panel = [panelist('p1', 0), panelist('p2', 1)]) {
+/** A transport whose start() waits until the test releases it. */
+class SlowTransport extends ScriptedTransport {
+  release!: () => void;
+  override async start(): Promise<void> {
+    this.started = true;
+    await new Promise<void>((r) => (this.release = r));
+  }
+}
+
+function setup(
+  mode: 'swap' | 'joined',
+  panel = [panelist('p1', 0), panelist('p2', 1)],
+  opts: { slow?: string[]; waitQuiet?: (t: VoiceTransport) => Promise<void> } = {},
+) {
   const log: string[] = [];
   const made: ScriptedTransport[] = [];
   const make = (p: Panelist, o?: TransportOptions) => {
     log.push(`make:${p.panelist_id}`);
-    const t = new ScriptedTransport(p.panelist_id, log, o, p);
+    const T = opts.slow?.includes(p.panelist_id) ? SlowTransport : ScriptedTransport;
+    const t = new T(p.panelist_id, log, o, p);
     made.push(t);
     return t;
   };
@@ -18,7 +32,7 @@ function setup(mode: 'swap' | 'joined', panel = [panelist('p1', 0), panelist('p2
     return { voice: { transport: 'fake' as const } };
   });
   const res = sessionRes({ panel_mode: mode, panel });
-  const pc = new PanelController(res, make, { api: { joinPanelist } });
+  const pc = new PanelController(res, make, { api: { joinPanelist }, waitQuiet: opts.waitQuiet });
   return { pc, log, made, joinPanelist };
 }
 
@@ -39,6 +53,11 @@ describe('PanelController', () => {
     expect(iJoin).toBeGreaterThanOrEqual(0);
     expect(iJoin).toBeLessThan(iStart);
     expect(iStart).toBeLessThan(iStop);
+    // Never two mics live: the old floor is muted before the join, the new one starts muted.
+    expect(log.indexOf('mute:p1')).toBeLessThan(iJoin);
+    expect(log.indexOf('mute:p2')).toBeGreaterThan(-1);
+    expect(log.indexOf('mute:p2')).toBeLessThan(iStart);
+    expect(log.indexOf('unmute:p2')).toBeGreaterThan(iStart);
     expect(made[1]!.opts.openingLine).toBe('Hi, I am Priya.');
     expect(made[1]!.muted).toBe(false);
     expect(pc.floor).toBe('p2');
@@ -106,5 +125,53 @@ describe('PanelController', () => {
     await pc.start();
     await pc.stopAll();
     expect(made.every((t) => t.stopped)).toBe(true);
+  });
+});
+
+describe('PanelController lifecycle', () => {
+  it('stop_all_during_start_stops_the_late_transport', async () => {
+    const { pc, made } = setup('swap', undefined, { slow: ['p1'] });
+    const starting = pc.start();
+    await vi.waitFor(() => expect(made).toHaveLength(1));
+    await pc.stopAll();
+    (made[0] as SlowTransport).release();
+    await starting;
+    expect(made[0]!.stopped).toBe(true);
+    expect(pc.all()).toHaveLength(0);
+  });
+
+  it('stop_all_during_swap_stops_the_new_transport', async () => {
+    const { pc, made } = setup('swap', undefined, { slow: ['p2'] });
+    await pc.start();
+    const swapping = pc.handOver('p2', 'Hi');
+    await vi.waitFor(() => expect(made).toHaveLength(2));
+    await pc.stopAll();
+    (made[1] as SlowTransport).release();
+    await swapping;
+    expect(made[1]!.stopped).toBe(true);
+    expect(made[0]!.stopped).toBe(true);
+    expect(pc.all()).toHaveLength(0);
+  });
+
+  it('handover_waits_for_the_old_panelist_to_finish', async () => {
+    let quiet!: () => void;
+    const waitQuiet = vi.fn(() => new Promise<void>((r) => (quiet = r)));
+    const { pc, joinPanelist, made } = setup('swap', undefined, { waitQuiet });
+    await pc.start();
+    const swapping = pc.handOver('p2', 'Hi');
+    await vi.waitFor(() => expect(waitQuiet).toHaveBeenCalledWith(made[0]));
+    expect(joinPanelist).not.toHaveBeenCalled();
+    expect(made[0]!.muted).toBe(false);
+    quiet();
+    await swapping;
+    expect(joinPanelist).toHaveBeenCalled();
+    expect(pc.floor).toBe('p2');
+  });
+
+  it('joined_start_mutes_non_floor_before_connecting', async () => {
+    const { pc, log } = setup('joined');
+    await pc.start();
+    expect(log.indexOf('mute:p2')).toBeLessThan(log.indexOf('start:p2'));
+    expect(log.indexOf('mute:p1')).toBe(-1);
   });
 });

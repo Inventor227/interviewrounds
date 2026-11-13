@@ -14,14 +14,22 @@ export type MakeTransport = (p: Panelist, opts?: TransportOptions) => VoiceTrans
 
 export interface PanelOptions {
   api?: Pick<Api, 'joinPanelist'>;
+  /**
+   * Resolves once this transport's agent is not speaking (or after a short cap), so a hand-over
+   * never cuts the outgoing panelist mid-sentence or overlaps two voices.
+   */
+  waitQuiet?: (t: VoiceTransport) => Promise<void>;
 }
 
 export class PanelController {
   private readonly transports = new Map<string, VoiceTransport>();
   private readonly panel: Map<string, Panelist>;
   private readonly api: Pick<Api, 'joinPanelist'>;
+  private readonly waitQuiet: (t: VoiceTransport) => Promise<void>;
   private floorId: string;
   private muted = false;
+  /** Set by stopAll(): anything still connecting is stopped as soon as it is up. */
+  private stopped = false;
   /** Hand-overs run one at a time, in arrival order. */
   private queue: Promise<unknown> = Promise.resolve();
 
@@ -33,6 +41,7 @@ export class PanelController {
     this.panel = new Map(res.panel.map((p) => [p.panelist_id, p]));
     this.floorId = res.floor;
     this.api = opts.api ?? defaultApi;
+    this.waitQuiet = opts.waitQuiet ?? (async () => undefined);
   }
 
   get floor(): string {
@@ -61,12 +70,16 @@ export class PanelController {
     await Promise.all(
       ids.map(async (id) => {
         const p = await this.withVoice(id);
+        if (this.stopped) return;
         const t = this.make(p);
+        // Only the floor may hear the user, from the first moment on.
+        if (this.muted || id !== this.floorId) t.setMicMuted(true);
         this.transports.set(id, t);
         await t.start();
+        if (this.stopped) await t.stop();
       }),
     );
-    this.applyGating();
+    if (!this.stopped) this.applyGating();
   }
 
   handOver(to: string, openingLine: string): Promise<void> {
@@ -81,7 +94,12 @@ export class PanelController {
     this.applyGating();
   }
 
+  get isStopped(): boolean {
+    return this.stopped;
+  }
+
   async stopAll(): Promise<void> {
+    this.stopped = true;
     const ts = this.all();
     this.transports.clear();
     await Promise.allSettled(ts.map((t) => t.stop()));
@@ -90,7 +108,13 @@ export class PanelController {
   // ---------- internals ----------
 
   private async doHandOver(to: string, openingLine: string): Promise<void> {
-    if (to === this.floorId || !this.panel.has(to)) return;
+    if (this.stopped || to === this.floorId || !this.panel.has(to)) return;
+    const oldId = this.floorId;
+    const old = this.transports.get(oldId);
+    // Let the outgoing panelist finish its hand-off sentence first.
+    if (old) await this.waitQuiet(old);
+    if (this.stopped) return;
+
     if (this.res.panel_mode === 'joined') {
       const next = this.transports.get(to);
       if (!next) throw new Error(`panelist ${to} is not connected`);
@@ -100,25 +124,36 @@ export class PanelController {
       return;
     }
 
-    const { voice } = await this.api.joinPanelist(this.res.session_id, to, { opening_line: openingLine });
-    const p = { ...this.panel.get(to)!, voice };
-    this.panel.set(to, p);
-    const next = this.make(p, { openingLine });
+    // Swap: the old floor stops hearing the user before the new session connects, and the new one
+    // starts muted, so two sessions never transcribe the same speech.
+    old?.setMicMuted(true);
+    let next: VoiceTransport;
     try {
-      await next.start();
+      const { voice } = await this.api.joinPanelist(this.res.session_id, to, { opening_line: openingLine });
+      if (this.stopped) return;
+      const p = { ...this.panel.get(to)!, voice };
+      this.panel.set(to, p);
+      next = this.make(p, { openingLine });
+      next.setMicMuted(true);
+      try {
+        await next.start();
+      } catch (err) {
+        void next.stop().catch(() => undefined);
+        throw err;
+      }
     } catch (err) {
-      void next.stop().catch(() => undefined);
+      if (!this.stopped) this.applyGating(); // the old floor hears again
       throw err;
     }
-    const oldId = this.floorId;
-    const old = this.transports.get(oldId);
+    if (this.stopped) {
+      await next.stop();
+      return;
+    }
+    if (old) this.transports.delete(oldId);
     this.transports.set(to, next);
     this.floorId = to;
-    this.applyGating(); // mutes the old floor, unmutes the new one
-    if (old) {
-      this.transports.delete(oldId);
-      await old.stop();
-    }
+    this.applyGating(); // unmutes the new floor
+    if (old) await old.stop();
   }
 
   /** Joined mode connects everyone, so a panelist whose voice is still pending joins now. */
