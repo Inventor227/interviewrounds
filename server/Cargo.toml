@@ -50,6 +50,7 @@ tower-http = { version = "0.7.1", features = [
     "compression-br",
     "set-header",
     "trace",
+    "catch-panic",
 ] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
@@ -64,4 +65,3 @@ wiremock = "0.6"
 lto = "thin"
 codegen-units = 4
 strip = true
-panic = "abort"

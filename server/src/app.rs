@@ -10,6 +10,7 @@ use axum::routing::{any, get, post};
 use axum::{Json, Router};
 use serde_json::json;
 use sqlx::PgPool;
+use tower_http::catch_panic::CatchPanicLayer;
 use tower_http::compression::CompressionLayer;
 use tower_http::services::{ServeDir, ServeFile};
 use tower_http::set_header::SetResponseHeaderLayer;
@@ -147,6 +148,7 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/{*rest}", any(api_not_found))
         .fallback_service(static_files)
         .with_state(state)
+        .layer(catch_panic())
         .layer(CompressionLayer::new())
         .layer(security_header(header::X_CONTENT_TYPE_OPTIONS, "nosniff"))
         .layer(security_header(
@@ -167,6 +169,26 @@ pub fn router(state: AppState) -> Router {
             csp,
         ))
         .layer(TraceLayer::new_for_http())
+}
+
+/// A panic in one request answers 500 and leaves the server running (the release build unwinds; tasks spawned
+/// with tokio are contained the same way).
+pub fn catch_panic() -> CatchPanicLayer<fn(Box<dyn std::any::Any + Send + 'static>) -> Response> {
+    CatchPanicLayer::custom(panic_response as fn(_) -> _)
+}
+
+fn panic_response(err: Box<dyn std::any::Any + Send + 'static>) -> Response {
+    let detail = err
+        .downcast_ref::<String>()
+        .map(String::as_str)
+        .or_else(|| err.downcast_ref::<&str>().copied())
+        .unwrap_or("unknown");
+    tracing::error!(panic = detail, "a request handler panicked");
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(json!({"status": 500, "code": "server_error", "message": "Something went wrong. Please try again."})),
+    )
+        .into_response()
 }
 
 fn security_header(name: HeaderName, value: &'static str) -> SetResponseHeaderLayer<HeaderValue> {

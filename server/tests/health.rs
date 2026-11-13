@@ -129,3 +129,41 @@ async fn missing_assets_are_404_not_the_web_app() {
         "public, max-age=31536000, immutable"
     );
 }
+
+#[tokio::test]
+async fn a_panicking_handler_answers_500_and_the_server_keeps_serving() {
+    use axum::Router;
+    use axum::body::Body;
+    use axum::routing::get;
+    use tower::ServiceExt;
+
+    async fn boom() -> &'static str {
+        panic!("user text broke a parser")
+    }
+    let app: Router = Router::new()
+        .route("/boom", get(boom))
+        .route("/ok", get(|| async { "ok" }))
+        .layer(ir_server::app::catch_panic());
+    let res = app
+        .clone()
+        .oneshot(
+            axum::http::Request::get("/boom")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let body = axum::body::to_bytes(res.into_body(), 4096).await.unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(v["code"], "server_error");
+    assert!(
+        !v.to_string().contains("parser"),
+        "the panic text stays in the log"
+    );
+    let res = app
+        .oneshot(axum::http::Request::get("/ok").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+}
