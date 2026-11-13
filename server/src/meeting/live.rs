@@ -512,8 +512,12 @@ pub struct Updates {
     pub finished: u64,
     /// The run in flight.
     pub in_flight: Option<u64>,
-    /// Turns (`SessionState::turns`) already judged.
-    pub judged_turns: usize,
+    /// Turns up to here (`SessionState::turns[..confirmed_turns]`) are confirmed: their replies were committed.
+    /// Only confirmed turns are judged.
+    pub confirmed_turns: usize,
+    /// Per user turn (index into `SessionState::turns`): how much of its text (bytes) has been judged. Words added
+    /// to a turn after it was judged are judged in the next run.
+    pub judged_len: HashMap<usize, usize>,
     /// No more runs; late results are dropped.
     pub closed: bool,
     pub wake: Arc<Notify>,
@@ -524,18 +528,21 @@ pub struct Updates {
 }
 
 impl Updates {
-    /// A confirmed user turn: judge it (soon).
-    pub fn request(&mut self) {
+    /// A user turn was confirmed: `confirmed_turns` is `SessionState::turns.len()` right after its reply was
+    /// committed. Judge it (soon).
+    pub fn request(&mut self, confirmed_turns: usize) {
         if self.closed {
             return;
         }
+        self.confirmed_turns = self.confirmed_turns.max(confirmed_turns);
         self.requested += 1;
         self.wake.notify_one();
     }
 
-    /// Nothing is running or waiting.
+    /// Nothing is running or waiting, or nothing ever will (no runner, or it stopped).
     pub fn settled(&self) -> bool {
-        self.in_flight.is_none() && self.finished >= self.requested
+        let runner_gone = self.runner.as_ref().is_none_or(|h| h.is_finished());
+        self.closed || runner_gone || (self.in_flight.is_none() && self.finished >= self.requested)
     }
 
     /// Stops the runner; results still in flight are dropped.
@@ -561,31 +568,39 @@ pub struct UpdateJob {
     pub state: MeetingState,
     pub exchange: Vec<Turn>,
     pub ctx: UpdateContext,
-    /// `judged_turns` once applied.
-    pub turns_end: usize,
+    /// The user turns it judges and their text length then, recorded in `judged_len` once applied.
+    pub judged: Vec<(usize, usize)>,
     /// `MeetingState::updates` when built; a result for another value is stale.
     pub base_updates: u32,
 }
 
-/// The next update: every user turn not judged yet, after the attendee line that came before the first of them.
-/// None outside meetings or when no user turn waits.
+/// The next update: every confirmed user turn not judged yet (or with words added since it was judged), after the
+/// attendee line that came before the first of them. Turns past the confirmed boundary (speech whose reply was not
+/// played yet) wait for their own confirmation. None outside meetings or when nothing waits.
 pub fn next_job(st: &SessionState, seq: u64, now: Instant) -> Option<UpdateJob> {
     let meeting = st.meeting.as_ref()?;
-    let from = st.meeting_updates.judged_turns.min(st.turns.len());
-    let first_user = from
-        + st.turns[from..]
-            .iter()
-            .position(|t| t.speaker == "candidate")?;
-    let last_user = st.turns.iter().rposition(|t| t.speaker == "candidate")?;
-    let start = st.turns[..first_user]
+    let u = &st.meeting_updates;
+    let confirmed = u.confirmed_turns.min(st.turns.len());
+    let waiting: Vec<usize> = (0..confirmed)
+        .filter(|&i| {
+            let t = &st.turns[i];
+            t.speaker == "candidate" && t.text.len() > u.judged_len.get(&i).copied().unwrap_or(0)
+        })
+        .collect();
+    let (&first, &last) = (waiting.first()?, waiting.last()?);
+    let start = st.turns[..first]
         .iter()
         .rposition(|t| t.speaker != "candidate" && t.speaker != "app")
-        .unwrap_or(first_user);
-    let start = start.max((last_user + 1).saturating_sub(MAX_EXCHANGE_TURNS));
-    let exchange: Vec<Turn> = st.turns[start..=last_user]
+        .unwrap_or(first);
+    let start = start.max((last + 1).saturating_sub(MAX_EXCHANGE_TURNS));
+    let exchange: Vec<Turn> = st.turns[start..=last]
         .iter()
         .filter(|t| t.speaker != "app")
         .cloned()
+        .collect();
+    let judged = (start..=last)
+        .filter(|&i| st.turns[i].speaker == "candidate")
+        .map(|i| (i, st.turns[i].text.len()))
         .collect();
     Some(UpdateJob {
         seq,
@@ -597,7 +612,7 @@ pub fn next_job(st: &SessionState, seq: u64, now: Instant) -> Option<UpdateJob> 
             minutes_left: st.round_minutes_left(now),
             decision_phase_started: decision_started(&st.round, st.phase_idx),
         },
-        turns_end: last_user + 1,
+        judged,
         base_updates: meeting.updates,
     })
 }
@@ -706,7 +721,10 @@ async fn run_updates(
         if let Some(current) = st.meeting.as_mut() {
             *current = apply_update(current, &raw, &job.exchange, decision_started);
         }
-        st.meeting_updates.judged_turns = st.meeting_updates.judged_turns.max(job.turns_end);
+        for (i, len) in &job.judged {
+            let judged = st.meeting_updates.judged_len.entry(*i).or_default();
+            *judged = (*judged).max(*len);
+        }
         st.meeting_updates.applied += 1;
         tracing::info!(
             session_id = %session_id,
@@ -731,11 +749,7 @@ pub async fn wait_settled(session: &Arc<Mutex<SessionState>>, limit: Duration) -
     loop {
         {
             let st = session.lock().await;
-            if st.meeting.is_none()
-                || st.meeting_updates.closed
-                || st.meeting_updates.runner.is_none()
-                || st.meeting_updates.settled()
-            {
+            if st.meeting.is_none() || st.meeting_updates.settled() {
                 return true;
             }
         }
@@ -752,7 +766,7 @@ pub fn decision_wait_needed(st: &SessionState, panelist_id: &str, now: Instant) 
     let Some(m) = st.meeting.as_ref() else {
         return false;
     };
-    if st.meeting_updates.settled() || st.meeting_updates.runner.is_none() {
+    if st.meeting_updates.settled() {
         return false;
     }
     let clock = Clock::of(st, now);

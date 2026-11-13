@@ -803,7 +803,8 @@ pub fn apply_update(
             let Some(mut status) = rc.status else {
                 continue;
             };
-            let quote = clean(&rc.evidence_quote);
+            // Checked against the user's own words as written; never shown to attendees, only stored.
+            let quote = plain(&rc.evidence_quote);
             if status == ConcernStatus::Resolved
                 && c.status != ConcernStatus::Resolved
                 && !quoted_from(&quote, &user_words)
@@ -822,7 +823,7 @@ pub fn apply_update(
             if status == ConcernStatus::Resolved {
                 newly_resolved = true;
             }
-            c.evidence_quote = quote;
+            c.evidence_quote = walk.scrub(&quote);
             c.status = status;
         }
         // At most one new concern per turn, raised by the user, open.

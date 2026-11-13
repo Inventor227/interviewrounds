@@ -964,7 +964,8 @@ impl SessionState {
 
         // A meeting judges each confirmed user turn in the background (the reply to it was played).
         if self.meeting.is_some() && draft.input.speech().is_some() {
-            self.meeting_updates.request();
+            let confirmed = self.turns.len();
+            self.meeting_updates.request(confirmed);
         }
 
         // No subscriber (no socket yet) is fine.
