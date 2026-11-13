@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DeskPlacement, detectDeskDwell, type DwellSample } from './placement';
+import { CONTROLLER_DWELL_MIN_DOWN, CONTROLLER_PAD, CONTROLLER_REST, DeskPlacement, detectDeskDwell, type DwellSample } from './placement';
 
 const HEAD_Y = 1.2;
 
@@ -159,5 +159,189 @@ describe('DeskPlacement', () => {
     for (let t = 5650; t < 6000; t += 1000 / 72) p.update(t, head, [hand]);
     expect(p.update(6000, head, [hand]).state).toBe('dwelling');
     expect(p.update(6450, head, [hand]).result?.source).toBe('touch');
+  });
+});
+
+describe('desk placement with a controller', () => {
+  const head = { pos: { x: 0, y: HEAD_Y, z: 0 }, yaw: 0.3, pitch: -0.4 };
+  const noHands: never[] = [];
+  /** A controller whose tip rests at `tip`, pointing 45 degrees down and forward. */
+  const ctrl = (tip: { x: number; y: number; z: number }, pressed: boolean, dir = { x: 0, y: -Math.SQRT1_2, z: -Math.SQRT1_2 }, hand: 'left' | 'right' = 'right') => ({ hand, tracked: true, tip, dir, pressed });
+  const DESK_TIP = { x: 0.12, y: 0.745, z: -0.42 };
+
+  /** The tip rests at `tip` for `ms` (frames of 14 ms from t0); returns the last status and the time. */
+  const restFor = (p: DeskPlacement, t0: number, ms: number, make: (pressed: boolean) => ReturnType<typeof ctrl>) => {
+    let st = p.update(t0, head, noHands, [make(false)]);
+    let t = t0;
+    while (t < t0 + ms) {
+      t += 14;
+      st = p.update(t, head, noHands, [make(false)]);
+    }
+    return { st, t };
+  };
+
+  it('controller_places_desk_with_tip_offset', () => {
+    const p = new DeskPlacement(0);
+    // The tip rests on the desk for 0.35 s, pointing down at it; the trigger is not pulled yet.
+    const { st: before, t } = restFor(p, 0, 350, (pressed) => ctrl(DESK_TIP, pressed));
+    expect(before.state).toBe('dwelling');
+    const st = p.update(t + 14, head, noHands, [ctrl(DESK_TIP, true)]);
+    expect(st.state).toBe('done');
+    const desk = st.result!;
+    // The desk top is the tip minus the controller's contact pad: a few millimetres, not the 5 cm to the grip.
+    expect(CONTROLLER_PAD).toBeLessThanOrEqual(0.008);
+    expect(desk.deskY).toBeCloseTo(DESK_TIP.y - CONTROLLER_PAD, 6);
+    expect(DESK_TIP.y - desk.deskY).toBeLessThan(0.01);
+    // The sheet's near edge centre is under the tip, facing the way the head faces.
+    expect(desk.origin.x).toBeCloseTo(DESK_TIP.x, 6);
+    expect(desk.origin.y).toBeCloseTo(DESK_TIP.y - CONTROLLER_PAD, 6);
+    expect(desk.origin.z).toBeCloseTo(DESK_TIP.z, 6);
+    expect(desk.yaw).toBe(0.3);
+    expect(desk.source).toBe('touch');
+    // The hand that held it is the dominant one (the tray goes on the other side), as with a finger.
+    expect(desk.hand).toBe('right');
+    expect(desk.input).toBe('controllers');
+  });
+
+  it('a_trigger_while_the_ray_is_on_the_prompt_card_never_places', () => {
+    // The usual way to "click" a card: the controller at chest height, level, its ray on the card, the trigger pulled.
+    const p = new DeskPlacement(0, 60000);
+    const chest = { x: 0.15, y: HEAD_Y - 0.3, z: -0.25 };
+    const level = { x: 0, y: 0.1, z: -1 };
+    let { st, t } = restFor(p, 0, 1000, (pressed) => ({ ...ctrl(chest, pressed, level), busy: true }));
+    for (let k = 0; k < 5; k++) {
+      st = p.update((t += 14), head, noHands, [{ ...ctrl(chest, true, level), busy: true }]);
+      expect(st.state).toBe('waiting');
+      st = p.update((t += 14), head, noHands, [{ ...ctrl(chest, false, level), busy: true }]);
+    }
+    // Not even when the controller happens to point down while its ray is on a card (a card low in view).
+    ({ st, t } = restFor(p, t, 1000, (pressed) => ({ ...ctrl(chest, pressed), busy: true })));
+    st = p.update((t += 14), head, noHands, [{ ...ctrl(chest, true), busy: true }]);
+    expect(st.state).toBe('waiting');
+    expect(st.result).toBeNull();
+  });
+
+  it('a_trigger_pulled_in_the_air_level_or_on_the_move_does_not_place', () => {
+    const p = new DeskPlacement(0, 60000);
+    // Level, perfectly still, in the band: a controller pointing at something, not touching a desk.
+    let { st, t } = restFor(p, 0, 600, (pressed) => ctrl(DESK_TIP, pressed, { x: 0, y: 0, z: -1 }));
+    st = p.update((t += 14), head, noHands, [ctrl(DESK_TIP, true, { x: 0, y: 0, z: -1 })]);
+    expect(st.state).toBe('waiting');
+    p.update((t += 14), head, noHands, [ctrl(DESK_TIP, false)]);
+    // Pointing down but on its way down to the desk (20 cm a second): the pull does not place where it happens to be.
+    for (let i = 0; i < 30; i++) st = p.update((t += 14), head, noHands, [ctrl({ ...DESK_TIP, y: DESK_TIP.y + 0.1 - i * 0.0028 }, false)]);
+    st = p.update((t += 14), head, noHands, [ctrl({ ...DESK_TIP, y: DESK_TIP.y + 0.013 }, true)]);
+    expect(st.state).not.toBe('done');
+    // It arrives and rests only 0.15 s before the pull: too soon.
+    p.update((t += 14), head, noHands, [ctrl(DESK_TIP, false)]);
+    ({ st, t } = restFor(p, t, 150, (pressed) => ctrl(DESK_TIP, pressed)));
+    st = p.update((t += 14), head, noHands, [ctrl(DESK_TIP, true)]);
+    expect(st.state).not.toBe('done');
+  });
+
+  it('a_controller_held_in_the_air_pointing_down_at_the_desk_does_not_place', () => {
+    // Aiming at the spot on the desk from chest height, the way one clicks on Quest: held as still as a hand can
+    // (1.5 mm of tremor, 0.8 cm a second of drift), pointing 40 degrees down, then the trigger.
+    const p = new DeskPlacement(0, 60000);
+    const down40 = { x: 0, y: -Math.sin((40 * Math.PI) / 180), z: -Math.cos((40 * Math.PI) / 180) };
+    let seed = 11;
+    const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647) * 2 - 1;
+    const air = (t: number, pressed: boolean) => ctrl({ x: 0.1 + 0.008 * (t / 1000) + 0.0015 * rnd(), y: HEAD_Y - 0.3 + 0.0015 * rnd(), z: -0.3 + 0.0015 * rnd() }, pressed, down40);
+    let st = p.update(0, head, noHands, [air(0, false)]);
+    let t = 0;
+    while (t < 350) st = p.update((t += 14), head, noHands, [air(t, false)]);
+    st = p.update((t += 14), head, noHands, [air(t, true)]);
+    expect(st.state).not.toBe('done');
+    expect(st.missedPull).toBe(true);
+    // Nor by holding it there for two more seconds without the trigger.
+    while (t < 2500) {
+      st = p.update((t += 14), head, noHands, [air(t, false)]);
+      expect(st.state).not.toBe('done');
+    }
+    // The same controller with its tip standing on the desk (a tenth of a millimetre of tracking noise) places.
+    const q = new DeskPlacement(0, 60000);
+    const onDesk = (pressed: boolean) => ctrl({ x: DESK_TIP.x + 0.0001 * rnd(), y: DESK_TIP.y + 0.0001 * rnd(), z: DESK_TIP.z + 0.0001 * rnd() }, pressed, down40);
+    t = 0;
+    q.update(0, head, noHands, [onDesk(false)]);
+    while (t < 350) q.update((t += 14), head, noHands, [onDesk(false)]);
+    st = q.update((t += 14), head, noHands, [onDesk(true)]);
+    expect(st.state).toBe('done');
+    expect(st.missedPull).toBeUndefined();
+    expect(st.result!.deskY).toBeCloseTo(DESK_TIP.y - CONTROLLER_PAD, 3);
+    expect(CONTROLLER_REST.spread).toBeLessThan(0.008);
+  });
+
+  it('a_trigger_pull_that_places_nothing_is_reported_once_per_pull', () => {
+    const p = new DeskPlacement(0, 60000);
+    const level = { x: 0, y: 0, z: -1 };
+    // At the card, level, in the air: each pull is a miss; frames without a new pull are not.
+    expect(p.update(0, head, noHands, [{ ...ctrl(DESK_TIP, false, level), busy: true }]).missedPull).toBeUndefined();
+    expect(p.update(14, head, noHands, [{ ...ctrl(DESK_TIP, true, level), busy: true }]).missedPull).toBe(true);
+    expect(p.update(28, head, noHands, [{ ...ctrl(DESK_TIP, true, level), busy: true }]).missedPull).toBeUndefined();
+    p.update(42, head, noHands, [ctrl(DESK_TIP, false)]);
+    // A tap of the tip on the desk with the pull before it has settled: a miss too.
+    expect(p.update(56, head, noHands, [ctrl(DESK_TIP, true)]).missedPull).toBe(true);
+    // A hand's pinch is never a missed pull.
+    const hand = { hand: 'left' as const, tracked: true, indexTip: { x: 0, y: HEAD_Y - 0.1, z: -0.3 }, thumbTip: { x: 0, y: HEAD_Y - 0.1, z: -0.3 }, tips: [], pinch: 1 };
+    expect(new DeskPlacement(0, 60000).update(14, head, [hand], []).missedPull).toBeUndefined();
+  });
+
+  it('a_trigger_already_held_when_placement_starts_does_not_place', () => {
+    const p = new DeskPlacement(0);
+    // Held from the start while the tip rests (under the dwell time): no pull was seen.
+    let t = 0;
+    let st = p.update(t, head, noHands, [ctrl(DESK_TIP, true)]);
+    while (t < 400) st = p.update((t += 14), head, noHands, [ctrl(DESK_TIP, true)]);
+    expect(st.state).toBe('dwelling');
+    // Let go and pull again: placed.
+    p.update((t += 14), head, noHands, [ctrl(DESK_TIP, false)]);
+    st = p.update((t += 14), head, noHands, [ctrl(DESK_TIP, true)]);
+    expect(st.state).toBe('done');
+  });
+
+  it('a_trigger_pull_near_the_face_or_down_in_the_lap_does_not_place', () => {
+    for (const y of [HEAD_Y - 0.1, HEAD_Y - 0.9]) {
+      const p = new DeskPlacement(0, 60000);
+      const { t } = restFor(p, 0, 500, (pressed) => ctrl({ ...DESK_TIP, y }, pressed));
+      expect(p.update(t + 14, head, noHands, [ctrl({ ...DESK_TIP, y }, true)]).state).not.toBe('done');
+    }
+  });
+
+  it('a_controller_tip_held_still_on_the_desk_places_after_the_dwell_like_a_finger', () => {
+    const p = new DeskPlacement(0);
+    let st = p.update(0, head, noHands, [ctrl(DESK_TIP, false)]);
+    for (let t = 14; t <= 700 && st.state !== 'done'; t += 14) {
+      st = p.update(t, head, noHands, [ctrl(DESK_TIP, false)]);
+      if (t > 100 && st.state !== 'done') {
+        // The ring fills under the tip, with the controller's pad.
+        expect(st.state).toBe('dwelling');
+        expect(st.pad).toBe(CONTROLLER_PAD);
+        expect(st.hand).toBe('right');
+      }
+    }
+    expect(st.state).toBe('done');
+    expect(st.result!.deskY).toBeCloseTo(DESK_TIP.y - CONTROLLER_PAD, 6);
+    expect(st.result!.input).toBe('controllers');
+  });
+
+  it('a_controller_lying_level_or_resting_in_the_lap_is_not_a_desk', () => {
+    const p = new DeskPlacement(0, 60000);
+    // Held level (not pointing down at a desk) and perfectly still for 2 s.
+    for (let t = 0; t <= 2000; t += 14) {
+      const st = p.update(t, head, noHands, [ctrl(DESK_TIP, false, { x: 0, y: -0.1, z: -1 }), ctrl({ x: -0.2, y: HEAD_Y - 0.55, z: -0.1 }, false, { x: 0, y: 0.2, z: -1 }, 'left')]);
+      expect(st.state).toBe('waiting');
+    }
+    expect(CONTROLLER_DWELL_MIN_DOWN).toBeGreaterThan(0.25);
+  });
+
+  it('a_tracked_hand_wins_its_side_and_no_touch_still_falls_back', () => {
+    const p = new DeskPlacement(0, 1000);
+    const hand = { hand: 'right' as const, tracked: true, indexTip: { x: 0, y: HEAD_Y - 0.1, z: -0.3 }, thumbTip: { x: 0, y: HEAD_Y - 0.1, z: -0.3 }, tips: [], pinch: 0 };
+    // The right hand is tracked (its controller lies on the desk with the trigger pressed against something).
+    p.update(0, head, [hand], [ctrl(DESK_TIP, false)]);
+    expect(p.update(14, head, [hand], [ctrl(DESK_TIP, true)]).state).toBe('waiting');
+    const st = p.update(1001, head, [hand], [ctrl({ ...DESK_TIP, y: HEAD_Y }, false)]);
+    expect(st.state).toBe('done');
+    expect(st.result!.source).toBe('fallback');
   });
 });

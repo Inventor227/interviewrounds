@@ -512,6 +512,15 @@ export function createCodingKit(opts: { locked?: readonly string[]; now?: () => 
       const top = this.panel ? topLine(scroll, board, this.panel) : scroll.top;
       return `${top}${scroll.cue ? `:${cueSide(scroll, board)}` : ''}`;
     },
+    panelScroll(board, lines) {
+      if (!this.panel || scroll.live.size > 0) return false;
+      const top0 = topLine(scroll, board, this.panel);
+      scroll.top = top0 + Math.trunc(lines);
+      const top = topLine(scroll, board, this.panel);
+      if (top === top0) return false;
+      scroll.manualAt = scroll.now();
+      return true;
+    },
   };
   return kit;
 }

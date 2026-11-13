@@ -1,0 +1,172 @@
+// The hands-only round with the round bar used by fingertip (round-design.mjs with one answer less, so the pokes
+// fit the round's clock): Pause and Resume by a poke, End by a poke held until its ring is full.
+// End to end in the emulator, against the deployed server with the typed-turn fake voice: a short system design
+// round from the first tap to the report page. Home → Start a quick round → Enter the room → touch the desk →
+// greeting → three typed answers → two boxes and a connector drawn by hand → a suggestion accepted → End →
+// the quick card → the summary → See full report.
+//   plan/ops-tools/emu.sh <worktree> <worktree>/web/e2e/round-hands.mjs --env-file <env file> --timeout 50 --out plan/shots/t25/hands
+import { copyFileSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { waitReady } from './emu-lib.mjs';
+
+const here = path.dirname(fileURLToPath(import.meta.url));
+for (const f of ['round-lib.mjs', 'input-lib.mjs', 'round-input-lib.mjs']) copyFileSync(path.join(process.env.EMU_APP_DIR, 'e2e', f), path.join(here, f));
+const L = await import('./round-lib.mjs');
+const R = await import('./round-input-lib.mjs');
+const { answer, board, click, draw, enterFromTap, fail, go, look, page, placeDesk, recordRound, roughBox, roundState, save, setupTab, shot, sleep, stage, tap, until, waitState } = L;
+
+const S = L.SETUPS[process.env.EMU_ROOM ?? 'home_office'] ?? L.SETUPS.home_office;
+
+await waitReady();
+await go('/');
+await until('the home page', () => !!document.querySelector('[data-test="try-quick"]'));
+await setupTab({ ghostSettle: 300 });
+// One world on the page (see round-controllers.mjs): panels cannot be pressed in the emulator otherwise.
+await page(() => sessionStorage.setItem('ir_one_world', '1'));
+await shot('01-home');
+
+// Tap 1: the mic, the session and the room load.
+const tap1 = Date.now();
+await click('try-quick');
+await until('the round ready for Enter', () => !!document.querySelector('[data-test="start-round"]:not([disabled])') && !!globalThis.__xrApp, null, 150000);
+stage('ready for enter', { ms: Date.now() - tap1 });
+await shot('02-ready');
+
+// Tap 2: Enter the room.
+await enterFromTap('start-round');
+await recordRound();
+stage('in xr', await roundState());
+
+const desk = await placeDesk(S);
+stage('desk placed', desk);
+await sleep(1500);
+await shot('04-placed');
+
+await waitState(['live'], 120000);
+await look(S, -14);
+await sleep(1200);
+await shot('05-greeting-done');
+stage('greeted', { lines: await page(() => globalThis.__rec.lines), timings: await page(() => globalThis.__round.timings()) });
+
+const ANSWERS = [
+  'Before I draw anything: I assume about a hundred million new links a day, reads far above writes, and links that never expire. Is that right?',
+  'At a high level a client talks to an API service. The service writes the mapping to a key value store and reads go through a cache in front of it.',
+];
+/**
+ * Accepts a pending suggestion by pinch. Suggestions wait five minutes in this run (ir_ghost_settle) instead of 4 s,
+ * so the scripted hand is in time; the check is that the suggestion is gone and committed right after the pinch.
+ */
+let pinched = null;
+async function pinchGhost(waitRounds) {
+  let ghost = null;
+  for (let i = 0; i < waitRounds && !ghost; i++) {
+    await sleep(1500);
+    ghost = await page(() => {
+      const d = globalThis.__round.room.debug;
+      const g = d.store.board.ghosts[0];
+      return g ? { op_id: g.op_id, op: g.op, rect: d.ghostRect(g.op_id), pending: d.store.board.ghosts.length } : null;
+    });
+  }
+  if (!ghost?.rect) return null;
+  const before = (await board()).log.filter((e) => e.src === 'scribe' && e.accepted).length;
+  await look(S, -52);
+  await sleep(600);
+  await shot('08-ghost');
+  const tapAt = Date.now();
+  await tap(ghost.rect.x + ghost.rect.w / 2, ghost.rect.y + ghost.rect.h / 2);
+  await sleep(1500);
+  const b2 = await board();
+  const stillThere = b2.ghosts.some((g) => g.op_id === ghost.op_id);
+  const scribe = b2.log.filter((e) => e.src === 'scribe');
+  const accepted = scribe.filter((e) => e.accepted).length;
+  stage('suggestion accepted by pinch', { ghost, tapMs: Date.now() - tapAt, stillThere, acceptedBefore: before, acceptedNow: accepted, pendingNow: b2.ghosts.length, scribe });
+  if (stillThere || accepted <= before) await fail('the pinch did not accept the suggestion', { ghost, b2 });
+  await look(S, -52);
+  await sleep(800);
+  await shot('09-after-ghost');
+  return ghost;
+}
+
+for (const [i, text] of ANSWERS.entries()) {
+  const reply = await answer(text);
+  stage(`answer ${i + 1}`, reply);
+  // The Scribe suggests after an answer that names parts: take the first suggestion that shows up.
+  if (!pinched && i >= 1) pinched = await pinchGhost(6);
+}
+await look(S, -14);
+await sleep(800);
+await shot('06-after-answers');
+
+// Draw on the sheet: two boxes and a connector.
+await look(S, -52);
+await draw(roughBox(8, 10, 12, 7, 3));
+await sleep(1000);
+await draw(roughBox(38, 10, 12, 7, 5));
+await sleep(1000);
+let b = await board();
+stage('two boxes', b);
+if (!b || b.items.filter((i) => i.kind === 'component').length < 2) await fail('the two boxes did not become cards', b);
+// The two boxes the hand just drew (no label yet), not a card a suggestion put there; the line between them runs
+// below the suggestions' row, so no pending suggestion takes the pinch.
+const drawn = b.items.filter((i) => i.kind === 'component' && i.label === null);
+if (drawn.length < 2) await fail('the hand-drawn boxes are missing', b);
+const [c1, c2] = drawn;
+await draw(L.along([[c1.x + c1.w + 0.4, c1.y + c1.h / 2], [c2.x + 1.5, c2.y + c2.h / 2]], 1.5));
+await sleep(1200);
+b = await board();
+stage('connected', b);
+await look(S, -52);
+await sleep(800);
+await shot('07-drawn');
+if (!b.edges.length) console.error('WARNING: the connector did not become an edge');
+
+if (!pinched) pinched = await pinchGhost(10);
+if (!pinched) await fail('no suggestion arrived to accept', await board());
+
+// End the round (the bar's End needs a held press; the script asks the controller, the same path).
+// The round bar by fingertip: Pause, Resume, then End held until its ring is full.
+await look(S, -48);
+await R.pokeBar(/Pause/, 0.5);
+await waitState(['paused'], 30000);
+stage('paused by a poke', await roundState());
+await sleep(600);
+await shot('10b-paused-by-poke');
+await R.pokeBar(/Resume/, 0.5);
+await waitState(['live'], 30000);
+stage('resumed by a poke', await roundState());
+const endAt = Date.now();
+await R.pokeBar(/End/, 2.2);
+await waitState(['scoring', 'summary'], 60000);
+await look(S, -20);
+stage('round ended', { ms: Date.now() - endAt });
+// At once, with the head already in place: the status card with progress, before the card or the summary comes.
+await shot('11-scoring');
+stage('after the scoring shot', { state: (await roundState()).state, status: await page(() => globalThis.__xrApp.ui.status.group.visible), summary: await page(() => globalThis.__xrApp.ui.summary.group.visible) });
+const card = await until('the quick card or the summary', () => {
+  const ui = globalThis.__xrApp?.ui;
+  return ui?.summary.group.visible ? { state: globalThis.__round.controller.state } : null;
+}, null, 150000, 2000);
+stage('card shown', { ms: Date.now() - endAt, ...card });
+await sleep(800);
+await shot('12-card');
+await waitState(['summary'], 240000);
+stage('summary', { ms: Date.now() - endAt });
+await sleep(1500);
+await shot('13-summary');
+
+const final = await page(() => ({ timings: globalThis.__round.timings(), rec: globalThis.__rec, session: globalThis.__round.session.session_id, stats: globalThis.__xrApp.stats() }));
+final.board = await board();
+
+// See full report: leaves the headset view and opens the report page.
+await page(() => globalThis.__xrApp.ui.emit('report'));
+await until('the report page', () => (location.pathname.startsWith('/report/') && document.querySelector('[data-test="page-report"]') ? location.pathname : null), null, 60000);
+await sleep(6000);
+const report = await page(() => ({ path: location.pathname, text: document.querySelector('main')?.innerText.slice(0, 1500) }));
+stage('report page', report);
+await L.screenshot('14-report').catch((e) => console.error('report screenshot failed', String(e).slice(0, 300)));
+
+save('round-hands', final);
+console.log('timings', JSON.stringify(final.timings));
+console.log('errors', JSON.stringify(final.rec.errors));
+console.log('round hands ok');

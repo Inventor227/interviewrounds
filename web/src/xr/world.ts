@@ -1,11 +1,13 @@
 // The XR app: one IWSDK world for the round room, in passthrough (`ar`) or as a 2D preview in the page (`preview`).
 //
-// ar:      immersive-ar, hand tracking required, hit test and anchors optional, medium fixed foveation. 72 Hz,
-//          raised to 90 only after the room and people are on screen and frames show headroom. Placement is
-//          explicit: place() asks "Touch your desk where the sheet should go", builds the room around the desk and
-//          anchors it. Everything placed belongs to one session: a session end forgets the desk and the anchor, hides
-//          the room and rejects a pending place(). XRSession visibility changes and the session's end are
-//          reported (onVisibility, onSessionEnd); the round controller pauses on them.
+// ar:      immersive-ar; hand tracking, hit test and anchors asked for but optional (sessionFeatures.ts), medium fixed foveation. 72 Hz,
+//          raised to 90 only after the room and people are on screen and frames show headroom. Hands are the
+//          first-class input; held controllers do everything hands do (input.ts), and the room follows the user
+//          changing between them. Placement is explicit: place() asks "Touch your desk with one finger" (or with
+//          the controller tip), builds the room around the desk and anchors it. Everything placed belongs to one
+//          session: a session end forgets the desk and the anchor, hides the room and rejects a pending place().
+//          XRSession visibility changes and the session's end are reported (onVisibility, onSessionEnd); the round
+//          controller pauses on them.
 // preview: no WebXR. The same room in a calm virtual meeting room, camera at seated eye height, mouse input.
 //
 // The round controller drives it through createXRPort (port.ts).
@@ -25,10 +27,14 @@ import {
   type WorldOptions,
 } from '@iwsdk/core';
 import { ACESFilmicToneMapping, Matrix4, Quaternion, Vector3, type Material, type Mesh, type Object3D, type Scene, type Texture } from 'three';
+import type { HapticName } from '../board/pointer';
+import { ControllerView, hostControllerModels } from './controllerView';
 import { FrameRateGovernor } from './framerate';
 import { HANDS_LOST_LINE, HandsLostWatch } from './handsLost';
+import { ButtonEdges, Haptics, InputTracker, newController, readGamepad, type ActiveInput, type ControllerButton, type ControllerState, type HapticPad } from './input';
 import { AnchorTracker, PlacementLifecycle } from './lifecycle';
 import { yawPitchFromQuat } from './math';
+import { MoveBarView, onMoveBar, SheetMove, type MoveStatus } from './moveSheet';
 import { DeskPlacement, type DeskPose, type HandState, type HeadPose } from './placement';
 import { PlacementView } from './placementView';
 import { buildPreviewRoom, MouseLook, PREVIEW_DESK, PREVIEW_FOV } from './preview';
@@ -37,7 +43,9 @@ import type { SeatPose } from './seats';
 import { createSounds, type Sounds } from './sound';
 import { DEFAULT_STANDINS, loadStandIn, placeStandIn, type StandIn } from './standin';
 import { SelectRelay, type SelectCallback } from './select';
+import { XR_FEATURES } from './sessionFeatures';
 import { RoundUI } from './ui';
+import { PLACING_MISSED_LINE } from './ui/statusCard';
 
 export type XRMode = 'ar' | 'preview';
 
@@ -99,6 +107,18 @@ export interface XRApp {
   hands(): HandState[];
   /** XR selectstart / selectend per hand: a pinch on hands, the trigger on controllers. */
   onSelect(cb: SelectCallback): () => void;
+  /** Held controllers, updated in place each XR frame (read them; do not keep or mutate). Not tracked while hands are in use. */
+  controllers(): ControllerState[];
+  /** What the user is using now: `hands` (the default, and what the room teaches) or `controllers`. */
+  activeInput(): ActiveInput;
+  /** The user put the controllers down or picked them up. Returns an unsubscribe. */
+  onInputChange(cb: (input: ActiveInput) => void): () => void;
+  /** A controller button went down: `primary` is A or X, `secondary` is B or Y. */
+  onButton(cb: (hand: 'left' | 'right', button: ControllerButton, nowMs: number) => void): () => void;
+  /** A short, light pulse on that side's controller; nothing for a hand, and nothing while the user is speaking. */
+  haptic(hand: 'left' | 'right', name: HapticName): void;
+  /** The pulses given so far, newest last (tooling and tests). */
+  hapticLog(): readonly { hand: 'left' | 'right'; name: HapticName; atMs: number }[];
   /** The sheet frame (Room.sheetAnchor): origin at the near edge centre, +X right, -Z far, +Y the surface normal. */
   readonly sheetAnchor: Object3D;
   /** The placed desk of this session, or null (same as desk$.value). */
@@ -120,6 +140,8 @@ export interface XRApp {
   place(): Promise<DeskPose>;
   /** Places the desk again in the same session ("Move sheet"). */
   replace(): Promise<DeskPose>;
+  /** The grab bar below the sheet (hold it to move the sheet): what it is doing now, for tooling and tests. */
+  moveStatus(): MoveStatus;
   /** Restart the frame rate measurement (call after adding people or other heavy content). */
   sceneChanged(): void;
   /** Re-seats the room for 1 to 3 people. */
@@ -187,7 +209,7 @@ export async function createXRApp(root: HTMLElement, opts: XRAppOptions): Promis
             // Tooling re-offers after every exit so a script can enter again.
             offer: opts.offer ? 'always' : 'none',
             // Plane and mesh detection stay off: they would add a permission prompt before the room appears.
-            features: { handTracking: { required: true }, hitTest: true, anchors: true },
+            features: { ...XR_FEATURES },
           },
           render: { near: 0.01, far: 50, ...base.render },
           features: { ...base.features, sceneUnderstanding: false },
@@ -220,6 +242,11 @@ export async function createXRApp(root: HTMLElement, opts: XRAppOptions): Promis
   const placementView = new PlacementView();
   placementView.group.visible = false;
   scene.add(placementView.group, ui.hint.group);
+  // The grab bar that moves the sheet lies in the sheet's frame, below its near-left corner (headset only).
+  const moveBar = new MoveBarView();
+  moveBar.mesh.visible = false;
+  if (mode === 'ar') room.sheetAnchor.add(moveBar.mesh);
+  const mover = new SheetMove();
 
   // Panels are entities so rays, pokes and the mouse reach them.
   const panelEntities = Object.values(ui.groups).map((g) => {
@@ -248,13 +275,49 @@ export async function createXRApp(root: HTMLElement, opts: XRAppOptions): Promis
   const left = newHand('left');
   const right = newHand('right');
   const handStates: HandState[] = [left, right];
-  let controllersHinted = false;
+  // Two controller states, the same way. A side is a hand or a controller, never both.
+  const ctrlLeft = newController('left');
+  const ctrlRight = newController('right');
+  const controllerStates: ControllerState[] = [ctrlLeft, ctrlRight];
+  const pads: Record<'left' | 'right', HapticPad | null> = { left: null, right: null };
+  const input = new InputTracker();
+  const buttons = new ButtonEdges();
+  // A controller within 6 cm of the desk top counts as resting on it (its pulses wait while the user speaks).
+  const haptics = new Haptics(
+    (hand) => pads[hand],
+    () => opts.isUserSpeaking?.() ?? false,
+    undefined,
+    (hand) => {
+      const desk = desk$.value;
+      const c = hand === 'left' ? ctrlLeft : ctrlRight;
+      return !desk || c.tip.y < desk.deskY + 0.06;
+    },
+  );
+  const controllerViews = { left: new ControllerView('left'), right: new ControllerView('right') };
+  if (mode === 'ar') {
+    // The controller model comes from this origin (the page loads nothing from elsewhere).
+    hostControllerModels(import.meta.env.BASE_URL);
+    controllerViews.left.attach(world.player.raySpaces.left);
+    controllerViews.right.attach(world.player.raySpaces.right);
+  }
   const handsLost = new HandsLostWatch();
   let lastXRFrameAt: number | null = null;
   let lastInterval = 0;
 
-  const anchorM = new Matrix4();
-  const anchors = new AnchorTracker((m) => room.setAnchorOffset(anchorM.fromArray(m)));
+  // The room sits on its anchor (drift correction), plus the carry while the sheet is being moved by its bar.
+  const anchorBase = new Matrix4();
+  const moveOffset = new Vector3();
+  const rootM = new Matrix4();
+  const applyRoot = () => room.setAnchorOffset(rootM.makeTranslation(moveOffset.x, moveOffset.y, moveOffset.z).multiply(anchorBase));
+  const anchors = new AnchorTracker((m) => {
+    anchorBase.fromArray(m);
+    applyRoot();
+  });
+  const unanchor = () => {
+    anchorBase.identity();
+    moveOffset.set(0, 0, 0);
+    applyRoot();
+  };
 
   world.onXRFrame((frame) => {
     const now = performance.now();
@@ -267,13 +330,40 @@ export async function createXRApp(root: HTMLElement, opts: XRAppOptions): Promis
     if (!ref || !session) return;
     left.tracked = false;
     right.tracked = false;
+    ctrlLeft.tracked = false;
+    ctrlRight.tracked = false;
+    pads.left = pads.right = null;
     let controllers = false;
+    let listedHands = 0;
     for (const src of session.inputSources) {
       const hand = src.hand;
       if (!hand) {
-        if (src.gamepad && src.targetRayMode === 'tracked-pointer') controllers = true;
+        if (!src.gamepad || src.targetRayMode !== 'tracked-pointer') continue;
+        controllers = true;
+        const c = src.handedness === 'left' ? ctrlLeft : src.handedness === 'right' ? ctrlRight : null;
+        const pose = c ? frame.getPose(src.targetRaySpace, ref) : undefined;
+        if (!c || !pose) continue;
+        // The aim ray: its origin is the controller's front tip, its direction the pose's -Z.
+        const p = pose.transform.position;
+        const q = pose.transform.orientation;
+        c.tip.x = p.x;
+        c.tip.y = p.y;
+        c.tip.z = p.z;
+        c.dir.x = -2 * (q.x * q.z + q.w * q.y);
+        c.dir.y = -2 * (q.y * q.z - q.w * q.x);
+        c.dir.z = -(1 - 2 * (q.x * q.x + q.y * q.y));
+        const pad = readGamepad(src.gamepad);
+        c.pressed = pad.trigger;
+        c.touched = pad.touched;
+        c.stick.x = pad.stick.x;
+        c.stick.y = pad.stick.y;
+        c.busy = world.input.xr.multiPointers[c.hand].getRayBusy();
+        c.tracked = true;
+        pads[c.hand] = src.gamepad as unknown as HapticPad;
+        buttons.update(c.hand, pad, now);
         continue;
       }
+      listedHands++;
       const h = src.handedness === 'left' ? left : src.handedness === 'right' ? right : null;
       if (!h) continue;
       let ok = true;
@@ -300,11 +390,18 @@ export async function createXRApp(root: HTMLElement, opts: XRAppOptions): Promis
       const d = Math.hypot(thumb.x - index.x, thumb.y - index.y, thumb.z - index.z);
       h.pinch = Math.max(0, Math.min(1, 1 - (d - 0.012) / 0.03));
     }
-    if (controllers && !controllersHinted) {
-      controllersHinted = true;
-      ui.layoutHint(headPose());
-      ui.showHint('Put your controllers down; use your hands', now, 7000);
+    for (const c of controllerStates) {
+      if (!c.tracked) {
+        c.pressed = false;
+        c.touched = false;
+        c.busy = false;
+        buttons.update(c.hand, null, now);
+      }
+      haptics.trigger(c.hand, c.pressed, now);
+      controllerViews[c.hand].set(c.tracked, !!world.input.xr.visualAdapters.controller[c.hand].visual, now);
     }
+    // Hands or controllers: whichever the session lists now. Nothing is said about it; both do everything.
+    input.update({ hands: listedHands, controllers: controllers ? 1 : 0 });
     // In a placed room with no hand and no controller in view for 5 s: one calm line, once.
     if (handsLost.update(now, left.tracked || right.tracked || controllers) && desk$.value) {
       ui.layoutHint(headPose());
@@ -388,19 +485,24 @@ export async function createXRApp(root: HTMLElement, opts: XRAppOptions): Promis
     return standinsLoading;
   };
 
-  let placing: { p: DeskPlacement; laidOut: HeadPose | null } | null = null;
+  let placing: { p: DeskPlacement; laidOut: HeadPose | null; toldRest?: boolean } | null = null;
   const lifecycle = new PlacementLifecycle({
     start: () => {
       placing = { p: new DeskPlacement(performance.now(), opts.placementFallbackMs), laidOut: null };
       placementView.reset();
       placementView.group.visible = true;
-      ui.setStatus('placing');
+      mover.cancel();
+      moveBar.mesh.visible = false;
+      // The prompt names the action for what the user holds: a finger, or the controller's tip and trigger.
+      ui.showPlacing(input.activeInput());
     },
     reset: () => {
       placing = null;
       placementView.group.visible = false;
+      mover.cancel();
+      moveBar.mesh.visible = false;
       anchors.reset();
-      room.setAnchorOffset(new Matrix4());
+      unanchor();
       if (mode === 'ar') room.root.visible = false;
       if (ui.status.group.parent === scene) {
         room.root.add(ui.status.group);
@@ -413,9 +515,11 @@ export async function createXRApp(root: HTMLElement, opts: XRAppOptions): Promis
 
   const finishPlacement = (desk: DeskPose, now: number) => {
     placing = null;
-    room.setAnchorOffset(new Matrix4());
+    unanchor();
     build(desk);
     room.root.visible = true;
+    moveBar.mesh.visible = mode === 'ar';
+    if (desk.input === 'controllers' && desk.hand) haptics.pulse(desk.hand, 'snap');
     placementView.finish(room.sheet, now);
     ui.hideStatus();
     // Back in a round that is paused or reconnecting (the resume path): its card comes back.
@@ -554,7 +658,14 @@ export async function createXRApp(root: HTMLElement, opts: XRAppOptions): Promis
         if (ui.status.group.parent !== scene) scene.add(ui.status.group);
         placing.laidOut = head;
       }
-      const st = placing.p.update(now, head, handStates);
+      const st = placing.p.update(now, head, handStates, controllerStates);
+      // A trigger pull that placed nothing (in the air, at the card, before the tip had settled): say what works, once.
+      if (st.missedPull && !placing.toldRest) {
+        placing.toldRest = true;
+        ui.layoutHint(head);
+        ui.showHint(PLACING_MISSED_LINE, now, 5000);
+        for (const c of controllerStates) if (c.tracked && c.pressed) haptics.pulse(c.hand, 'press');
+      }
       placementView.update(head, st, now);
       if (st.state === 'done' && st.result) {
         room.root.add(ui.status.group);
@@ -562,12 +673,100 @@ export async function createXRApp(root: HTMLElement, opts: XRAppOptions): Promis
       }
     }
     placementView.animate(now);
+    moveFrame(now);
     ui.update(dt, now);
     for (const s of standins) if (s.object.visible) s.mixer.update(dt);
   });
 
+  // ---- moving the sheet by its grab bar ----
+  const local = new Vector3();
+  const rayO = new Vector3();
+  const rayD = new Vector3();
+  const invSheet = new Matrix4();
+  /** Where a side presses from: the pinch point of a tracked hand, else its controller's tip. */
+  const pressPoint = (side: 'left' | 'right'): { x: number; y: number; z: number } | null => {
+    const h = side === 'left' ? left : right;
+    if (h.tracked) return { x: (h.indexTip.x + h.thumbTip.x) / 2, y: (h.indexTip.y + h.thumbTip.y) / 2, z: (h.indexTip.z + h.thumbTip.z) / 2 };
+    const c = side === 'left' ? ctrlLeft : ctrlRight;
+    return c.tracked ? c.tip : null;
+  };
+  /** True when that side is on the grab bar: touching it, or (a controller) pointing its ray at it. */
+  const onBar = (side: 'left' | 'right'): boolean => {
+    const at = pressPoint(side);
+    if (!at) return false;
+    room.sheetAnchor.updateWorldMatrix(true, false);
+    if (onMoveBar(room.sheetAnchor.worldToLocal(local.set(at.x, at.y, at.z)))) return true;
+    const c = side === 'left' ? ctrlLeft : ctrlRight;
+    if (!c.tracked || c.busy) return false;
+    invSheet.copy(room.sheetAnchor.matrixWorld).invert();
+    rayO.set(c.tip.x, c.tip.y, c.tip.z).applyMatrix4(invSheet);
+    rayD.set(c.dir.x, c.dir.y, c.dir.z).transformDirection(invSheet);
+    if (!(rayO.y > 0) || !(rayD.y < -1e-4)) return false;
+    const t = -rayO.y / rayD.y;
+    return t <= 1.5 && onMoveBar({ x: rayO.x + rayD.x * t, y: 0, z: rayO.z + rayD.z * t }, false);
+  };
+  let moveSt: MoveStatus = { state: 'idle', progress: 0, offset: { x: 0, y: 0, z: 0 } };
+  function moveFrame(now: number): void {
+    if (mode !== 'ar' || !moveBar.mesh.visible) return;
+    const holder = mover.holder;
+    moveSt = mover.update(holder ? pressPoint(holder) : null, now);
+    if (moveSt.state === 'moving' || moveOffset.lengthSq() > 0) {
+      moveOffset.set(moveSt.offset.x, moveSt.offset.y, moveSt.offset.z);
+      applyRoot();
+    }
+    moveBar.set(moveSt, moveSt.state === 'idle' && (onBar('left') || onBar('right')));
+  }
+  /** The sheet was carried and let go: the room is rebuilt around the desk where it is now. */
+  const commitMove = (desk: DeskPose, by: 'left' | 'right') => {
+    const d: DeskPose = { ...desk, head: { ...headPose().pos } };
+    unanchor();
+    build(d);
+    lifecycle.desk = d;
+    desk$.value = d;
+    void createAnchor(d);
+    sounds.snap();
+    haptics.pulse(by, 'snap');
+    sceneChanged();
+  };
+
   // ---- session lifecycle: frame rate, foveation, visibility, end ----
   const selects = new SelectRelay();
+  selects.on((hand, phase, now) => {
+    if (mode !== 'ar') return;
+    if (phase === 'start') {
+      const desk = desk$.value;
+      const at = pressPoint(hand);
+      if (desk && at && !placing && mover.state === 'idle' && onBar(hand)) {
+        mover.down(hand, at, now, desk);
+        haptics.pulse(hand, 'press');
+      }
+      return;
+    }
+    if (mover.holder !== hand) return;
+    const moved = phase === 'end' ? mover.up(headPose().pos.y) : (mover.cancel(), null);
+    if (moved) commitMove(moved, hand);
+    else {
+      moveOffset.set(0, 0, 0);
+      applyRoot();
+    }
+  });
+  // A press on a panel (round bar, cards): the controller that pulled the trigger feels it.
+  ui.onAction(() => haptics.press(performance.now()));
+  const onSources = () => {
+    const s = world.session;
+    if (!s) return;
+    let hands = 0;
+    let ctrls = 0;
+    for (const src of s.inputSources) {
+      if (src.hand) hands++;
+      else if (src.gamepad && src.targetRayMode === 'tracked-pointer') ctrls++;
+    }
+    input.update({ hands, controllers: ctrls });
+  };
+  // The placement prompt follows the input: it names the finger or the controller tip.
+  input.onInputChange((a) => {
+    if (placing) ui.showPlacing(a);
+  });
   const visCbs = new Set<(v: XRVisibility) => void>();
   const endCbs = new Set<(e: { byApp: boolean }) => void>();
   let exitByApp = false;
@@ -592,7 +791,10 @@ export async function createXRApp(root: HTMLElement, opts: XRAppOptions): Promis
     console.info(`[xr] frame rate 72 Hz to start; offered: ${rates.join(', ') || 'unknown'}`);
     renderer.xr.setFoveation(0.5);
     exitByApp = false;
-    controllersHinted = false;
+    input.reset();
+    buttons.reset();
+    haptics.reset();
+    s?.addEventListener('inputsourceschange', onSources);
     handsLost.reset();
     lastXRFrameAt = null;
     s?.addEventListener('visibilitychange', () => {
@@ -612,6 +814,11 @@ export async function createXRApp(root: HTMLElement, opts: XRAppOptions): Promis
     selects.detach();
     left.tracked = false;
     right.tracked = false;
+    for (const c of controllerStates) {
+      c.tracked = c.pressed = c.busy = false;
+      controllerViews[c.hand].set(false, false, 0);
+    }
+    pads.left = pads.right = null;
     lifecycle.sessionEnded();
     governor = null;
     targetFps = null;
@@ -702,6 +909,9 @@ export async function createXRApp(root: HTMLElement, opts: XRAppOptions): Promis
         disposeTree(g);
       }
       disposeTree(placementView.group);
+      moveBar.dispose();
+      controllerViews.left.dispose();
+      controllerViews.right.dispose();
       for (const s of standins) {
         s.mixer.stopAllAction();
         disposeTree(s.object);
@@ -721,6 +931,16 @@ export async function createXRApp(root: HTMLElement, opts: XRAppOptions): Promis
     headPose,
     hands: () => handStates,
     onSelect: (cb) => selects.on(cb),
+    controllers: () => controllerStates,
+    activeInput: () => input.activeInput(),
+    onInputChange: (cb) => input.onInputChange(cb),
+    // Buttons act on the round's board only while a round is on (A is "confirm" elsewhere: on the summary card it
+    // must not take back the last box).
+    onButton: (cb) => buttons.on((hand, button, t) => {
+      if (ui.chromeVisible && !ui.summary.group.visible) cb(hand, button, t);
+    }),
+    haptic: (hand, name) => void haptics.pulse(hand, name),
+    hapticLog: () => haptics.log,
     sheetAnchor: room.sheetAnchor,
     desk: () => desk$.value,
     wallboardTexture: (tex) => room.wallboardTexture(tex),
@@ -734,6 +954,7 @@ export async function createXRApp(root: HTMLElement, opts: XRAppOptions): Promis
       if (mode === 'preview') return Promise.resolve(PREVIEW_DESK);
       return lifecycle.replace();
     },
+    moveStatus: () => moveSt,
     sceneChanged,
     setSeats(n) {
       seatsN = n;

@@ -379,13 +379,19 @@ export function Diag() {
               ],
               ['Draw calls, triangles', x.render ? `${x.render.calls}, ${x.render.triangles}` : 'n/a', x.render ? tone(x.render.calls < 60 && x.render.triangles < 60000, true) : undefined],
               ['Controllers seen', fmt(x.controllers_seen)],
+              ['Input in use', x.input ? `${x.input.active}${x.input.changes ? `, changed ${x.input.changes} times` : ''}` : 'n/a'],
               ['Error', fmt(x.error), x.error ? 'bad' : undefined],
             ]}
           />
         )}
       </Step>
 
-      <Step n={5} test="hands" title="Hands on the sheet" hint="Runs in the headset after the frame test. Follow the sheet: hold a pinch still, draw a line, tap five rings, then pinch Done.">
+      <Step
+        n={5}
+        test="hands"
+        title="Hands on the sheet"
+        hint="Runs in the headset after the frame test. Follow the sheet: hold a pinch still, draw a line, tap five rings, then pinch Done. Holding controllers? Do the same with the trigger, by touch or by pointing."
+      >
         {x && (
           <Kv
             test="diag-hands-kv"
@@ -398,6 +404,14 @@ export function Diag() {
                 h?.line.filtered ? tone(h.line.filtered.rms_cm < 0.3, h.line.filtered.rms_cm < 0.6) : undefined,
               ],
               ['Line, raw', h?.line.raw ? `${h.line.raw.rms_cm} cm RMS off straight` : 'n/a'],
+              [
+                'Controller draw test',
+                h?.controller_line?.filtered
+                  ? `${h.controller_line.filtered.rms_cm} cm RMS off straight, ${h.controller_line.filtered.length_cm} cm long, by ${h.controller_line.mode === 'ray' ? 'pointing' : 'touch'}`
+                  : 'n/a (hold a controller for the line step)',
+                h?.controller_line?.filtered ? tone(h.controller_line.filtered.rms_cm < 0.3, h.controller_line.filtered.rms_cm < 0.6) : undefined,
+              ],
+              ['Done with', h?.by ? `hold: ${h.by.hold ?? 'n/a'}, line: ${h.by.line ?? 'n/a'}, taps: ${h.by.targets ?? 'n/a'}` : 'n/a'],
               [
                 'Taps',
                 h?.targets.stats ? `${h.targets.stats.hits} of ${h.targets.stats.taps} hit, off by ${h.targets.stats.mean_dist_cm} cm (x ${h.targets.stats.mean_dx_cm}, y ${h.targets.stats.mean_dy_cm})` : 'n/a',

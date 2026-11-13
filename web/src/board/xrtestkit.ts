@@ -1,6 +1,7 @@
 // Test helpers for the board in XR: a fake XR port the tests drive frame by frame.
 import { Object3D } from 'three';
-import type { BoardXRPort, DeskPose, HeadPose, SelectPhase, Vec3, XRHandSample } from './port';
+import type { HapticName } from './pointer';
+import type { BoardXRPort, DeskPose, HeadPose, SelectPhase, Vec3, XRControllerSample, XRHandSample } from './port';
 import { placeAnchor, sheetToWorld } from './sheetMath';
 
 export class FakePort implements BoardXRPort {
@@ -9,8 +10,12 @@ export class FakePort implements BoardXRPort {
   now = 0;
   wallTex: unknown = null;
   private frames = new Set<(dt: number, now: number) => void>();
-  private selects = new Set<(hand: 'left' | 'right', phase: SelectPhase, now: number) => void>();
+  private selects = new Set<(hand: 'left' | 'right', phase: SelectPhase, now: number, kind?: 'hand' | 'controller') => void>();
   private handMap = new Map<'left' | 'right', XRHandSample>();
+  private ctrlMap = new Map<'left' | 'right', XRControllerSample>();
+  private buttonCbs = new Set<(hand: 'left' | 'right', button: 'primary' | 'secondary', now: number) => void>();
+  /** Every pulse the board asked for. */
+  readonly pulses: { hand: 'left' | 'right'; name: HapticName }[] = [];
   private ends = new Set<() => void>();
 
   onSessionEnd(cb: () => void): () => void {
@@ -32,12 +37,51 @@ export class FakePort implements BoardXRPort {
     this.frames.add(cb);
     return () => this.frames.delete(cb);
   }
-  onSelect(cb: (hand: 'left' | 'right', phase: SelectPhase, now: number) => void): () => void {
+  onSelect(cb: (hand: 'left' | 'right', phase: SelectPhase, now: number, kind?: 'hand' | 'controller') => void): () => void {
     this.selects.add(cb);
     return () => this.selects.delete(cb);
   }
   hands(): XRHandSample[] {
     return [...this.handMap.values()];
+  }
+  controllers(): XRControllerSample[] {
+    return [...this.ctrlMap.values()];
+  }
+  onButton(cb: (hand: 'left' | 'right', button: 'primary' | 'secondary', now: number) => void): () => void {
+    this.buttonCbs.add(cb);
+    return () => this.buttonCbs.delete(cb);
+  }
+  haptic(hand: 'left' | 'right', name: HapticName): void {
+    this.pulses.push({ hand, name });
+  }
+
+  /** A controller button press (A or X is `primary`). */
+  button(hand: 'left' | 'right', button: 'primary' | 'secondary' = 'primary'): void {
+    for (const cb of [...this.buttonCbs]) cb(hand, button, this.now);
+  }
+
+  /** A held controller: its tip at a world point, aiming along `dir`; null = not held (the side has no controller). */
+  setController(hand: 'left' | 'right', tip: Vec3 | null, dir: Vec3 = { x: 0, y: -1, z: 0 }, extra: Partial<XRControllerSample> = {}): void {
+    if (!tip) {
+      this.ctrlMap.delete(hand);
+      return;
+    }
+    const n = Math.hypot(dir.x, dir.y, dir.z) || 1;
+    this.ctrlMap.set(hand, { hand, tracked: true, tip, dir: { x: dir.x / n, y: dir.y / n, z: dir.z / n }, ...extra });
+  }
+
+  /** The controller's tip over a board point, `hCm` above the sheet, pointing straight down at it. */
+  controllerAt(hand: 'left' | 'right', xCm: number, yCm: number, hCm = 0.5): void {
+    const tip = sheetToWorld(this.sheetAnchor, xCm, yCm, hCm);
+    const on = sheetToWorld(this.sheetAnchor, xCm, yCm, 0);
+    this.setController(hand, tip, hCm > 0 ? { x: on.x - tip.x, y: on.y - tip.y, z: on.z - tip.z } : { x: 0, y: -1, z: 0 });
+  }
+
+  /** The controller held `fromCm` back from the sheet (along its normal, from a point `backCm` nearer the user), its ray aimed at a board point. */
+  controllerAimAt(hand: 'left' | 'right', xCm: number, yCm: number, fromCm = 30, backCm = 20): void {
+    const tip = sheetToWorld(this.sheetAnchor, xCm, yCm + backCm, fromCm);
+    const on = sheetToWorld(this.sheetAnchor, xCm, yCm, 0);
+    this.setController(hand, tip, { x: on.x - tip.x, y: on.y - tip.y, z: on.z - tip.z });
   }
   headPose(): HeadPose {
     return { pos: { x: 0, y: 1.2, z: 0.25 }, yaw: 0, pitch: -0.6 };
@@ -73,8 +117,31 @@ export class FakePort implements BoardXRPort {
     for (const cb of [...this.frames]) cb(ms / 1000, this.now);
   }
 
-  select(hand: 'left' | 'right', phase: SelectPhase): void {
-    for (const cb of [...this.selects]) cb(hand, phase, this.now);
+  select(hand: 'left' | 'right', phase: SelectPhase, kind?: 'hand' | 'controller'): void {
+    for (const cb of [...this.selects]) cb(hand, phase, this.now, kind);
+  }
+
+  /**
+   * A controller stroke: settle on the first point, pull the trigger, move through the rest, let go. `mode` is
+   * `near` (the tip on the sheet) or `far` (the ray from a distance).
+   */
+  triggerStroke(hand: 'left' | 'right', points: [number, number][], mode: 'near' | 'far' = 'near'): void {
+    const at = (x: number, y: number) => (mode === 'near' ? this.controllerAt(hand, x, y) : this.controllerAimAt(hand, x, y));
+    const [first, ...rest] = points;
+    if (!first) return;
+    for (let i = 0; i < 12; i++) {
+      at(first[0], first[1]);
+      this.frame();
+    }
+    this.select(hand, 'start', 'controller');
+    for (let i = 0; i < 8; i++) this.frame();
+    for (const [x, y] of rest) {
+      at(x, y);
+      this.frame();
+    }
+    for (let i = 0; i < 12; i++) this.frame();
+    this.select(hand, 'end', 'controller');
+    this.frame();
   }
 
   /** Pinch at the first point, drag through the rest (one frame each), release at the last. */

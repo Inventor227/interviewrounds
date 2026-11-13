@@ -28,7 +28,7 @@ export const STATUS_MIN_FONT_CM = Math.min(TITLE_FONT_CM, DETAIL_FONT_CM);
 
 /** Copy per stage: title and detail (plain, short, no dashes). */
 export const STATUS_COPY: Record<StatusStage, { title: string; detail: string }> = {
-  placing: { title: 'Touch your desk where the sheet should go', detail: 'Rest a fingertip on the desk for a moment.' },
+  placing: { title: 'Touch your desk with one finger', detail: 'Rest it where the sheet should go.' },
   connecting: { title: 'Joining the room', detail: 'Your interviewer will be with you in a moment.' },
   metrics: { title: 'Writing your scorecard', detail: 'Looking at pace, pauses and talk time.' },
   scoring: { title: 'Writing your scorecard', detail: 'Reading back through the conversation.' },
@@ -37,6 +37,15 @@ export const STATUS_COPY: Record<StatusStage, { title: string; detail: string }>
   hear: { title: 'Tap to hear your interviewer', detail: 'Your browser may be holding the sound back.' },
   error: { title: 'We lost the connection', detail: 'Trying again. Your progress is saved.' },
 };
+
+/** The placement prompt names the action for what the user holds: a finger, or a controller's tip and trigger. */
+export const PLACING_COPY: Record<'hands' | 'controllers', { title: string; detail: string }> = {
+  hands: STATUS_COPY.placing,
+  controllers: { title: 'Rest the controller tip on your desk, then pull the trigger', detail: 'The sheet goes where the tip rests.' },
+};
+
+/** Shown once when a trigger pull during placement placed nothing. */
+export const PLACING_MISSED_LINE = 'Rest the tip on the desk first';
 
 export class StatusCard {
   readonly group = new Group();

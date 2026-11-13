@@ -304,6 +304,9 @@ export function createRoundRuntime({ preview }: RuntimeOptions): RoundController
           const g = s.board.ghosts.find((x) => x.op_id === opId);
           return g ? ghostRect(s.board, g) : null;
         },
+        // The board's pointers (hands and controllers) and what they hold, for scripted runs.
+        pointers: () => ({ sources: board?.hands?.sources() ?? [], over: board?.hands?.pointers() ?? [], overlays: board?.input.overlays.map((o) => o.kind) ?? [] }),
+        tray: () => board?.kit.tray.map((t) => ({ x: t.x, y: t.y, w: t.w, h: t.h })) ?? [],
       };
     }
 
@@ -435,15 +438,10 @@ export function createRoundRuntime({ preview }: RuntimeOptions): RoundController
     const b = board;
     const s = store;
     if (!a || !b || !s || taught || !needsOnboarding({ kit: b.kit.id, done: me?.onboarding_done, preview })) return 'none';
-    // The input lane's `activeInput()` and `onInputChange` once they exist on the app. Until then: hands when a
-    // hand is tracked, else controllers.
-    const input = a as unknown as { activeInput?: () => 'hands' | 'controllers'; onInputChange?: (cb: (i: 'hands' | 'controllers') => void) => () => void; controllerDrawing?: boolean };
-    // A hand that touched the desk a moment ago is a hand, also when its tracking blinks on this frame.
-    const sampled = input.activeInput?.() ?? (a.desk()?.hand || a.hands().some((h) => h.tracked) ? 'hands' : 'controllers');
-    const active = () => input.activeInput?.() ?? sampled;
-    // CONTROLLER VARIANT: drawing on the sheet by controller is the input lane's (`controllerDrawing` on the app
-    // when it lands). Without it a controller user could not do the step, so they are not asked to.
-    if (!onboarding && active() === 'controllers' && !input.controllerDrawing) return 'none';
+    // Hands or controllers, as the room sees it now: a controller user is asked to pull the trigger and draw the
+    // same box (the sheet draws with both), and the line follows when they change.
+    const input = a;
+    const active = () => a.activeInput();
     if (!onboarding) {
       const { OnboardingView, ONBOARD_SKIP, ONBOARD_BEGIN } = await import('../xr/onboardingView');
       if (disposed || app !== a) return 'none';
@@ -480,10 +478,10 @@ export function createRoundRuntime({ preview }: RuntimeOptions): RoundController
         a.ui.onAction((act) => {
           if (act === 'skip') for (const cb of [...skips]) cb();
         }),
-        input.onInputChange?.((i) => {
+        input.onInputChange((i) => {
           view.setInput(i);
           showLine();
-        }) ?? (() => undefined),
+        }),
       );
       onboarding = new Onboarding({
         cards: () => s.board.items.filter((i) => i.kind !== 'ink').map((i) => ({ id: i.id })),
@@ -498,7 +496,7 @@ export function createRoundRuntime({ preview }: RuntimeOptions): RoundController
           return () => skips.delete(cb);
         },
       });
-      // The 20 s only count while the user is in the room (headset on, no system menu, page visible).
+      // The 30 s only count while the user is in the room (headset on, no system menu, page visible).
       const watch = watchPresence(onboarding, {
         onXrVisibility: (cb) => a.onVisibility(cb),
         xrNow: () => (a.world.session?.visibilityState as 'visible' | 'visible-blurred' | 'hidden' | undefined) ?? 'visible',

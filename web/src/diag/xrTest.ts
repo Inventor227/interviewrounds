@@ -5,7 +5,7 @@
 import { CanvasTexture, DoubleSide, Mesh, MeshBasicMaterial, PlaneGeometry, RingGeometry, SRGBColorSpace, type Object3D } from 'three';
 import { HandAdapter } from '../board/hand';
 import { SHEET } from '../board/model';
-import { boardToLocal, SheetProjector, sheetToWorld } from '../board/sheetMath';
+import { boardToLocal, SurfaceProjector, sheetToWorld } from '../board/sheetMath';
 import type { XRApp } from '../xr/world';
 import { DONE_BOX, HandFlow, HOLD_AT, LINE_FROM, LINE_TO, SKIP_BOX, TARGET_R, TARGETS, type HandResults } from './handFlow';
 import { frameStats, PinchCounter, selectRatio, type FrameStats, type P2 } from './stats';
@@ -35,6 +35,8 @@ export interface XrResults {
   /** Share of frames in the hand tests with each hand tracked (percent). */
   tracked_pct: { left: number; right: number } | null;
   controllers_seen: boolean;
+  /** What the user was using at the end of the run, and how often they changed between hands and controllers. */
+  input: { active: 'hands' | 'controllers'; changes: number };
   visibility: string[];
   ended_by: 'done' | 'system' | null;
 }
@@ -62,6 +64,7 @@ export class XrTest {
     select_per_pinch: null,
     tracked_pct: null,
     controllers_seen: false,
+    input: { active: 'hands', changes: 0 },
     visibility: [],
     ended_by: null,
   };
@@ -80,15 +83,20 @@ export class XrTest {
   private readonly offs: (() => void)[] = [];
   private overlay: { canvas: HTMLCanvasElement; tex: CanvasTexture; mesh: Mesh; drawnKey: string; drawnAt: number } | null = null;
   private rings: Mesh[] = [];
-  private projector: SheetProjector;
+  private projector: SurfaceProjector;
 
   constructor(
     readonly app: XRApp,
     private readonly onUpdate: (stage: XrStage, line: string) => void,
     private readonly windows = { frames72Ms: FRAMES_72_MS, frames90Ms: FRAMES_90_MS },
   ) {
-    this.projector = new SheetProjector(app.sheetAnchor);
+    this.projector = new SurfaceProjector(app.sheetAnchor);
+    this.results.input.active = app.activeInput();
     this.offs.push(
+      app.onInputChange((input) => {
+        this.results.input = { active: input, changes: this.results.input.changes + 1 };
+        this.flow?.setInput(input);
+      }),
       app.onFrame((_dt, now) => this.frame(now)),
       app.onVisibility((v) => this.results.visibility.push(v)),
       app.onSessionEnd(() => this.sessionEnded()),
@@ -231,12 +239,16 @@ export class XrTest {
   private startHands(_now: number): void {
     const flow = new HandFlow(() => this.finish());
     this.flow = flow;
-    const adapter = new HandAdapter(this.app, (p) => this.projector.project(p));
+    flow.setInput(this.app.activeInput());
+    // The board's pointer: a hand's pinch, or a controller's trigger by touch or by ray.
+    const adapter = new HandAdapter(this.app, (p) => this.projector.project(p), { cast: (o, d) => this.projector.cast(o, d) });
     this.adapter = adapter;
     const pt = (p: { x_cm: number; y_cm: number }): P2 => ({ x: p.x_cm, y: p.y_cm });
     adapter.onDown((p) => {
       this.activeHand = p.hand === 'left' || p.hand === 'right' ? p.hand : null;
-      flow.down(pt(p), p.t_ms);
+      const by = this.activeHand ? adapter.kindOf(this.activeHand) : null;
+      const ray = !!adapter.pointers().find((q) => q.hand === p.hand)?.ray;
+      flow.down(pt(p), p.t_ms, by ?? 'hand', ray);
     });
     adapter.onMove((p) => {
       if (this.activeHand && p.hand === this.activeHand) flow.move(pt(p), p.t_ms);

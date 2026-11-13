@@ -6,11 +6,13 @@
 
 export type SelectHand = 'left' | 'right';
 export type SelectPhase = 'start' | 'end' | 'cancel';
-export type SelectCallback = (hand: SelectHand, phase: SelectPhase, nowMs: number) => void;
+/** What made the select: a tracked hand's pinch or a controller's trigger. */
+export type SelectKind = 'hand' | 'controller';
+export type SelectCallback = (hand: SelectHand, phase: SelectPhase, nowMs: number, kind: SelectKind) => void;
 
 export class SelectRelay {
   private readonly cbs = new Set<SelectCallback>();
-  private readonly held = new Set<SelectHand>();
+  private readonly held = new Map<SelectHand, SelectKind>();
   private session: XRSession | null = null;
   /** Input sources whose current select completed (a `select` event arrived). */
   private completed = new WeakSet<object>();
@@ -45,7 +47,7 @@ export class SelectRelay {
       s.removeEventListener('selectend', this.onEnd);
     }
     const t = this.now();
-    for (const h of [...this.held]) this.emit(h, 'cancel', t);
+    for (const [h, kind] of [...this.held]) this.emit(h, 'cancel', t, kind);
     this.held.clear();
     this.completed = new WeakSet();
   }
@@ -54,19 +56,20 @@ export class SelectRelay {
     const src = (e as XRInputSourceEvent).inputSource;
     const h = src?.handedness;
     if (h !== 'left' && h !== 'right') return;
+    const by: SelectKind = src.hand ? 'hand' : 'controller';
     if (kind === 'start') {
       this.completed.delete(src);
-      this.held.add(h);
-      this.emit(h, 'start', this.now());
+      this.held.set(h, by);
+      this.emit(h, 'start', this.now(), by);
       return;
     }
     if (!this.held.delete(h)) return;
     const done = this.completed.has(src);
     this.completed.delete(src);
-    this.emit(h, done ? 'end' : 'cancel', this.now());
+    this.emit(h, done ? 'end' : 'cancel', this.now(), by);
   }
 
-  private emit(h: SelectHand, phase: SelectPhase, t: number): void {
-    for (const cb of this.cbs) cb(h, phase, t);
+  private emit(h: SelectHand, phase: SelectPhase, t: number, kind: SelectKind): void {
+    for (const cb of this.cbs) cb(h, phase, t, kind);
   }
 }

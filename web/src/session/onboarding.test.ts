@@ -55,7 +55,7 @@ describe('onboarding by doing', () => {
     await vi.advanceTimersByTimeAsync(1);
     expect(result).toBe('skipped');
     expect(h.shown).toEqual(['on', 'off:timeout']);
-    expect(ONBOARD_TIMEOUT_MS).toBe(20_000);
+    expect(ONBOARD_TIMEOUT_MS).toBe(30_000);
   });
 
   it('skip_ends_it_with_one_pinch', async () => {
@@ -121,7 +121,7 @@ describe('onboarding by doing', () => {
       expect(result).toBeNull(); // nobody is greeted in an empty room
       back(p);
       expect(h.shown).toEqual(['on', 'on']); // the line and Skip again
-      await vi.advanceTimersByTimeAsync(ONBOARD_TIMEOUT_MS - 1); // and a fresh 20 s, not the 5 s that were left
+      await vi.advanceTimersByTimeAsync(ONBOARD_TIMEOUT_MS - 1); // and a fresh 30 s, not the 5 s that were left
       expect(result).toBeNull();
       await vi.advanceTimersByTimeAsync(1);
       expect(result).toBe('skipped');
@@ -160,7 +160,7 @@ describe('onboarding by doing', () => {
     await vi.advanceTimersByTimeAsync(10 * 60_000);
     expect(result).toBeNull();
     expect(h.shown).toEqual(['on']);
-    // The page's way back: a new Enter, then the same step with a fresh 20 s.
+    // The page's way back: a new Enter, then the same step with a fresh 30 s.
     w.entered();
     void o.run();
     await vi.advanceTimersByTimeAsync(ONBOARD_TIMEOUT_MS - 1);

@@ -14,6 +14,7 @@ import type { Kit } from './kits';
 import { kitForBoard } from './kits/index';
 import { IdGen } from './model';
 import type { BoardStore } from './ops';
+import type { HapticName } from './pointer';
 import type { BoardXRPort, Sfx, SfxName } from './port';
 import { Sheet } from './sheet';
 import { SHEET } from './model';
@@ -59,6 +60,8 @@ export interface BoardXR {
   hands: HandAdapter | null;
   ghosts: GhostLayer;
   input: BoardInput;
+  /** Takes back the last thing this user did on the board (a controller's A or X button); false when there is nothing. */
+  undo(hand: 'left' | 'right'): boolean;
   /**
    * A finished user speech segment: labels the fresh focus card, suggests a label, or does
    * nothing. `nowMs` is when it was said (performance.now() timeline; default: now).
@@ -101,6 +104,28 @@ export function sfxForOp(op: BoardOp): SfxName | null {
   }
 }
 
+/** The pulse a controller gives for a feedback sound: placements snap, ticks and connections click, the bin erases. */
+export function hapticForSfx(name: SfxName): HapticName | null {
+  switch (name) {
+    case 'snap':
+      return 'snap';
+    case 'click':
+      return 'connect';
+    case 'erase':
+      return 'bin';
+    default:
+      return null;
+  }
+}
+
+/** A pulse goes to the side that acted within this long (ms). */
+const ACTOR_FRESH_MS = 500;
+
+/** A thumbstick pushed past this scrolls the code panel... */
+export const STICK_SCROLL_AT = 0.6;
+/** ...one line at once, then a line every this long while it is held (ms). */
+export const STICK_SCROLL_REPEAT_MS = 160;
+
 /** board.focus is sent once the focus has held this long (ms). */
 export const FOCUS_DEBOUNCE_MS = 300;
 
@@ -109,13 +134,24 @@ const clampText = (t: string) => [...t].slice(0, MAX_TEXT_CHARS).join('');
 
 export function createBoardXR(port: BoardXRPort, opts: BoardXROptions): BoardXR {
   const { store } = opts;
+  let clock = 0;
   const kit = kitFor(opts.kit ?? kitForBoard(store.board), opts.dominantHand);
   const ids = opts.ids ?? new IdGen();
-  const play = (n: SfxName) => opts.sfx?.play(n);
+  // Sounds are for everyone; a controller also gets a short pulse in the hand that did it: the side that
+  // is pressing now or let go a moment ago (a suggestion that settles by itself pulses nobody).
+  let actor: 'left' | 'right' | null = null;
+  let actorAt = -Infinity;
+  const pressing = new Set<'left' | 'right'>();
+  /** True while the frame's ghost pass accepts a suggestion nobody touched: that is not the user's doing. */
+  let settling = false;
+  const play = (n: SfxName) => {
+    opts.sfx?.play(n);
+    const h = hapticForSfx(n);
+    if (h && actor && !settling && (pressing.has(actor) || clock - actorAt <= ACTOR_FRESH_MS)) port.haptic?.(actor, h);
+  };
 
   // One clock for focus, ghosts and voice: the XR frame time. Registered first so it is
   // current when the hands are read in the same frame.
-  let clock = 0;
   const now = () => clock;
   const offClock = port.onFrame((_dt, t) => {
     clock = t;
@@ -125,7 +161,7 @@ export function createBoardXR(port: BoardXRPort, opts: BoardXROptions): BoardXR 
   const panel = kit.panel ? new CodePanel(kit, kit.panel.x >= SHEET.w / 2 ? 'right' : 'left', opts.makeCanvas) : null;
   if (panel) port.sheetAnchor.add(panel.frame);
   const projector = new SurfaceProjector(port.sheetAnchor, panel && kit.panel ? { frame: panel.frame, rect: kit.panel } : undefined);
-  const hands = opts.pointer ? null : new HandAdapter(port, (p) => projector.project(p), { zone: kit.view });
+  const hands = opts.pointer ? null : new HandAdapter(port, (p) => projector.project(p), { zone: kit.view, cast: (o, d) => projector.cast(o, d) });
   const pointer: PointerAdapter & { destroy(): void } = opts.pointer ?? hands!;
 
   const commit = (op: BoardOp): boolean => {
@@ -137,14 +173,17 @@ export function createBoardXR(port: BoardXRPort, opts: BoardXROptions): BoardXR 
     return true;
   };
 
+  let inGhostPass = false;
   const ghosts = new GhostLayer(pointer, store, kit, {
     now,
     ...(opts.ghostSettleMs ? { settleMs: opts.ghostSettleMs } : {}),
     accept: (g) => {
       const local = store.isLocalGhost(g.op_id);
+      settling = inGhostPass;
       const ok = commit({ op_id: g.op_id, src: local ? 'voice_grammar' : 'scribe', op: g.op, args: g.args } as BoardOp);
       // A Scribe ghost that no longer applies (its card was deleted, say): tell the server, so
       // it is not offered again.
+      settling = false;
       if (!ok && !local) opts.sendGhostReject(g.op_id);
     },
     reject: (id) => {
@@ -155,6 +194,59 @@ export function createBoardXR(port: BoardXRPort, opts: BoardXROptions): BoardXR 
     },
   });
   const input = new BoardInput(store, ghosts, kit, commit, { ids, now, ...(opts.now_s ? { now_s: opts.now_s } : {}) });
+
+  // Who acted last (for the pulse), and a pulse when a press picks something up. Registered after the ghosts
+  // and the input, so both have seen the press.
+  const offActor = [
+    pointer.onDown((p) => {
+      if (p.hand === 'mouse') return;
+      actor = p.hand;
+      actorAt = clock;
+      pressing.add(p.hand);
+      if (input.holding(p.hand) === 'pick') port.haptic?.(p.hand, 'press');
+    }),
+    pointer.onUp((p) => {
+      if (p.hand === 'mouse') return;
+      actor = p.hand;
+      actorAt = clock;
+      pressing.delete(p.hand);
+    }),
+    pointer.onCancel?.((p) => {
+      if (p.hand !== 'mouse') pressing.delete(p.hand);
+    }) ?? (() => undefined),
+  ];
+
+  // Controller extras. A or X takes back the last thing this user did on the board.
+  const undo = (hand: 'left' | 'right'): boolean => {
+    // Not while either side is in the middle of something (A on one controller must not take back the card the
+    // other one is carrying).
+    if (input.holding('left') || input.holding('right')) return false;
+    const target = store.undoTarget();
+    if (!target) return false;
+    actor = hand;
+    actorAt = clock;
+    return commit({ op_id: ids.next('op'), src: 'hand', op: 'undo', args: { target_op_id: target } });
+  };
+  const offButton = port.onButton?.((hand, button) => {
+    if (button === 'primary' && port.desk() !== null) undo(hand);
+  });
+  // The thumbstick scrolls the code panel: up shows earlier lines.
+  let stickAt = 0;
+  let stickDir = 0;
+  const scrollByStick = (t: number) => {
+    if (!kit.panelScroll) return;
+    let y = 0;
+    for (const c of port.controllers?.() ?? []) if (c.tracked && c.stick && Math.abs(c.stick.y) > Math.abs(y)) y = c.stick.y;
+    const dir = Math.abs(y) >= STICK_SCROLL_AT ? Math.sign(y) : 0;
+    if (dir === 0) {
+      stickDir = 0;
+      return;
+    }
+    if (dir === stickDir && t - stickAt < STICK_SCROLL_REPEAT_MS) return;
+    stickDir = dir;
+    stickAt = t;
+    kit.panelScroll(store.board, dir);
+  };
 
   const sheet = new Sheet({ kit, makeCanvas: opts.makeCanvas });
   sheet.group.visible = false;
@@ -187,7 +279,10 @@ export function createBoardXR(port: BoardXRPort, opts: BoardXROptions): BoardXR 
     }
     sheet.group.visible = placed;
     if (panel) panel.frame.visible = placed;
+    inGhostPass = true;
     ghosts.update(t);
+    inGhostPass = false;
+    if (placed) scrollByStick(t);
     const overlays = input.overlays;
     sheet.update(store.board, { hovers: input.hovers(), overlays, rings: ghosts.rings(t), pointers: hands?.pointers() ?? [] });
     panel?.update(store.board, overlays);
@@ -200,6 +295,7 @@ export function createBoardXR(port: BoardXRPort, opts: BoardXROptions): BoardXR 
     hands,
     ghosts,
     input,
+    undo,
     // Real time by default: the frame clock stops while the headset is off, and an old focus
     // must not look fresh then (frames use the same performance.now() timeline).
     say(text, t = typeof performance !== 'undefined' ? performance.now() : clock) {
@@ -213,6 +309,8 @@ export function createBoardXR(port: BoardXRPort, opts: BoardXROptions): BoardXR 
     destroy() {
       offFrame();
       offClock();
+      offButton?.();
+      offActor.forEach((off) => off());
       input.destroy();
       ghosts.destroy();
       pointer.destroy();

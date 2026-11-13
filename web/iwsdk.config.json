@@ -7,7 +7,7 @@
       "mode": "ar",
       "offer": "none",
       "features": {
-        "handTracking": { "required": true },
+        "handTracking": true,
         "hitTest": true,
         "anchors": true
       }

@@ -83,10 +83,46 @@ export interface Button {
   setOn(on: boolean): void;
 }
 
-/** A large poke target (at least 4 × 4 cm, Meta hands guidance) with a pressed look. */
+interface LivePointer {
+  getButtonsDown(): ReadonlySet<number>;
+  getEnabled(): boolean;
+  getIntersection(): { distance: number; object: { isVoidObject?: boolean } } | undefined;
+}
+
+/** The pointer library keeps its live pointers in a page-wide map, by id. */
+function pointerOf(id: number): LivePointer | undefined {
+  return (globalThis as { pointerEventspointerMap?: Map<number, LivePointer> }).pointerEventspointerMap?.get(id);
+}
+
+/** A fingertip presses within this of a panel (the touch pointer's down radius, m). */
+const TOUCH_DOWN_M = 0.02;
+
+/**
+ * True when a touch pointer that just left a button has really lifted: it is up, still tracked, and over something
+ * real further out than the press distance. A tracking drop (the pointer is disabled) or the panel going away under
+ * the finger (nothing real under it) also release the press, but nobody lifted: those cancel.
+ */
+function lifted(p: LivePointer | undefined): boolean {
+  if (!p || p.getButtonsDown().size !== 0 || !p.getEnabled()) return false;
+  const hit = p.getIntersection();
+  return !!hit && !hit.object.isVoidObject && hit.distance > TOUCH_DOWN_M;
+}
+
+/**
+ * A large poke target (at least 4 × 4 cm, Meta hands guidance) with a pressed look.
+ *
+ * A press counts when the pointer goes down on the button and comes up on it, however long it was held: a poke, a
+ * pinch on the hand ray or a controller's trigger on its ray. The pointer library's own click gives up after a
+ * fixed time, and a slow, deliberate trigger pull or pinch would then do nothing. Sliding off before letting go
+ * cancels.
+ */
 export function button(labelText: string, opts: ButtonOpts = {}): Button {
   const base = opts.primary ? ACCENT : BUTTON;
   const hover = opts.primary ? ACCENT_HI : BUTTON_HOVER;
+  // Per pointer: a press belongs to the pointer that went down on the button (another hand's ray crossing it
+  // neither cancels nor completes it).
+  const armed = new Set<number>();
+  const id = (e?: { pointerId?: number }) => e?.pointerId ?? -1;
   const root = new UIKit.Container({
     width: opts.width ?? 8,
     height: opts.height ?? 4.4,
@@ -97,10 +133,36 @@ export function button(labelText: string, opts: ButtonOpts = {}): Button {
     cursor: 'pointer',
     hover: { backgroundColor: hover },
     active: { backgroundColor: opts.primary ? ACCENT_HI : BUTTON_ACTIVE, transformScaleX: 0.97, transformScaleY: 0.97 },
-    onClick: opts.onClick,
-    onPointerDown: opts.onDown,
-    onPointerUp: opts.onUp,
-    onPointerLeave: opts.onLeave ?? opts.onUp,
+    onPointerDown: (e?: { pointerId?: number; button?: number }) => {
+      // The main button only (a mouse's right button in the 2D preview presses nothing).
+      if ((e?.button ?? 0) !== 0) return;
+      armed.add(id(e));
+      opts.onDown?.();
+    },
+    onPointerUp: (e?: { pointerId?: number; button?: number }) => {
+      if (!armed.delete(id(e))) return;
+      opts.onUp?.();
+      opts.onClick?.();
+    },
+    onPointerLeave: (e?: { pointerId?: number; pointerType?: string }) => {
+      const pid = id(e);
+      if (!armed.has(pid)) return;
+      // A fingertip lifts off in one move: it is on the button, then well clear of it, where the nearest thing
+      // under it may be the panel behind. The library then says "left" and gives the release to the panel. If the
+      // finger is up once that move is done and clear of the panel, it was a lift, not a slide: the press counts.
+      if (e?.pointerType === 'touch') {
+        queueMicrotask(() => {
+          if (!armed.delete(pid)) return;
+          if (lifted(pointerOf(pid))) {
+            opts.onUp?.();
+            opts.onClick?.();
+          } else (opts.onLeave ?? opts.onUp)?.();
+        });
+        return;
+      }
+      armed.delete(pid);
+      (opts.onLeave ?? opts.onUp)?.();
+    },
   } as never);
   const label = text(labelText, { fontSize: opts.fontSize ?? TEXT_PRIMARY, fontWeight: 'medium', pointerEvents: 'none' });
   root.add(label);
@@ -159,6 +221,11 @@ export function holdRing(radius: number, color = INK): { mesh: Mesh; set(p: numb
   const c = parseHex(color);
   (mat.uniforms.uColor!.value as number[]).splice(0, 3, ...c);
   const mesh = new Mesh(new CircleGeometry(radius, 48), mat);
+  // Drawn only: every pointer (a ray, a poking fingertip's sphere, a grab) goes through it to the button it
+  // surrounds. It would otherwise take the pointer from the button the moment it shows, and a hold could never
+  // finish.
+  mesh.pointerEvents = 'none';
+  mesh.raycast = () => {};
   mesh.renderOrder = 10;
   mesh.visible = false;
   return {

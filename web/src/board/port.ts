@@ -1,8 +1,10 @@
 // What the board needs from the XR app: a frame to hang the sheet on, per-frame hands with
-// joint poses, pinch (select) events per hand, the head and the desk. The XR room (web/src/xr)
+// joint poses and controllers with their aim rays, select events per side (a pinch or the
+// trigger), the head and the desk. The XR room (web/src/xr)
 // implements it; tests use a fake. Shapes follow web/src/xr (HandState, HeadPose, DeskPose).
 // TODO: import Vec3, HeadPose and DeskPose from web/src/xr once the room is on main.
 import type { Object3D, Texture } from 'three';
+import type { HapticName } from './pointer';
 
 export interface Vec3 {
   x: number;
@@ -34,6 +36,22 @@ export interface XRHandSample {
   indexTip: Vec3 | null;
 }
 
+/** One controller this frame, in the same space as the sheet anchor's world matrix. */
+export interface XRControllerSample {
+  hand: 'left' | 'right';
+  tracked: boolean;
+  /** The controller's front tip: where its aim ray starts (about 5 cm ahead of the grip along the ray). */
+  tip: Vec3;
+  /** The aim ray's direction (unit). */
+  dir: Vec3;
+  /** The aim ray is on a panel in front of the sheet (a button, a card): the board leaves the ray to it. */
+  busy?: boolean;
+  /** Thumbstick, -1..1 per axis; y is negative when pushed away from the user (up). */
+  stick?: { x: number; y: number };
+  /** A finger rests on the trigger (or it is pulled): the controller is in use even when it is held still. */
+  touched?: boolean;
+}
+
 /** 'cancel': a selectend with no select before it (the system cancelled the pinch). */
 export type SelectPhase = 'start' | 'end' | 'cancel';
 
@@ -49,11 +67,17 @@ export interface BoardXRPort {
    */
   onFrame(cb: (dt: number, nowMs: number) => void): () => void;
   hands(): XRHandSample[];
+  /** Held controllers this frame (none while hands are tracked). Optional: without it only hands draw. */
+  controllers?(): XRControllerSample[];
   /**
-   * XR selectstart / selectend per hand: the system pinch. Only hands with joint poses can
-   * start a gesture (controllers have no thumb and index tips).
+   * XR selectstart / selectend per side: the system pinch on a hand, the trigger on a controller. `kind` says
+   * which, when the app knows; a select from a source that is no longer the side's pointer is ignored.
    */
-  onSelect(cb: (hand: 'left' | 'right', phase: SelectPhase, nowMs: number) => void): () => void;
+  onSelect(cb: (hand: 'left' | 'right', phase: SelectPhase, nowMs: number, kind?: 'hand' | 'controller') => void): () => void;
+  /** A controller button went down: `primary` is A (right) or X (left), `secondary` is B or Y. Optional. */
+  onButton?(cb: (hand: 'left' | 'right', button: 'primary' | 'secondary', nowMs: number) => void): () => void;
+  /** A short, light pulse on that side's controller (nothing happens for a hand). Optional. */
+  haptic?(hand: 'left' | 'right', name: HapticName): void;
   headPose(): HeadPose;
   /** The placed desk, null until placement finishes. */
   desk(): DeskPose | null;

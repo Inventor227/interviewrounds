@@ -127,6 +127,11 @@ export interface Kit {
    * follow a new line). Surfaces call it before deciding whether to repaint.
    */
   panelKey?(board: Board): string;
+  /**
+   * Scrolls the panel by whole lines (a controller's thumbstick; negative is up). True when the
+   * view moved. Like a scroll by hand, the panel then waits before it follows new lines again.
+   */
+  panelScroll?(board: Board, lines: number): boolean;
   /** What a drawn box or circle becomes (default: a service card, a client card); null keeps it ink. */
   drawn?: { rect?: TrayMake | null; circle?: TrayMake | null };
 }

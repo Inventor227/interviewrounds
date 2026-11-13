@@ -30,6 +30,7 @@ vi.mock('../../diag/xrTest', () => ({
         select_per_pinch: null,
         tracked_pct: null,
         controllers_seen: false,
+        input: { active: 'hands', changes: 0 },
         visibility: [],
         ended_by: null,
       },

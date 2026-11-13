@@ -1,14 +1,14 @@
 import { describe, expect, it, vi } from 'vitest';
 import { SelectRelay } from './select';
 
-/** A session whose input sources keep their identity per hand, as in WebXR. */
-function fakeSession() {
+/** A session whose input sources keep their identity per hand, as in WebXR: tracked hands, or controllers. */
+function fakeSession(kind: 'hand' | 'controller' = 'hand') {
   const t = new EventTarget();
-  const sources: Record<string, { handedness: XRHandedness }> = {};
-  const src = (h: XRHandedness) => (sources[h] ??= { handedness: h });
-  const fire = (type: 'selectstart' | 'select' | 'selectend', handedness: XRHandedness) => {
+  const sources: Record<string, { handedness: XRHandedness; hand?: object }> = {};
+  const src = (h: XRHandedness, k: 'hand' | 'controller') => (sources[`${h}-${k}`] ??= k === 'hand' ? { handedness: h, hand: {} } : { handedness: h });
+  const fire = (type: 'selectstart' | 'select' | 'selectend', handedness: XRHandedness, k: 'hand' | 'controller' = kind) => {
     const e = new Event(type) as Event & { inputSource: { handedness: XRHandedness } };
-    e.inputSource = src(handedness);
+    e.inputSource = src(handedness, k);
     t.dispatchEvent(e);
   };
   /** A full pinch: start, the completed select, end. */
@@ -30,9 +30,25 @@ describe('SelectRelay', () => {
     pinch('right');
     fire('selectstart', 'none');
     expect(cb.mock.calls).toEqual([
-      ['right', 'start', 1234],
-      ['right', 'end', 1234],
+      ['right', 'start', 1234, 'hand'],
+      ['right', 'end', 1234, 'hand'],
     ]);
+  });
+
+  it('a_controller_trigger_is_relayed_the_same_way_and_says_it_is_a_controller', () => {
+    const relay = new SelectRelay(() => 9);
+    const cb = vi.fn();
+    relay.on(cb);
+    const { session, pinch, fire } = fakeSession('controller');
+    relay.attach(session);
+    pinch('left');
+    expect(cb.mock.calls).toEqual([
+      ['left', 'start', 9, 'controller'],
+      ['left', 'end', 9, 'controller'],
+    ]);
+    // Hands take over on the same side: their pinch is a hand's select.
+    fire('selectstart', 'left', 'hand');
+    expect(cb).toHaveBeenLastCalledWith('left', 'start', 9, 'hand');
   });
 
   it('a_selectend_without_select_is_a_cancel', () => {
@@ -45,14 +61,14 @@ describe('SelectRelay', () => {
     fire('selectstart', 'left');
     fire('selectend', 'left');
     expect(cb.mock.calls).toEqual([
-      ['left', 'start', 7],
-      ['left', 'cancel', 7],
+      ['left', 'start', 7, 'hand'],
+      ['left', 'cancel', 7, 'hand'],
     ]);
     // The next full pinch from the same source is a normal end again.
     fire('selectstart', 'left');
     fire('select', 'left');
     fire('selectend', 'left');
-    expect(cb).toHaveBeenLastCalledWith('left', 'end', 7);
+    expect(cb).toHaveBeenLastCalledWith('left', 'end', 7, 'hand');
   });
 
   it('a_select_held_when_the_session_goes_is_cancelled', () => {
@@ -63,7 +79,7 @@ describe('SelectRelay', () => {
     relay.attach(session);
     fire('selectstart', 'left');
     relay.detach();
-    expect(cb).toHaveBeenLastCalledWith('left', 'cancel', 5);
+    expect(cb).toHaveBeenLastCalledWith('left', 'cancel', 5, 'hand');
     // Events from the old session no longer arrive.
     fire('selectstart', 'right');
     expect(cb).toHaveBeenCalledTimes(2);
