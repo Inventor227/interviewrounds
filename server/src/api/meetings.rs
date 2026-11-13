@@ -47,18 +47,35 @@ pub async fn prepare_route(
 pub async fn prepare_for(app: &AppState, identity_id: Uuid, body: &[u8]) -> AppResult<Value> {
     let setup = parse_setup(body)?;
     let ledger_id = reserve_prepare(app, identity_id).await?;
-    let prepared = prepare_with_usage(app.llm.as_ref(), &app.catalog, &setup).await;
-    let usage = prepared.as_ref().ok().and_then(|p| p.usage.clone());
-    let state = if prepared.is_ok() { "done" } else { "failed" };
-    if let Err(e) = settle_prepare(&app.db, ledger_id, usage.as_ref(), state).await {
-        tracing::warn!(error = %e, "could not record the prepare spend");
-    }
-    let plan = prepared
+    // The call and its ledger entry run in their own task: a client that leaves mid-call cannot leave the
+    // reservation open or the spend unrecorded.
+    let task = {
+        let (llm, catalog, db, setup) = (
+            app.llm.clone(),
+            app.catalog.clone(),
+            app.db.clone(),
+            setup.clone(),
+        );
+        tokio::spawn(async move {
+            let prepared = prepare_with_usage(llm.as_ref(), &catalog, &setup).await;
+            let state = if prepared.plan.is_ok() {
+                "done"
+            } else {
+                "failed"
+            };
+            if let Err(e) = settle_prepare(&db, ledger_id, prepared.usage.as_ref(), state).await {
+                tracing::warn!(error = %e, "could not record the prepare spend");
+            }
+            prepared.plan
+        })
+    };
+    let plan = task
+        .await
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("prepare task: {e}")))?
         .map_err(|e| match e {
             PrepareError::Invalid(msg) => AppError::BadRequest(msg),
             PrepareError::Content(msg) => AppError::Internal(anyhow::anyhow!(msg)),
-        })?
-        .plan;
+        })?;
     let id: Uuid = sqlx::query_scalar(
         "insert into meeting_plans (identity_id, template_id, setup, plan) values ($1, $2, $3, $4) returning id",
     )

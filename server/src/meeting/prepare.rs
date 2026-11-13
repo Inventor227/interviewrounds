@@ -91,13 +91,14 @@ pub async fn prepare(
     catalog: &Catalog,
     setup: &MeetingSetup,
 ) -> Result<MeetingPlan, PrepareError> {
-    Ok(prepare_with_usage(llm, catalog, setup).await?.plan)
+    prepare_with_usage(llm, catalog, setup).await.plan
 }
 
-/// A prepared plan and what the model call used (for the ledger), when a call was made and answered.
-#[derive(Clone, Debug)]
+/// A prepared plan (or why there is none) and what the model call used, for the ledger. The usage is kept even
+/// when the plan fails after the model answered.
+#[derive(Debug)]
 pub struct Prepared {
-    pub plan: MeetingPlan,
+    pub plan: Result<MeetingPlan, PrepareError>,
     /// The model that answered and its token usage.
     pub usage: Option<(String, Usage)>,
 }
@@ -107,8 +108,13 @@ pub async fn prepare_with_usage(
     llm: &dyn LlmApi,
     catalog: &Catalog,
     setup: &MeetingSetup,
-) -> Result<Prepared, PrepareError> {
-    validate_setup(setup).map_err(PrepareError::Invalid)?;
+) -> Prepared {
+    if let Err(msg) = validate_setup(setup) {
+        return Prepared {
+            plan: Err(PrepareError::Invalid(msg)),
+            usage: None,
+        };
+    }
     let (model, usage) = match build_request(catalog, setup) {
         Some(req) => call_model(llm, &req).await,
         None => {
@@ -118,10 +124,10 @@ pub async fn prepare_with_usage(
             (None, None)
         }
     };
-    Ok(Prepared {
-        plan: build_plan(catalog, setup, model.as_ref())?,
+    Prepared {
+        plan: build_plan(catalog, setup, model.as_ref()),
         usage,
-    })
+    }
 }
 
 async fn call_model(
