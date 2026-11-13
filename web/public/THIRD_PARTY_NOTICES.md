@@ -94,3 +94,10 @@ SOFTWARE.
 `vendor/basis/basis_transcoder.js` and `vendor/basis/basis_transcoder.wasm`, unmodified copies of three.js's build,
 transcode the avatars' KTX2 textures. Copyright Binomial LLC, licensed under the Apache License, Version 2.0. The
 full licence text is in `vendor/basis/LICENSE`. https://github.com/BinomialLLC/basis_universal
+
+## UI sounds
+
+The six sounds in `sfx/` (`click`, `flap`, `chime`, `snap`, `pen`, `erase`) are edited recordings by Kenney
+(www.kenney.nl) from the packs Interface Sounds 1.0, Casino Audio and RPG Audio, released under Creative Commons
+Zero (CC0 1.0). https://creativecommons.org/publicdomain/zero/1.0/ The source file, pack and page of each sound
+are listed in `sfx/CREDITS.md`.

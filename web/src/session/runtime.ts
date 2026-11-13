@@ -93,6 +93,7 @@ export function createRoundRuntime({ preview }: RuntimeOptions): RoundController
   document.body.append(host);
 
   let disposed = false;
+  let userSpeaking = false;
   let app: XRApp | null = null;
   let port: (XRPort & { dispose(): void }) | null = null;
   let people: People | null = null;
@@ -276,6 +277,7 @@ export function createRoundRuntime({ preview }: RuntimeOptions): RoundController
         offer: devFlag('offer') === '1',
         standins: false,
         placementFallbackMs: fallbackS > 0 ? fallbackS * 1000 : undefined,
+        isUserSpeaking: () => userSpeaking,
       });
       if (disposed) return a.destroy();
       app = a;
@@ -388,6 +390,7 @@ export function createRoundRuntime({ preview }: RuntimeOptions): RoundController
       start: (sink) => void get().then((h) => !disposed && h?.start(sink)),
       stop: () => inner?.stop(),
       setUserSpeaking(b) {
+        userSpeaking = b;
         people?.setUserSpeaking(b);
         inner?.setUserSpeaking(b);
       },
