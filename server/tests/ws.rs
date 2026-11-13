@@ -27,7 +27,8 @@ async fn new_session(app: &live::TestApp, voice: &str) -> (String, String, Strin
 
 fn op(op_id: &str) -> Value {
     json!({"op_id": op_id, "rev_base": 0, "src": "hand", "op": "item.create",
-           "args": {"id": op_id, "kind": "component", "label": "API"}, "at_ms": 1200})
+           "args": {"id": op_id, "kind": "component", "type": "service", "label": "API",
+                    "x": 4, "y": 18, "w": 8, "h": 5}, "at_ms": 1200})
 }
 
 #[tokio::test]
@@ -92,7 +93,7 @@ async fn ws_acks_and_persists_board_op() {
     .await
     .unwrap();
     assert_eq!(row.0, "hand");
-    assert_eq!(row.1, None, "stored, not evaluated yet");
+    assert_eq!(row.1, Some(true), "applied by the board engine");
     assert_eq!(row.2, Some(1));
     assert!(row.3.is_some());
     assert_eq!(row.4["label"], "API");

@@ -1928,23 +1928,37 @@ async fn confirm_runs_director_actions_once() {
     .await;
     tokio::time::sleep(Duration::from_millis(100)).await;
     let handle = state.registry.get("s1").unwrap();
-    {
+    let mut events = handle.lock().await.events.subscribe();
+    let jobs = {
         let mut st = handle.lock().await;
         assert_eq!(st.phase_idx, 0, "nothing runs before playback");
-        // voice.spoken from the browser: the line started playing.
-        let events = ir_server::orchestrator::confirm_spoken(&mut st, "p1", "Okay. Let's move");
         assert!(
-            events
-                .iter()
-                .any(|e| matches!(e, ServerEvent::RoundState(r) if r.phase_index == 1)),
-            "{events:?}"
+            st.director_jobs.is_empty(),
+            "no director call for an unplayed reply"
         );
+        // voice.spoken from the browser: the line started playing, so its director call goes out now.
+        ir_server::orchestrator::confirm_spoken(&mut st, "p1", "Okay. Let's move");
+        st.take_director_jobs()
+    };
+    assert_eq!(jobs.len(), 1);
+    ir_server::orchestrator::oai::spawn_directors(&state, &handle, "s1", jobs);
+    let ev = tokio::time::timeout(Duration::from_secs(2), events.recv())
+        .await
+        .expect("director actions")
+        .unwrap();
+    assert!(
+        matches!(ev, ServerEvent::RoundState(ref r) if r.phase_index == 1),
+        "{ev:?}"
+    );
+    {
+        let mut st = handle.lock().await;
         assert_eq!(st.phase_idx, 1);
-        // A repeat report changes nothing.
+        // A repeat report changes nothing and sends nothing.
         assert!(
             ir_server::orchestrator::confirm_spoken(&mut st, "p1", "Okay. Let's move on")
                 .is_empty()
         );
+        assert!(st.take_director_jobs().is_empty());
         assert_eq!(st.phase_idx, 1);
     }
     // Fish's next request also shows the line: nothing is applied twice.
@@ -1997,14 +2011,19 @@ async fn end_of_session_flush_records_the_last_exchange() {
     tokio::time::sleep(Duration::from_millis(100)).await;
     // The browser reports the closing line playing, then the session ends: the exchange and the close are kept.
     let handle = state.registry.get("s1").unwrap();
-    {
+    let jobs = {
         let mut st = handle.lock().await;
-        let ev = st.confirm_spoken("p1", "That's time.");
-        assert!(
-            ev.iter()
-                .any(|e| matches!(e, ServerEvent::RoundEnding { .. }))
-        );
-    }
+        st.confirm_spoken("p1", "That's time.");
+        st.take_director_jobs()
+    };
+    ir_server::orchestrator::oai::spawn_directors(&state, &handle, "s1", jobs);
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while handle.lock().await.closing_line.is_none() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the close runs once the line is played");
     let (_h, flushed) = state.registry.end_session("s1").await.expect("session");
     assert!(flushed.is_empty(), "the close ran once, at confirmation");
     assert!(state.registry.get("s1").is_none());
@@ -2448,4 +2467,45 @@ async fn words_stay_in_the_turn_log_when_another_panelists_reply_is_committed_la
             .iter()
             .any(|t| t.speaker == "p2" && t.text == "Okay. Why sections?")
     );
+}
+
+#[test]
+fn next_phase_names_the_phase_it_leaves_and_hints_are_reported() {
+    use ir_server::orchestrator::tools::ToolCall;
+    let mut st = new_state("s-phase", "sde.system_design.short", VoiceKind::Fake);
+    let call = |name: &str, input: Value| ToolCall {
+        id: "toolu_t".into(),
+        name: name.into(),
+        input,
+        panelist_id: "p1".into(),
+    };
+    let ev = st.apply_tool_calls(&[call("next_phase", json!({"from": "requirements"}))]);
+    assert_eq!(st.phase_idx, 1);
+    assert!(matches!(&ev[..], [ServerEvent::RoundState(s)] if s.phase_index == 1));
+    // A late repeat naming the phase already left does nothing.
+    let ev = st.apply_tool_calls(&[call("next_phase", json!({"from": "requirements"}))]);
+    assert!(ev.is_empty(), "{ev:?}");
+    assert_eq!(st.phase_idx, 1);
+    // Without a phase id it still moves on.
+    st.apply_tool_calls(&[call("next_phase", json!({}))]);
+    assert_eq!(st.phase_idx, 2);
+
+    let ev = st.apply_tool_calls(&[call("give_hint", json!({"level": 2}))]);
+    assert!(
+        matches!(&ev[..], [ServerEvent::Hint { level: 2, panelist_id, .. }, ServerEvent::RoundState(_)] if panelist_id == "p1"),
+        "{ev:?}"
+    );
+    assert_eq!((st.hints_given, st.hint_max_level), (1, 2));
+}
+
+#[test]
+fn the_round_starts_with_the_question_card_on_the_brief() {
+    let st = new_state("s-brief", "sde.system_design.short", VoiceKind::Fake);
+    let brief = ir_server::orchestrator::initial_brief(&st.question).expect("a question card");
+    assert_eq!(brief.question, "Link shortener");
+    assert_eq!(
+        brief.lines,
+        ["100M new links a month", "Reads far outnumber writes"]
+    );
+    assert!(ir_server::orchestrator::initial_brief(&Value::Null).is_none());
 }

@@ -196,8 +196,8 @@ async fn create_session_fake_returns_no_fish_token() {
             .fetch_one(&app.state.db)
             .await
             .unwrap();
-    // 1000 in x $4 + 100 out x $20 per million on the default model.
-    assert!((cost - 0.006).abs() < 1e-9, "{cost}");
+    // 1000 in x $2 + 100 out x $10 per million on the default live model.
+    assert!((cost - 0.003).abs() < 1e-9, "{cost}");
 }
 
 #[tokio::test]

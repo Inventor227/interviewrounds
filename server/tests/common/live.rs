@@ -27,12 +27,48 @@ use wiremock::matchers::{method, path, path_regex};
 use wiremock::{Mock, MockServer, Request as MockRequest, ResponseTemplate};
 
 /// Model fake: answers prewarms (`max_tokens: 0`) with cache-write usage, and every streamed turn with one
-/// line; with `hang` set, a turn says one word and then never finishes.
+/// line; with `hang` set, a turn says one word and then never finishes. Director calls (requests with tools) get
+/// the next scripted list of content blocks (none when the script is empty); Scribe calls (structured output) get
+/// `scribe`, with `{prefix}` replaced by the call's new-id prefix.
 #[derive(Default)]
 pub struct FakeLlm {
     pub prewarms: AtomicUsize,
     pub hang: std::sync::atomic::AtomicBool,
     pub requests: Mutex<Vec<MessagesRequest>>,
+    pub director: Mutex<std::collections::VecDeque<Vec<Value>>>,
+    pub scribe: Mutex<Option<String>>,
+    /// Director and Scribe requests, in order (prewarms left out).
+    pub creates: Mutex<Vec<MessagesRequest>>,
+}
+
+impl FakeLlm {
+    pub fn director_calls(&self) -> usize {
+        self.creates
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|r| !r.tools.is_empty())
+            .count()
+    }
+
+    pub fn scribe_calls(&self) -> Vec<MessagesRequest> {
+        self.creates
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|r| r.output_config.as_ref().is_some_and(|o| o.format.is_some()))
+            .cloned()
+            .collect()
+    }
+}
+
+fn created(model: &str, content: Value) -> MessagesResponse {
+    serde_json::from_value(json!({
+        "id": "msg_fake", "model": model, "content": content, "stop_reason": "end_turn",
+        "usage": {"input_tokens": 10, "output_tokens": 5, "cache_read_input_tokens": 0,
+                  "cache_creation_input_tokens": 0}
+    }))
+    .unwrap()
 }
 
 #[async_trait]
@@ -46,6 +82,40 @@ impl LlmApi for FakeLlm {
                           "cache_creation_input_tokens": 2000}
             }))
             .unwrap());
+        }
+        let scribe = req
+            .output_config
+            .as_ref()
+            .is_some_and(|o| o.format.is_some());
+        if scribe && req.max_tokens <= 16 {
+            // The Scribe's schema prewarm.
+            return Ok(created(&req.model, json!([])));
+        }
+        self.creates.lock().unwrap().push(req.clone());
+        if scribe {
+            let prompt: String = req.system.iter().map(|b| b.text.as_str()).collect();
+            let prefix = prompt
+                .lines()
+                .find_map(|l| l.strip_prefix("New ids start with: "))
+                .unwrap_or("x0_")
+                .to_string();
+            let text = self
+                .scribe
+                .lock()
+                .unwrap()
+                .clone()
+                .unwrap_or_else(|| r#"{"ops": [], "confidence": 0}"#.into())
+                .replace("{prefix}", &prefix);
+            return Ok(created(&req.model, json!([{"type": "text", "text": text}])));
+        }
+        if !req.tools.is_empty() {
+            let blocks = self
+                .director
+                .lock()
+                .unwrap()
+                .pop_front()
+                .unwrap_or_default();
+            return Ok(created(&req.model, Value::Array(blocks)));
         }
         Err(ClaudeError::BadRequest("not scripted".into()))
     }

@@ -11,6 +11,7 @@ pub mod dev;
 pub mod error;
 pub mod fish;
 pub mod identity;
+pub mod live_board;
 pub mod orchestrator;
 pub mod persist;
 pub mod scoring;

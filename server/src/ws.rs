@@ -27,9 +27,11 @@ use uuid::Uuid;
 
 use crate::app::AppState;
 use crate::error::AppError;
+use crate::live_board::{self, LiveBoard};
 use crate::orchestrator::markers::EventKind;
-use crate::orchestrator::{ServerEvent, SessionState, SessionStatus};
+use crate::orchestrator::{ServerEvent, SessionState, SessionStatus, oai};
 use crate::persist::{self, TokenRecord};
+use crate::scoring::ReportEvents;
 
 pub const CLOSE_BAD_TOKEN: u16 = 4401;
 pub const CLOSE_UNKNOWN_SESSION: u16 = 4404;
@@ -69,14 +71,70 @@ pub trait Playback {
     fn settle_unplayed(&mut self, fish_last: Option<&str>, now: Instant);
 }
 
-/// On this branch replies commit as soon as they are made, so nothing is parked. With the parked-reply turn
-/// logic these call `SessionState::confirm_spoken` and `SessionState::resolve_provisional`.
+/// Replies to speech are parked until played (`SessionState::confirm_spoken`); at the end the floor panelist's
+/// parked replies are settled against Fish's newest line and the rest are dropped.
 impl Playback for SessionState {
-    fn played(&mut self, _panelist_id: &str, _heard: &str, _now: Instant) -> bool {
-        false
+    fn played(&mut self, panelist_id: &str, heard: &str, _now: Instant) -> bool {
+        let before = self.recent_commits.back().copied();
+        // The actions of the committed reply are broadcast on the session's event channel.
+        let _ = self.confirm_spoken(panelist_id, heard);
+        self.recent_commits.back().copied() != before
     }
 
-    fn settle_unplayed(&mut self, _fish_last: Option<&str>, _now: Instant) {}
+    fn settle_unplayed(&mut self, fish_last: Option<&str>, _now: Instant) {
+        if fish_last.is_some() {
+            let floor = self.floor.clone();
+            let _ = self.resolve_provisional(&floor, fish_last);
+        }
+        let _ = self.flush_provisional();
+    }
+}
+
+/// Scoring progress goes out on the session's socket (docs/protocol.md: `report.progress`, `report.ready`,
+/// `error {code: "report_failed"}`).
+pub struct SocketReportEvents(pub AppState);
+
+#[async_trait::async_trait]
+impl ReportEvents for SocketReportEvents {
+    async fn progress(&self, session_id: &str, stage: &str, pct: u8) {
+        send_to_session(
+            &self.0,
+            session_id,
+            "report.progress",
+            json!({"stage": stage, "pct": pct}),
+        )
+        .await;
+    }
+
+    async fn card(&self, session_id: &str, card: &Value) {
+        send_to_session(
+            &self.0,
+            session_id,
+            "report.progress",
+            json!({"stage": "card", "pct": 50, "card": card}),
+        )
+        .await;
+    }
+
+    async fn ready(&self, session_id: &str) {
+        send_to_session(
+            &self.0,
+            session_id,
+            "report.ready",
+            json!({ "session_id": session_id }),
+        )
+        .await;
+    }
+
+    async fn failed(&self, session_id: &str) {
+        send_to_session(
+            &self.0,
+            session_id,
+            "error",
+            json!({"code": "report_failed", "message": "The report could not be made. Try again."}),
+        )
+        .await;
+    }
 }
 
 /// Timing of the live session machinery (tests shorten it).
@@ -159,6 +217,9 @@ struct HubInner {
     saved_key: String,
     last_seen_saved: Option<Instant>,
     ending: Option<Ending>,
+    /// The socket dropped while the round was live: the drop was logged as a pause, and the next connect
+    /// logs the resume.
+    drop_paused: bool,
 }
 
 pub struct Hub {
@@ -179,6 +240,8 @@ pub struct Hub {
     /// The board item the user last touched or created (`board.focus`); the Scribe resolves "that" with it.
     focus: std::sync::Mutex<Option<String>>,
     report_done: Notify,
+    /// The round's board (`None` for rounds without one).
+    pub board: Mutex<Option<LiveBoard>>,
 }
 
 fn frame(t: &str, seq: u64, d: Value) -> Value {
@@ -454,13 +517,24 @@ pub async fn attach(app: &AppState, id: Uuid, handle: Arc<Mutex<SessionState>>) 
             .unwrap_or_default();
         now.checked_sub(gone).unwrap_or(now)
     });
-    let (whiteboard, events) = {
-        let st = handle.lock().await;
+    let (whiteboard, events, board) = {
+        let mut st = handle.lock().await;
+        let mut board = LiveBoard::load(&app.db, id, &st).await;
+        if let Some(lb) = board.as_mut()
+            && lb.session.rev() > 0
+        {
+            // Reloaded with a drawn board: the interviewer sees it on the next turn.
+            lb.refresh_text(&mut st);
+        }
         (
             st.round.phases.iter().map(|p| p.uses_whiteboard).collect(),
             st.events.subscribe(),
+            board,
         )
     };
+    let prewarm = board
+        .as_ref()
+        .map(|lb| (lb.session.board.clone(), handle.clone()));
     let (tx, _) = broadcast::channel(256);
     let hub = Arc::new(Hub {
         session_id: id,
@@ -479,6 +553,7 @@ pub async fn attach(app: &AppState, id: Uuid, handle: Arc<Mutex<SessionState>>) 
             saved_key: String::new(),
             last_seen_saved: None,
             ending: None,
+            drop_paused: false,
         }),
         acks: std::sync::Mutex::new(HashMap::new()),
         whiteboard,
@@ -488,6 +563,7 @@ pub async fn attach(app: &AppState, id: Uuid, handle: Arc<Mutex<SessionState>>) 
         last_prewarm: std::sync::Mutex::new(None),
         focus: std::sync::Mutex::new(focus),
         report_done: Notify::new(),
+        board: Mutex::new(board),
     });
     {
         let mut map = app.hubs.inner.write().unwrap_or_else(|e| e.into_inner());
@@ -495,6 +571,10 @@ pub async fn attach(app: &AppState, id: Uuid, handle: Arc<Mutex<SessionState>>) 
             return existing.clone();
         }
         map.insert(key, hub.clone());
+    }
+    if let Some((board, handle)) = prewarm {
+        let round_type = handle.lock().await.round.round_type.clone();
+        live_board::prewarm_scribe(app, id, board, round_type);
     }
     tokio::spawn(forward_events(app.clone(), hub.clone(), events));
     tokio::spawn(drive(app.clone(), hub.clone(), handle));
@@ -603,6 +683,19 @@ async fn forward_events(
                 hub.inner.lock().await.last_sig = Some(sig(&v));
                 hub.send0("round.state", v);
             }
+            ServerEvent::Hint { level, at_ms, .. } => {
+                // For the report's hint timeline; the browser learns of hints from the spoken line.
+                if let Err(err) = store_event(
+                    &app,
+                    hub.session_id,
+                    "hint",
+                    &json!({"level": level, "at_ms": at_ms}),
+                )
+                .await
+                {
+                    tracing::warn!(session_id = %hub.session_id, error = %err, "could not store a hint");
+                }
+            }
             other => {
                 if matches!(other, ServerEvent::RoundEnding { .. }) {
                     // end_round comes with the closing line already spoken.
@@ -636,7 +729,7 @@ async fn drive(app: AppState, hub: Arc<Hub>, handle: Arc<Mutex<SessionState>>) {
         tick.tick().await;
         let now = Instant::now();
 
-        let (v, owed, phase_idx, status, elapsed_ms, hard_stop_ms, key, snap) = {
+        let (v, owed, phase_idx, status, elapsed_ms, hard_stop_ms, key, snap, speech_commits) = {
             let st = handle.lock().await;
             let owed = time_check_owed(&st, now);
             let elapsed = st.elapsed_ms(now);
@@ -661,8 +754,20 @@ async fn drive(app: AppState, hub: Arc<Hub>, handle: Arc<Mutex<SessionState>>) {
                 (st.round.hard_stop_minutes * 60_000.0) as u64,
                 key.clone(),
                 persist::snapshot(&st, now),
+                st.speech_commits,
             )
         };
+        // A reply to the candidate's speech was committed without a playback report (Fish's next request
+        // confirmed it): the Scribe catches up here.
+        let scribe_due = hub
+            .board
+            .lock()
+            .await
+            .as_ref()
+            .is_some_and(|lb| lb.scribe_due(speech_commits));
+        if scribe_due {
+            live_board::after_utterance(&app, &hub, &handle);
+        }
         // The closing line of a requested end, checked against the state outside the hub lock.
         let closing = {
             let from = hub.inner.lock().await.ending.as_ref().map(|e| e.turns_at);
@@ -809,7 +914,7 @@ fn with_ack(f: &Value, ack: u64) -> Value {
     v
 }
 
-fn error_frame(code: &str, message: &str, op_id: Option<&str>) -> Value {
+pub(crate) fn error_frame(code: &str, message: &str, op_id: Option<&str>) -> Value {
     let mut d = json!({"code": code, "message": message});
     if let Some(op) = op_id {
         d["op_id"] = json!(op);
@@ -934,10 +1039,18 @@ async fn run_socket(app: AppState, id: String, socket: WebSocket) {
 
 async fn connect(app: &AppState, hub: &Hub, handle: &Mutex<SessionState>, record: TokenRecord) {
     hub.set_ack(record.token_id, record.last_client_seq);
-    {
+    let back_from_drop = {
         let mut h = hub.inner.lock().await;
         h.connections += 1;
         h.disconnected_since = None;
+        std::mem::take(&mut h.drop_paused)
+    };
+    if back_from_drop {
+        let at_ms = elapsed_ms(handle).await;
+        let d = json!({"kind": "resume", "reason": "reconnected", "at_ms": at_ms});
+        if let Err(err) = store_event(app, hub.session_id, "ui.event", &d).await {
+            tracing::warn!(session_id = %hub.session_id, error = %err, "could not log the reconnect");
+        }
     }
     let now = Instant::now();
     let started = {
@@ -990,7 +1103,26 @@ async fn disconnect(app: &AppState, hub: &Hub, handle: &Mutex<SessionState>) {
         h.connections == 0
     };
     if last {
-        stop_clock(&mut *handle.lock().await, Instant::now());
+        // A drop while live stops the round clock like a pause; it is logged as one so the report's round time
+        // leaves it out too.
+        let live_at = {
+            let mut st = handle.lock().await;
+            let now = Instant::now();
+            let live = st.status == SessionStatus::Live;
+            let at = live.then(|| st.elapsed_ms(now) as i64);
+            stop_clock(&mut st, now);
+            at
+        };
+        if let Some(at_ms) = live_at {
+            let started = hub.inner.lock().await.wall_start.is_some();
+            if started {
+                hub.inner.lock().await.drop_paused = true;
+                let d = json!({"kind": "pause", "reason": "disconnected", "at_ms": at_ms});
+                if let Err(err) = store_event(app, hub.session_id, "ui.event", &d).await {
+                    tracing::warn!(session_id = %hub.session_id, error = %err, "could not log the drop");
+                }
+            }
+        }
         let _ = sqlx::query("update sessions set last_socket_at = now() where id = $1")
             .bind(hub.session_id)
             .execute(&app.db)
@@ -1324,6 +1456,10 @@ async fn process(
                     Some(op_id),
                 )]);
             }
+            if hub.board.lock().await.is_some() {
+                return live_board::client_op(app, hub, handle, d).await;
+            }
+            // A round without a board: the op is only stored.
             let t_ms = elapsed_ms(handle).await;
             match store_board_op(&app.db, id, op_id, src, op, d, t_ms).await? {
                 Stored::Rev(rev) => {
@@ -1395,9 +1531,10 @@ async fn process(
             Ok(Vec::new())
         }
         "board.focus" => {
-            // Latest wins. With the server board engine this also calls `BoardSession::set_focus`.
+            // Latest wins; the board engine ignores ids it does not have.
             let item = str_field(d, "item_id").map(|i| clip(i, 200).to_string());
             *hub.focus.lock().unwrap_or_else(|e| e.into_inner()) = item.clone();
+            live_board::set_focus(hub, item.clone()).await;
             sqlx::query("update sessions set board_focus = $2 where id = $1")
                 .bind(id)
                 .bind(&item)
@@ -1406,18 +1543,31 @@ async fn process(
             Ok(Vec::new())
         }
         "voice.spoken" => {
-            // Telemetry: the start of a reply as the browser played it. Nothing is stored.
+            // The start of a reply as the browser played it: the parked reply is committed, its director call
+            // goes out, and the candidate's utterance it answered goes to the Scribe. Nothing is stored.
             if let (Some(pid), Some(heard)) =
                 (str_field(d, "panelist_id"), str_field(d, "text_prefix"))
             {
                 let heard = clip(heard, 200);
-                let matched = handle.lock().await.played(pid, heard, Instant::now());
+                let (matched, jobs) = {
+                    let mut st = handle.lock().await;
+                    let matched = st.played(pid, heard, Instant::now());
+                    (matched, st.take_director_jobs())
+                };
                 tracing::debug!(session_id = %id, panelist_id = pid, matched, "voice spoken");
+                oai::spawn_directors(app, handle, &id.to_string(), jobs);
+                if matched {
+                    live_board::after_utterance(app, hub, handle);
+                }
             }
             Ok(Vec::new())
         }
         "board.ghost_reject" => {
             store_event(app, id, "board.ghost_reject", d).await?;
+            if let Some(op_id) = str_field(d, "op_id") {
+                let t_ms = elapsed_ms(handle).await;
+                live_board::reject_ghost(app, hub, t_ms, clip(op_id, 200)).await;
+            }
             Ok(Vec::new())
         }
         "ui.event" => {
@@ -1433,6 +1583,8 @@ async fn process(
                             ("pause", SessionStatus::Live) => {
                                 st.status = SessionStatus::Paused;
                                 stop_clock(&mut st, now);
+                                // Replies not yet played are dropped; the candidate's words stay.
+                                let _ = st.flush_provisional();
                                 Some((state_value(hub, &st, now, false), "paused"))
                             }
                             ("resume", SessionStatus::Paused) => {
