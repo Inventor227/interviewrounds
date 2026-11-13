@@ -196,8 +196,9 @@ pub struct ScoringDeps {
     in_flight: Arc<Mutex<HashSet<Uuid>>>,
 }
 
-/// Default scoring effort; `SCORING_EFFORT` overrides it.
-pub const DEFAULT_EFFORT: &str = "high";
+/// Default scoring effort; `SCORING_EFFORT` overrides it. Measured on a recorded 15 minute design session:
+/// `high` took 51 s, `medium` 37 s, so medium keeps the report well under the 45 s ceiling.
+pub const DEFAULT_EFFORT: &str = "medium";
 pub const MAX_TOKENS: u32 = 16_000;
 /// Longest edge of the board image sent to the model.
 pub const BOARD_IMAGE_MAX_EDGE: u32 = 1568;
