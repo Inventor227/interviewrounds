@@ -46,8 +46,11 @@ await waitReady();
 await go('/');
 await until('the home page', () => !!document.querySelector('[data-test="try-quick"]'));
 await setupTab();
+// As in the other round runs: a capture of the page before the room exists (the managed browser draws its first frames for it).
+await shot('00-home');
 await click('try-quick');
 await until('the round ready for Enter', () => !!document.querySelector('[data-test="start-round"]:not([disabled])') && !!globalThis.__xrApp, null, 150000);
+await shot('00-ready');
 await enterFromTap('start-round');
 await recordRound();
 await page(() => {

@@ -228,7 +228,8 @@ function LiveSession(props: { launch: Taken }) {
   // Before the round began there is nothing to resume: the way back is the start itself.
   const lostBefore = lost && (state === 'idle' || state === 'placing');
   const lostPaused = lost && !lostBefore;
-  const endedPaused = (over || state === 'ending') && (controller.endedWhilePaused || expired);
+  // Said while the report is being written; once it is ready the summary line takes over.
+  const endedPaused = (state === 'scoring' || state === 'ending') && (controller.endedWhilePaused || expired);
   // In the preview the cards of the room are on the canvas; the page says the same in words.
   const card = preview && notice && !over ? NOTICES[notice] : null;
   const retryEnter = !lost && state !== 'failed' && (error?.code === 'xr_enter_failed' || error?.code === 'placement_failed');
