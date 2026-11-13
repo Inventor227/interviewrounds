@@ -7,7 +7,8 @@
   "additionalProperties": false,
   "required": ["chair_attendee", "attendees", "opening_line", "success_criteria", "tips"],
   "properties": {
-    "chair_attendee": { "type": "string", "minLength": 1, "description": "Name of the attendee who chairs." },
+    "user_chairs": { "type": "boolean", "default": false, "description": "True = the user runs the meeting and no AI attendee chairs." },
+    "chair_attendee": { "type": ["string", "null"], "minLength": 1, "description": "Name of the attendee who chairs; null exactly when user_chairs is true." },
     "attendees": {
       "type": "array",
       "minItems": 1,
@@ -24,6 +25,9 @@
     "success_criteria": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } },
     "tips": { "type": "array", "minItems": 3, "maxItems": 3, "items": { "type": "string", "minLength": 1 } }
   },
+  "if": { "type": "object", "required": ["user_chairs"], "properties": { "user_chairs": { "const": true } } },
+  "then": { "type": "object", "properties": { "chair_attendee": { "type": "null" } } },
+  "else": { "type": "object", "properties": { "chair_attendee": { "type": "string" } } },
   "$defs": {
     "hidden": {
       "type": "object",

@@ -31,6 +31,7 @@
     "walk_away": { "type": ["string", "null"], "description": "Negotiations: the user's floor." },
     "difficulty": { "enum": ["friendly", "realistic", "tough"], "default": "realistic" },
     "who_speaks_first": { "enum": ["user", "chair"], "default": "user" },
-    "length": { "enum": ["short", "full"], "default": "short" }
+    "length": { "enum": ["short", "full"], "default": "short" },
+    "user_chairs": { "type": "boolean", "default": false, "description": "True = the user runs the meeting (e.g. a performance review); no AI attendee chairs." }
   }
 }
