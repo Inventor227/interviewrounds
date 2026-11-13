@@ -233,11 +233,15 @@ export class RoundRecorder {
     return { timeline, audio };
   }
 
-  /** One finished audio file as base64 (call after finish()). */
-  async audioBase64(file: string): Promise<string | null> {
+  /**
+   * One finished audio file as base64 (call after finish()), or the part of it from byte `start`, at most `length`
+   * bytes (tooling that moves results in pieces).
+   */
+  async audioBase64(file: string, start = 0, length = Infinity): Promise<string | null> {
     const s = this.segments.find((x) => x.file === file);
     if (!s) return null;
-    const buf = new Uint8Array(await new Blob(s.chunks, { type: s.mime }).arrayBuffer());
+    const blob = new Blob(s.chunks, { type: s.mime });
+    const buf = new Uint8Array(await blob.slice(start, Math.min(blob.size, start + length)).arrayBuffer());
     let bin = '';
     for (let i = 0; i < buf.length; i += 0x8000) bin += String.fromCharCode(...buf.subarray(i, i + 0x8000));
     return btoa(bin);

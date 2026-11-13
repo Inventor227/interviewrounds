@@ -185,14 +185,24 @@ async function turn(line, { yieldToAgent = false } = {}) {
       globalThis.__round.controller.sendTypedTurn(t);
     }, line.text);
   } else {
+    const ms0 = await page(() => globalThis.__recorder?.now() ?? 0);
     ms = await page(([u, id]) => globalThis.__speech.say(u, id), [`/__emu_voice/${line.id}.wav`, line.id]);
     // While it plays: a long answer lets the interviewer cut in (and stops talking when they do).
     const until = Date.now() + ms + 500;
     while (Date.now() < until) {
       await sleep(700);
       if (!yieldToAgent) continue;
-      const s = await recState().catch(() => null);
-      if (s?.lastMode?.mode === 'speaking' && s.agentCount > before) {
+      // The voice service takes short pauses as the end of a turn and starts a reply that the next words cut off;
+      // the candidate yields only to the interviewer cutting in after the long-answer marker went out.
+      const s = await page((t0) => {
+        const r = globalThis.__recorder;
+        const ev = r.events;
+        const marker = ev.find((e) => e.t > t0 && e.kind === 'voice.sent' && e.text === '[event: long_answer]');
+        if (!marker) return { marker: false };
+        const said = ev.filter((e) => e.t > marker.t && e.kind === 'voice.agent_text').at(-1);
+        return { marker: true, markerT: marker.t, words: said ? said.text.split(/\s+/).length : 0 };
+      }, ms0).catch(() => null);
+      if (s?.marker && s.words >= 3) {
         const cut = await page(() => globalThis.__speech.stop());
         stage('the interviewer cut in; the candidate stopped', { line: line.id, after_s: Math.round((Date.now() - startedAt) / 100) / 10, cut });
         break;
@@ -246,10 +256,18 @@ async function saveRecording() {
   }, { room: R.room, view: VIEW, speech: SPEECH, emulator: true, candidate_lines: lines }, 60_000);
   if (!done) return null;
   writeFileSync(path.join(SHOTS, 'timeline.json'), JSON.stringify(done.timeline, null, 2));
-  for (const f of done.files) {
-    const b64 = await page((name) => globalThis.__recorder.audioBase64(name), f, 60_000).catch((e) => (out.notes.push(`audio ${f}: ${String(e).slice(0, 200)}`), null));
-    if (b64) writeFileSync(path.join(SHOTS, f), Buffer.from(b64, 'base64'));
-    else out.notes.push(`audio ${f}: empty`);
+  // In pieces: the tooling returns at most 1 MB per command.
+  const PIECE = 600_000;
+  for (const a of done.timeline.audio) {
+    const parts = [];
+    for (let at = 0; at < (a.bytes ?? 0); at += PIECE) {
+      const b64 = await page(([name, s, n]) => globalThis.__recorder.audioBase64(name, s, n), [a.file, at, PIECE], 60_000).catch((e) => (out.notes.push(`audio ${a.file}@${at}: ${String(e).slice(0, 200)}`), null));
+      if (b64 === null) break;
+      parts.push(Buffer.from(b64, 'base64'));
+    }
+    const buf = Buffer.concat(parts);
+    if (buf.length) writeFileSync(path.join(SHOTS, a.file), buf);
+    if (buf.length !== a.bytes) out.notes.push(`audio ${a.file}: ${buf.length} of ${a.bytes} bytes`);
   }
   return done.files;
 }
@@ -370,8 +388,16 @@ try {
     await go('/history');
     await sleep(2500);
     await shot('12-history');
-    await go(`/report/${sid}`);
-    await until('the report', () => (document.querySelector('[data-test="share-toggle"]') ? true : null), null, 60000, 2000);
+    const reportAgain = async () => {
+      await go(`/report/${sid}`);
+      await until('the report', () => (document.querySelector('[data-test="share-toggle"]') ? true : null), null, 45000, 2000);
+    };
+    // The managed page can go away after several navigations; the tooling brings it back.
+    await reportAgain().catch(async () => {
+      await L.call('runtime', 'recover').catch(() => undefined);
+      await waitReady(120000);
+      await reportAgain();
+    });
     await page(() => document.querySelector('[data-test="share"]')?.scrollIntoView({ block: 'center' }));
     await click('share-toggle').catch(() => undefined);
     const url = await until('the share link', () => document.querySelector('[data-test="share-link"] input')?.value || null, null, 30000).catch(() => null);
