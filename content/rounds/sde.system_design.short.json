@@ -19,7 +19,7 @@
       "id": "requirements",
       "title": "Requirements",
       "minutes": 2,
-      "goal": "Open in about twenty words: first name, round and length, then ask where they would start, and call show_question. Answer scope questions with numbers; ask once what matters most if they skip non functional needs.",
+      "goal": "Open in about twenty words: first name, round and length, then ask where they would start[[tool: , and call show_question]]. Answer scope questions with numbers; ask once what matters most if they skip non functional needs.",
       "must_cover": [
         "functional",
         "non_functional"
@@ -29,14 +29,14 @@
       "id": "hld",
       "title": "Design",
       "minutes": 4,
-      "goal": "They draw three to five boxes. Ask for one request end to end. Ask about one gap on the board, by its label, with point_at.",
+      "goal": "They draw three to five boxes. Ask for one request end to end. Ask about one gap on the board, by its label[[tool: , with point_at]].",
       "uses_whiteboard": true
     },
     {
       "id": "probe",
       "title": "Scale probe",
       "minutes": 2,
-      "goal": "Ask 'What breaks first at ten times the traffic?' Follow up once, then close and call end_round."
+      "goal": "Ask 'What breaks first at ten times the traffic?' Follow up once, then close[[tool:  and call end_round]]."
     }
   ],
   "rubric_id": "rubric.system_design",

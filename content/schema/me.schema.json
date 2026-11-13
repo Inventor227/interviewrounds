@@ -61,7 +61,7 @@
         "full_left": { "type": ["integer", "null"], "minimum": 0, "description": "null = no limit." },
         "resets_at": { "type": ["string", "null"], "format": "date-time" },
         "reason": {
-          "enum": [null, "guest_daily_limit", "guest_full_used", "judge_budget_reached", "build_budget_reached", "free_rounds_used"],
+          "enum": [null, "guest_daily_limit", "guest_full_used", "judge_budget_reached", "build_budget_reached", "free_rounds_used", "model_budget_reached"],
           "description": "Why a new session is blocked; null = not blocked."
         }
       }

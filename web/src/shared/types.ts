@@ -741,7 +741,7 @@ export interface Settings {
   practice_mode: boolean;
 }
 
-export const LIMIT_REASONS = ['guest_daily_limit', 'guest_full_used', 'judge_budget_reached', 'build_budget_reached', 'free_rounds_used'] as const;
+export const LIMIT_REASONS = ['guest_daily_limit', 'guest_full_used', 'judge_budget_reached', 'build_budget_reached', 'free_rounds_used', 'model_budget_reached'] as const;
 export type LimitReason = (typeof LIMIT_REASONS)[number];
 
 /** me.schema.json#/$defs/limits; also `limits` in CreateSessionRes. null counts mean no limit. */
@@ -781,6 +781,8 @@ export interface Me {
   resumable: { session_id: string; round_title: string; expires_at: string } | null;
   limits: Limits;
   entitlements: Entitlements;
+  /** A started round whose browser dropped less than 3 minutes ago; null when there is none. */
+  resumable: { session_id: string; round_title: string; expires_at: string } | null;
 }
 
 export interface HistoryItem {
@@ -840,6 +842,10 @@ export interface ClientMsgMap {
   };
   'head.samples': { samples: HeadSample[] };
   'voice.state': { panelist_id: string; mode: VoiceMode; at_ms: number };
+  /** The first words of a reply as the voice played them (telemetry). */
+  'voice.spoken': { panelist_id: string; text_prefix: string };
+  /** The item the user last touched or created, debounced (telemetry; the latest wins). */
+  'board.focus': { item_id: string | null };
   'ui.event': { kind: 'pause' | 'resume' | 'end' | 'hint' | 'skip_onboarding'; reason?: string };
   ping: Record<string, never>;
 }

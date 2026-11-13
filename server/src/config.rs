@@ -21,6 +21,22 @@ impl UsagePhase {
     }
 }
 
+/// How a panel of AI people is voiced: one Fish session at a time that swaps on hand-over, or all joined at start.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PanelMode {
+    Swap,
+    Joined,
+}
+
+impl PanelMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            PanelMode::Swap => "swap",
+            PanelMode::Joined => "joined",
+        }
+    }
+}
+
 #[derive(Debug, thiserror::Error, PartialEq)]
 pub enum ConfigError {
     #[error("missing required environment variable(s): {}", .0.join(", "))]
@@ -46,10 +62,18 @@ pub struct Config {
     pub live_model: String,
     pub fast_model: String,
     pub scoring_model: String,
+    /// `output_config.effort` for live turns (`LIVE_EFFORT`, default `low`).
+    pub live_effort: String,
     pub usage_phase: UsagePhase,
     pub fish_build_cap_usd: f64,
     pub judge_cap_usd: f64,
     pub fish_rate_per_min: f64,
+    /// Model spend per UTC day across everyone (`MODEL_DAILY_CAP_USD`, default 40); new sessions stop beyond it.
+    pub model_daily_cap_usd: f64,
+    /// Fish spend made outside this server's ledger during the build (spikes), counted against the build cap.
+    pub fish_build_spent_usd: f64,
+    /// `PANEL_MODE`: `swap` (default) or `joined`.
+    pub panel_mode: PanelMode,
     pub google_client_id: Option<String>,
     pub google_client_secret: Option<String>,
     pub dev_key: String,
@@ -58,6 +82,8 @@ pub struct Config {
 }
 
 pub const DEFAULT_MODEL: &str = "claude-opus-5-5";
+/// Live voice and fast calls: the most capable model under the voice latency target (research/09-voice-spike.md).
+pub const DEFAULT_LIVE_MODEL: &str = "claude-sonnet-5-5";
 pub const DEFAULT_CSP_CONNECT_EXTRA: &str =
     "https://*.fish.audio wss://*.fish.audio https://*.livekit.cloud wss://*.livekit.cloud";
 
@@ -121,14 +147,51 @@ impl Config {
             }
         };
 
+        let live_effort = get("LIVE_EFFORT").unwrap_or_else(|| "low".into());
+        if !["low", "medium", "high", "xhigh", "max"].contains(&live_effort.as_str()) {
+            return Err(ConfigError::Invalid {
+                var: "LIVE_EFFORT",
+                reason: format!("expected low, medium, high, xhigh or max, got {live_effort:?}"),
+            });
+        }
+
+        let panel_mode = match get("PANEL_MODE").as_deref().unwrap_or("swap") {
+            "swap" => PanelMode::Swap,
+            "joined" => PanelMode::Joined,
+            other => {
+                return Err(ConfigError::Invalid {
+                    var: "PANEL_MODE",
+                    reason: format!("expected swap or joined, got {other:?}"),
+                });
+            }
+        };
+
+        let csp_connect_extra =
+            get("CSP_CONNECT_EXTRA").unwrap_or_else(|| DEFAULT_CSP_CONNECT_EXTRA.into());
+        if let Some(bad) = csp_connect_extra
+            .split_whitespace()
+            .find(|s| !is_csp_source(s))
+        {
+            return Err(ConfigError::Invalid {
+                var: "CSP_CONNECT_EXTRA",
+                reason: format!(
+                    "{bad:?} is not a CSP source (expected scheme://host, space separated)"
+                ),
+            });
+        }
+
         let port = parse_or(&get, "PORT", 8080u16)?;
         let fish_build_cap_usd = parse_or(&get, "FISH_BUILD_CAP_USD", 14.0f64)?;
         let judge_cap_usd = parse_or(&get, "JUDGE_CAP_USD", 100.0f64)?;
         let fish_rate_per_min = parse_or(&get, "FISH_RATE_PER_MIN", 0.07f64)?;
+        let model_daily_cap_usd = parse_or(&get, "MODEL_DAILY_CAP_USD", 40.0f64)?;
+        let fish_build_spent_usd = parse_or(&get, "FISH_BUILD_SPENT_USD", 0.0f64)?;
         for (var, value) in [
+            ("FISH_BUILD_SPENT_USD", fish_build_spent_usd),
             ("FISH_BUILD_CAP_USD", fish_build_cap_usd),
             ("JUDGE_CAP_USD", judge_cap_usd),
             ("FISH_RATE_PER_MIN", fish_rate_per_min),
+            ("MODEL_DAILY_CAP_USD", model_daily_cap_usd),
         ] {
             if !value.is_finite() || value < 0.0 {
                 return Err(ConfigError::Invalid {
@@ -152,18 +215,21 @@ impl Config {
             fish_api_key,
             fish_agent_id,
             fish_llm_secret,
-            live_model: get("LIVE_MODEL").unwrap_or_else(|| DEFAULT_MODEL.into()),
-            fast_model: get("FAST_MODEL").unwrap_or_else(|| DEFAULT_MODEL.into()),
+            live_model: get("LIVE_MODEL").unwrap_or_else(|| DEFAULT_LIVE_MODEL.into()),
+            fast_model: get("FAST_MODEL").unwrap_or_else(|| DEFAULT_LIVE_MODEL.into()),
             scoring_model: get("SCORING_MODEL").unwrap_or_else(|| DEFAULT_MODEL.into()),
+            live_effort,
             usage_phase,
             fish_build_cap_usd,
             judge_cap_usd,
             fish_rate_per_min,
+            model_daily_cap_usd,
+            fish_build_spent_usd,
+            panel_mode,
             google_client_id: get("GOOGLE_CLIENT_ID"),
             google_client_secret: get("GOOGLE_CLIENT_SECRET"),
             dev_key,
-            csp_connect_extra: get("CSP_CONNECT_EXTRA")
-                .unwrap_or_else(|| DEFAULT_CSP_CONNECT_EXTRA.into()),
+            csp_connect_extra,
         })
     }
 
@@ -174,6 +240,46 @@ impl Config {
             .map(|(_, rest)| rest)
             .unwrap_or(&self.app_origin)
     }
+}
+
+/// A CSP host source: `scheme://host[:port][/path]` with an optional `*.` host wildcard, or a bare `scheme:`.
+/// Anything that could end the directive or inject another (`;`, `,`, quotes, spaces) is refused.
+fn is_csp_source(s: &str) -> bool {
+    let allowed = |c: char| c.is_ascii_alphanumeric() || "-._~:/*%".contains(c);
+    if !s.chars().all(allowed) {
+        return false;
+    }
+    let Some((scheme, rest)) = s.split_once("://") else {
+        // `data:`, `blob:`, `https:` and the like.
+        return s.ends_with(':')
+            && s.len() > 1
+            && s[..s.len() - 1]
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || "+-.".contains(c));
+    };
+    let scheme_ok = !scheme.is_empty()
+        && scheme
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_alphabetic())
+        && scheme
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "+-.".contains(c));
+    let host = rest.split('/').next().unwrap_or("");
+    let host = host.rsplit_once(':').map_or(host, |(h, port)| {
+        if port == "*" || (!port.is_empty() && port.chars().all(|c| c.is_ascii_digit())) {
+            h
+        } else {
+            ""
+        }
+    });
+    let host = host.strip_prefix("*.").unwrap_or(host);
+    let host_ok = host == "*"
+        || (!host.is_empty()
+            && host.split('.').all(|l| {
+                !l.is_empty() && l.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+            }));
+    scheme_ok && host_ok
 }
 
 fn parse_or<T, G>(get: &G, var: &'static str, default: T) -> Result<T, ConfigError>
@@ -210,10 +316,14 @@ impl fmt::Debug for Config {
             .field("live_model", &self.live_model)
             .field("fast_model", &self.fast_model)
             .field("scoring_model", &self.scoring_model)
+            .field("live_effort", &self.live_effort)
             .field("usage_phase", &self.usage_phase)
             .field("fish_build_cap_usd", &self.fish_build_cap_usd)
             .field("judge_cap_usd", &self.judge_cap_usd)
             .field("fish_rate_per_min", &self.fish_rate_per_min)
+            .field("model_daily_cap_usd", &self.model_daily_cap_usd)
+            .field("fish_build_spent_usd", &self.fish_build_spent_usd)
+            .field("panel_mode", &self.panel_mode)
             .field("google_client_id", &self.google_client_id)
             .field(
                 "google_client_secret",
@@ -261,9 +371,11 @@ mod tests {
         assert_eq!(cfg.fish_build_cap_usd, 14.0);
         assert_eq!(cfg.judge_cap_usd, 100.0);
         assert_eq!(cfg.fish_rate_per_min, 0.07);
-        assert_eq!(cfg.live_model, "claude-opus-5-5");
-        assert_eq!(cfg.fast_model, "claude-opus-5-5");
+        assert_eq!(cfg.model_daily_cap_usd, 40.0);
+        assert_eq!(cfg.live_model, "claude-sonnet-5-5");
+        assert_eq!(cfg.fast_model, "claude-sonnet-5-5");
         assert_eq!(cfg.scoring_model, "claude-opus-5-5");
+        assert_eq!(cfg.live_effort, "low");
         assert_eq!(cfg.google_client_id, None);
         assert_eq!(cfg.public_dir, PathBuf::from("public"));
     }
@@ -308,6 +420,16 @@ mod tests {
         ));
 
         let mut env = base();
+        env.insert("LIVE_EFFORT", "none".into());
+        assert!(matches!(
+            load(&env),
+            Err(ConfigError::Invalid {
+                var: "LIVE_EFFORT",
+                ..
+            })
+        ));
+
+        let mut env = base();
         env.insert("FISH_RATE_PER_MIN", "-1".into());
         assert!(matches!(
             load(&env),
@@ -329,15 +451,58 @@ mod tests {
     }
 
     #[test]
+    fn csp_connect_extra_must_be_valid_sources() {
+        let mut env = base();
+        env.insert(
+            "CSP_CONNECT_EXTRA",
+            "https://*.fish.audio wss://a.livekit.cloud:443 https://x.test/p data:".into(),
+        );
+        assert!(load(&env).is_ok());
+        for bad in [
+            "https://a.test; script-src *",
+            "'unsafe-inline'",
+            "https://a.test,https://b.test",
+            "fish.audio",
+            "https://",
+            "https://a..b",
+        ] {
+            let mut env = base();
+            env.insert("CSP_CONNECT_EXTRA", bad.into());
+            assert!(
+                matches!(
+                    load(&env),
+                    Err(ConfigError::Invalid {
+                        var: "CSP_CONNECT_EXTRA",
+                        ..
+                    })
+                ),
+                "{bad} was accepted"
+            );
+        }
+    }
+
+    #[test]
+    fn panel_mode_defaults_to_swap() {
+        assert_eq!(load(&base()).unwrap().panel_mode, PanelMode::Swap);
+        let mut env = base();
+        env.insert("PANEL_MODE", "joined".into());
+        assert_eq!(load(&env).unwrap().panel_mode, PanelMode::Joined);
+        env.insert("PANEL_MODE", "both".into());
+        assert!(load(&env).is_err());
+    }
+
+    #[test]
     fn overrides_are_read() {
         let mut env = base();
         env.insert("USAGE_PHASE", "judging".into());
         env.insert("LIVE_MODEL", "claude-sonnet-5-5".into());
+        env.insert("LIVE_EFFORT", "medium".into());
         env.insert("GOOGLE_CLIENT_ID", "gid".into());
         env.insert("PORT", "9000".into());
         let cfg = load(&env).unwrap();
         assert_eq!(cfg.usage_phase, UsagePhase::Judging);
         assert_eq!(cfg.live_model, "claude-sonnet-5-5");
+        assert_eq!(cfg.live_effort, "medium");
         assert_eq!(cfg.google_client_id.as_deref(), Some("gid"));
         assert_eq!(cfg.port, 9000);
     }
