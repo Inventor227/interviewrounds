@@ -2,26 +2,26 @@
 // client rejects exactly what the server rejects without shipping a JSON Schema engine.
 // Returns null when valid, else a short reason.
 
+import {
+  BOARD_OP_NAMES,
+  BOARD_SRCS,
+  CLASS_KINDS,
+  COMPONENT_TYPES as SHARED_COMPONENT_TYPES,
+  EDGE_DIRS as DIRS,
+  EDGE_RELS as RELS,
+  LANES as SHARED_LANES,
+  METRIC_ROLES,
+  QUADS,
+  VIS,
+} from '../shared/types';
+
 type Obj = Record<string, unknown>;
 
 const ID = /^[A-Za-z0-9_.:-]+$/;
-const SRC = ['hand', 'voice_grammar', 'scribe', 'interviewer'];
-const COMPONENT_TYPES = ['client', 'lb', 'api_gateway', 'service', 'db', 'kv', 'cache', 'queue', 'cdn', 'object_store', 'search', 'worker', 'external', 'note', 'blank'];
-const CLASS_KINDS = ['class', 'interface', 'abstract', 'enum'];
-const METRIC_ROLES = ['north_star', 'input', 'guardrail'];
-const LANES = ['user', 'pain', 'idea', 'metric'];
-const QUADS = ['tl', 'tr', 'bl', 'br'];
-const DIRS = ['->', '<->', '--'];
-const RELS = ['uses', 'has_a', 'is_a', 'implements'];
-const VIS = ['+', '-', '#', '~'];
-export const OP_NAMES = [
-  'item.create', 'item.move', 'item.delete', 'item.label', 'item.set_type', 'item.note.add',
-  'edge.create', 'edge.delete', 'edge.set_dir', 'edge.set_rel', 'edge.label',
-  'group.create', 'member.add', 'member.move', 'member.remove',
-  'sticky.vote', 'sticky.set_quad',
-  'code.insert', 'code.edit', 'code.move', 'code.indent', 'code.delete', 'code.complexity', 'code.trace', 'code.approach',
-  'agenda.check', 'present.show', 'park.add', 'undo',
-];
+const SRC = BOARD_SRCS;
+const COMPONENT_TYPES = SHARED_COMPONENT_TYPES;
+const LANES = SHARED_LANES;
+export const OP_NAMES: readonly string[] = BOARD_OP_NAMES;
 
 class Invalid extends Error {}
 

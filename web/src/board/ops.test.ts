@@ -1,7 +1,7 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import type { Board, BoardOp } from '../shared/types';
+import type { BoardOp, BoardOpsFixture, UndoFixture } from '../shared/types';
 import { emptyBoard } from './model';
 import { applyOp, BoardStore, tryApplyOp } from './ops';
 
@@ -16,20 +16,7 @@ function load<T>(dir: string): [string, T][] {
     .map((f) => [f, JSON.parse(readFileSync(join(full, f), 'utf8')) as T]);
 }
 
-interface OpsFixture {
-  name: string;
-  start: Board;
-  ops: BoardOp[];
-  expected: Board;
-}
-
-interface UndoFixture {
-  name: string;
-  start: Board;
-  log: (BoardOp & { t: number; rev: number; accepted: boolean })[];
-  undo: BoardOp;
-  expected: Board;
-}
+type OpsFixture = BoardOpsFixture;
 
 /** JSON round trip: what the server would see on the wire (drops undefined keys). */
 const wire = <T>(v: T): T => JSON.parse(JSON.stringify(v)) as T;
