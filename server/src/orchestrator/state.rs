@@ -9,7 +9,7 @@ use anyhow::{Context, anyhow};
 use serde::{Deserialize, Serialize};
 use tokio::sync::{Mutex, broadcast};
 
-use super::markers::UserInput;
+use super::markers::{EventKind, UserInput};
 use super::prompt::{self, TurnDraft};
 use super::tools::{self, ToolCall};
 use super::{Brief, PhasePublic, RoundStateMsg, ServerEvent};
@@ -176,19 +176,43 @@ pub struct Turn {
     pub heard: Option<String>,
 }
 
-/// The candidate's speech a panelist has recorded but not yet seen answered in its Fish transcript.
+/// The candidate's current utterance as recorded for one panelist, until that panelist's Fish transcript shows a
+/// reply to it. One rule keeps every word in the history and the turn log once: the words already committed in
+/// earlier (frozen) messages are `base`; on each request the utterance minus `base` goes into the trailing message
+/// (`tail`), which is replaced while it is the last message in the history and frozen into `base` once anything
+/// follows it.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Unanswered {
-    /// The speech as Fish last sent it (the whole utterance, not a delta).
-    pub text: String,
-    /// The user message holding it, while that message is still the last one in the history (it is then revised in
-    /// place when Fish revises its transcript).
-    pub history_idx: Option<usize>,
-    /// The candidate line in the turn log.
-    pub turn_idx: Option<usize>,
+    /// Words of this utterance in frozen user messages (nothing in them is rewritten again).
+    pub base: String,
+    /// Words of this utterance in the trailing user message.
+    pub tail: String,
+    /// That trailing message, while it is the last one in the history.
+    pub tail_idx: Option<usize>,
+    /// The candidate line in the turn log that ends with `tail`, while it is the last line.
+    pub line_idx: Option<usize>,
+    /// That line's text before `tail`.
+    pub line_base: String,
+    /// The app event already logged for this utterance (Fish repeats it on every request).
+    pub event: Option<EventKind>,
     /// A reply to it was committed (e.g. from the browser's playback report). Kept until Fish's transcript shows
-    /// that reply: when Fish dropped it (a cut after a word), its next request repeats these words.
+    /// that reply: when Fish dropped it (a cut after a word), its next requests repeat these words.
     pub answered: bool,
+}
+
+impl Unanswered {
+    /// Everything recorded for this utterance.
+    pub fn text(&self) -> String {
+        join_words(&self.base, &self.tail)
+    }
+}
+
+fn join_words(a: &str, b: &str) -> String {
+    match (a.trim().is_empty(), b.trim().is_empty()) {
+        (true, _) => b.trim().to_string(),
+        (_, true) => a.trim().to_string(),
+        _ => format!("{} {}", a.trim(), b.trim()),
+    }
 }
 
 /// A reply that was spoken (or streamed) but is not in the history yet, because the voice platform may not have
@@ -561,9 +585,8 @@ impl SessionState {
     }
 
     /// Records the turn's user message now (the candidate's words are never lost, whatever happens to the reply)
-    /// and leaves only the note in the draft. `draft.input` carries the whole utterance Fish sent. Against what this
-    /// panelist already recorded: while that user message is still the last in the history, it is replaced by the
-    /// newer (possibly revised) transcript; otherwise only the words after the longest common word prefix are added.
+    /// and leaves only the note in the draft. `draft.input` carries the whole utterance Fish sent; see `Unanswered`
+    /// for the one rule that keeps each word once.
     pub fn record_user(&mut self, draft: &mut TurnDraft, now: Instant) {
         if draft.user_committed || draft.messages.is_empty() {
             return;
@@ -578,111 +601,106 @@ impl SessionState {
         let panelist = draft.panelist_id.clone();
         let at_ms = self.elapsed_ms(now);
         let event = draft.input.event();
-        let last_idx = self.history.len().checked_sub(1);
-        let prior = self.unanswered.get(&panelist).cloned();
 
         let Some(speech) = draft.input.speech().map(str::to_string) else {
-            // A typed app event: always its own message.
+            // A typed app event on its own: always its own message (anything recorded before it is now frozen).
             self.history.push(user);
-            if let Some(u) = self.unanswered.get_mut(&panelist) {
-                u.history_idx = None;
-            }
             self.push_app_turn(event, at_ms);
             return;
         };
 
-        match prior {
-            // Still the last message: revise it in place (Fish's newer transcript, revised or longer).
-            Some(u) if u.history_idx.is_some() && u.history_idx == last_idx && !u.answered => {
-                let idx = u.history_idx.unwrap_or_default();
-                let text = draft.input.text();
+        let mut u = self.unanswered.remove(&panelist).unwrap_or_default();
+        // Interim revisions keep the start of the utterance; speech that starts differently is a new utterance
+        // (the previous one was answered by a reply we never saw committed).
+        if !u.answered && !u.text().is_empty() && !same_start(&u.text(), &speech) {
+            u = Unanswered::default();
+        }
+        // Anything after the trailing message (a reply, another panelist's turn) freezes it.
+        let last_idx = self.history.len().checked_sub(1);
+        if u.tail_idx.is_some() && u.tail_idx != last_idx {
+            u.base = u.text();
+            u.tail.clear();
+            u.tail_idx = None;
+        }
+        if u.line_idx.is_some() && u.line_idx != self.turns.len().checked_sub(1) {
+            u.line_idx = None;
+            u.line_base.clear();
+        }
+
+        let words = after_common_prefix(&u.base, &speech);
+        let new_event = event.filter(|k| u.event != Some(*k));
+        let with_marker = |w: &str| match event {
+            Some(k) if w.is_empty() => k.marker().to_string(),
+            Some(k) => format!("{w}\n{}", k.marker()),
+            None => w.to_string(),
+        };
+        // Pending tool results only exist while the history ends on an assistant turn, i.e. when a new message
+        // is pushed below; a replaced trailing message keeps its own blocks.
+        user.content
+            .retain(|b| !matches!(b, ContentBlock::Text { .. }));
+        match u.tail_idx {
+            // A transcript that shrank back into the frozen words leaves the trailing message as it is.
+            Some(idx) if !with_marker(&words).trim().is_empty() => {
                 let msg = &mut self.history[idx];
                 msg.content
                     .retain(|b| !matches!(b, ContentBlock::Text { .. }));
-                msg.content.extend(
-                    user.content
-                        .into_iter()
-                        .filter(|b| !matches!(b, ContentBlock::Text { .. })),
-                );
-                msg.content.push(ContentBlock::text(text));
-                match u.turn_idx.and_then(|i| self.turns.get_mut(i)) {
-                    Some(t) if t.speaker == "candidate" => t.text = speech.clone(),
-                    _ => {}
-                }
-                self.unanswered
-                    .insert(panelist, Unanswered { text: speech, ..u });
-                self.push_app_turn(event, at_ms);
+                msg.content.push(ContentBlock::text(with_marker(&words)));
+                u.tail = words.clone();
             }
-            // Recorded earlier but no longer the last message: add only what is new.
-            Some(u) => {
-                let rest = after_common_prefix(&u.text, &speech);
+            Some(_) => {}
+            None => {
                 let ends_on_user = self.history.last().is_some_and(|m| m.role == Role::User);
-                // (text for a new user message, words new to the turn log)
-                let (message, fresh) = if !rest.trim().is_empty() {
-                    (Some(rest.clone()), rest)
-                } else if ends_on_user && event.is_none() {
-                    (None, String::new())
-                } else if ends_on_user {
-                    (Some(String::new()), String::new())
-                } else {
-                    // Nothing new, but the note needs a user message before it: repeat the words (rare), log nothing.
-                    tracing::info!(session_id = %self.id, panelist_id = %panelist, "repeated words recorded again to keep the history valid");
-                    (Some(speech.clone()), String::new())
-                };
-                let mut turn_idx = u.turn_idx;
-                let mut history_idx = None;
-                if let Some(added) = message {
-                    let text = match event {
-                        Some(k) if added.is_empty() => k.marker().to_string(),
-                        Some(k) => format!("{added}\n{}", k.marker()),
-                        None => added,
+                if !words.trim().is_empty() || new_event.is_some() || !ends_on_user {
+                    // With nothing new and the history ending on an assistant turn, the note still needs a user
+                    // message before it: the words are repeated there (rare), never in the turn log.
+                    let text = if words.trim().is_empty() && new_event.is_none() {
+                        tracing::info!(session_id = %self.id, panelist_id = %panelist, "repeated words recorded again to keep the history valid");
+                        speech.clone()
+                    } else {
+                        with_marker(&words)
                     };
-                    user.content
-                        .retain(|b| !matches!(b, ContentBlock::Text { .. }));
                     user.content.push(ContentBlock::text(text));
                     self.history.push(user);
-                    history_idx = Some(self.history.len() - 1);
+                    if !words.trim().is_empty() {
+                        u.tail = words.clone();
+                        u.tail_idx = Some(self.history.len() - 1);
+                    }
                 }
-                if !fresh.trim().is_empty() {
-                    turn_idx = Some(self.push_candidate_words(&fresh, at_ms));
-                }
-                self.unanswered.insert(
-                    panelist,
-                    Unanswered {
-                        text: speech,
-                        history_idx,
-                        turn_idx,
-                        answered: false,
-                    },
-                );
-                self.push_app_turn(event, at_ms);
-            }
-            None => {
-                self.history.push(user);
-                let turn_idx = Some(self.push_candidate_words(&speech, at_ms));
-                self.unanswered.insert(
-                    panelist,
-                    Unanswered {
-                        text: speech,
-                        history_idx: Some(self.history.len() - 1),
-                        turn_idx,
-                        answered: false,
-                    },
-                );
-                self.push_app_turn(event, at_ms);
             }
         }
+
+        // The turn log follows the same rule.
+        if !words.trim().is_empty() {
+            match u.line_idx.and_then(|i| self.turns.get_mut(i)) {
+                Some(line) if line.speaker == "candidate" => {
+                    line.text = join_words(&u.line_base, &words);
+                }
+                _ => {
+                    let (idx, line_base) = self.push_candidate_words(&words, at_ms);
+                    u.line_idx = Some(idx);
+                    u.line_base = line_base;
+                }
+            }
+        }
+        if let Some(k) = new_event {
+            self.push_app_turn(Some(k), at_ms);
+            u.event = Some(k);
+            // The app line follows the candidate line, so it can no longer grow in place.
+            u.line_idx = None;
+            u.line_base.clear();
+        }
+        self.unanswered.insert(panelist, u);
     }
 
-    /// Adds candidate words to the turn log (joining the candidate's line when it is the last entry); returns its
-    /// index.
-    fn push_candidate_words(&mut self, words: &str, at_ms: u64) -> usize {
+    /// Adds candidate words to the turn log (joining the candidate's line when it is the last entry); returns the
+    /// line's index and its text before these words.
+    fn push_candidate_words(&mut self, words: &str, at_ms: u64) -> (usize, String) {
         if let Some(t) = self.turns.last_mut()
             && t.speaker == "candidate"
         {
-            t.text.push(' ');
-            t.text.push_str(words.trim());
-            return self.turns.len() - 1;
+            let before = t.text.clone();
+            t.text = join_words(&before, words);
+            return (self.turns.len() - 1, before);
         }
         self.turns.push(Turn {
             speaker: "candidate".into(),
@@ -691,7 +709,7 @@ impl SessionState {
             interrupted: false,
             heard: None,
         });
-        self.turns.len() - 1
+        (self.turns.len() - 1, String::new())
     }
 
     fn push_app_turn(&mut self, event: Option<super::markers::EventKind>, at_ms: u64) {
@@ -908,7 +926,11 @@ impl SessionState {
         self.two_minute_warned |= draft.warned_two_minutes;
         if let Some(u) = self.unanswered.get_mut(&panelist) {
             u.answered = true;
-            u.history_idx = None;
+            u.base = u.text();
+            u.tail.clear();
+            u.tail_idx = None;
+            u.line_idx = None;
+            u.line_base.clear();
         }
 
         // The note and the reply follow the user message they answer. When another reply was recorded after that
@@ -945,6 +967,14 @@ impl SessionState {
             .iter()
             .rposition(|t| t.at_ms <= at_ms)
             .map_or(0, |i| i + 1);
+        // Stored line positions after the insert move down by one.
+        for u in self.unanswered.values_mut() {
+            if let Some(i) = u.line_idx.as_mut()
+                && *i >= at
+            {
+                *i += 1;
+            }
+        }
         self.turns.insert(
             at,
             Turn {
@@ -996,6 +1026,14 @@ fn words(text: &str) -> Vec<String> {
         .split_whitespace()
         .map(str::to_string)
         .collect()
+}
+
+/// Whether two transcripts start with the same word (interim revisions keep the start of an utterance).
+fn same_start(a: &str, b: &str) -> bool {
+    match (words(a).first(), words(b).first()) {
+        (Some(x), Some(y)) => x == y,
+        _ => true,
+    }
 }
 
 /// The words of `text` after the longest common word prefix with `prev` (case and punctuation ignored), in

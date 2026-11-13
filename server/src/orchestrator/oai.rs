@@ -405,6 +405,8 @@ fn turn_stream(
                 let mut st = session.lock().await;
                 let panelist_id = st.resolve_panelist(panelist_req.as_deref());
                 let now = Instant::now();
+                st.resolve_provisional(&panelist_id, fish_last.as_deref());
+                st.observe_fish_transcript(&panelist_id, fish_last.as_deref());
                 st.sync_unanswered(&panelist_id, fish_last.as_deref());
                 let mut draft = draft_turn(&st, &panelist_id, &input, now);
                 st.record_user(&mut draft, now);

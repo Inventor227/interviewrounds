@@ -103,7 +103,7 @@ pub fn build_request(
         Some(_) => state
             .unanswered
             .get(&panelist.panelist_id)
-            .map(|u| u.text.clone())
+            .map(|u| u.text())
             .unwrap_or_else(|| draft.input.text()),
         None => draft.input.text(),
     };

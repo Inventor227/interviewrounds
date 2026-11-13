@@ -2195,3 +2195,135 @@ fn an_early_report_survives_parking_another_reply() {
         "the report waits for A1"
     );
 }
+
+// ---------- fix round 3: one rule for recording an utterance ----------
+
+/// Every candidate word in the user messages and in the turn log, in order.
+fn candidate_words(st: &SessionState) -> (Vec<String>, Vec<String>) {
+    let split = |t: &str| {
+        t.split_whitespace()
+            .filter(|w| !w.starts_with('[') && !w.ends_with(']'))
+            .map(|w| {
+                w.trim_matches(|c: char| !c.is_alphanumeric() && c != '\'')
+                    .to_lowercase()
+            })
+            .collect::<Vec<_>>()
+    };
+    let history = st
+        .history
+        .iter()
+        .filter(|m| m.role == Role::User)
+        .flat_map(|m| split(&m.text()))
+        .collect();
+    let turns = st
+        .turns
+        .iter()
+        .filter(|t| t.speaker == "candidate")
+        .flat_map(|t| split(&t.text))
+        .collect();
+    (history, turns)
+}
+
+#[tokio::test]
+async fn an_utterance_is_recorded_once_through_drops_revisions_and_a_played_reply() {
+    let llm = ScriptedLlm::new(vec![
+        reply("Mm-hm."),
+        reply("Okay. Why sections?"),
+        reply("Go on."),
+        reply("Okay. And writes?"),
+        reply("Got it."),
+    ]);
+    let (app, state) = test_app_with(llm.clone(), |o| o.confirm_speech_turns = true);
+    state
+        .registry
+        .insert(new_state("s1", "sde.system_design.short", VoiceKind::Fish));
+    let send = |messages: Value| {
+        let app = app.clone();
+        async move {
+            post_chat(&app, SECRET, chat_body("s1", "p1", messages)).await;
+        }
+    };
+
+    // 1. An interim transcript; its draft reply is never played.
+    send(json!([{"role": "user", "content": "I'd shard by sexton"}])).await;
+    // 2. The revised utterance; the browser reports its reply playing...
+    send(json!([{"role": "user", "content": "I'd shard by section. Because load"}])).await;
+    state
+        .registry
+        .get("s1")
+        .unwrap()
+        .lock()
+        .await
+        .confirm_spoken("p1", "Okay.");
+    // 3. ...but the candidate cut in after a word and Fish dropped the reply: it resends the whole utterance.
+    send(json!([{"role": "user", "content": "I'd shard by section. Because load spreads."}])).await;
+    // 4. The next speculative request in the same answer.
+    send(json!([{"role": "user", "content": "I'd shard by section. Because load spreads. So reads scale."}]))
+        .await;
+    // 5. That reply was played (Fish's transcript has it), and the candidate goes on.
+    send(json!([
+        {"role": "user", "content": "I'd shard by section. Because load spreads. So reads scale."},
+        {"role": "assistant", "content": "Okay. And writes?"},
+        {"role": "user", "content": "Writes too."}
+    ]))
+    .await;
+
+    let st = state.registry.get("s1").unwrap();
+    let st = st.lock().await;
+    let expected: Vec<String> =
+        "i'd shard by section because load spreads so reads scale writes too"
+            .split(' ')
+            .map(str::to_string)
+            .collect();
+    let (history, turns) = candidate_words(&st);
+    assert_eq!(history, expected, "history: {:?}", user_texts(&st.history));
+    assert_eq!(turns, expected, "turns: {:?}", st.turns);
+    let agent: Vec<&str> = st
+        .turns
+        .iter()
+        .filter(|t| t.speaker == "p1")
+        .map(|t| t.text.as_str())
+        .collect();
+    assert_eq!(agent, vec!["Okay. Why sections?", "Okay. And writes?"]);
+    // History stays well formed.
+    for w in st.history.windows(2) {
+        assert!(!(w[0].role == Role::Assistant && w[1].role == Role::System));
+    }
+}
+
+#[tokio::test]
+async fn a_new_utterance_never_overwrites_an_earlier_one() {
+    let llm = ScriptedLlm::new(vec![reply("Okay."), reply("Right.")]);
+    let (app, state) = test_app_with(llm.clone(), |o| o.confirm_speech_turns = true);
+    state
+        .registry
+        .insert(new_state("s1", "sde.system_design.short", VoiceKind::Fish));
+    post_chat(
+        &app,
+        SECRET,
+        chat_body(
+            "s1",
+            "p1",
+            json!([{"role": "user", "content": "Yes, that works."}]),
+        ),
+    )
+    .await;
+    // The reply was played but no confirmation arrived, and Fish's next request starts a different utterance.
+    post_chat(
+        &app,
+        SECRET,
+        chat_body(
+            "s1",
+            "p1",
+            json!([{"role": "user", "content": "Then the cache."}]),
+        ),
+    )
+    .await;
+    let st = state.registry.get("s1").unwrap();
+    let st = st.lock().await;
+    let (history, _) = candidate_words(&st);
+    assert_eq!(
+        history,
+        vec!["yes", "that", "works", "then", "the", "cache"]
+    );
+}
