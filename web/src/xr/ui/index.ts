@@ -3,17 +3,17 @@
 
 import { UIKitDocument } from '@iwsdk/core';
 import type { Object3D } from 'three';
-import type { Report } from '../../shared/types';
+import type { HeadsetCard, Report } from '../../shared/types';
 import type { HeadPose } from '../placement';
 import type { DeskFrame } from '../seats';
 import type { Sounds } from '../sound';
 import { BriefCard } from './briefCard';
 import { Captions } from './captions';
 import { Hint } from './hint';
-import { layoutDesk, layoutHeadStatus, layoutHint, layoutHud, type PanelName, type PanelPose } from './layout';
+import { layoutBriefBeyondSheet, layoutDesk, layoutHeadStatus, layoutHint, layoutHud, type PanelName, type PanelPose } from './layout';
 import { RoundBar } from './roundBar';
 import { StatusCard } from './statusCard';
-import { SummaryCard, summaryFromReport } from './summaryCard';
+import { quickCardFromHeadset, SummaryCard, summaryFromReport } from './summaryCard';
 import type { RoundAction, RoundUIState, StatusStage, SummaryView } from './types';
 
 export type { RoundAction, RoundUIState, StatusStage, SummaryView } from './types';
@@ -104,6 +104,16 @@ export class RoundUI {
     this.sounds?.chime();
   }
 
+  /** The quick card (one line, top strength, top fix) in the summary card's place, until the report is ready. */
+  showQuickCard(card: HeadsetCard, opts: { pending?: boolean } = {}): void {
+    const first = !this.summary.group.visible;
+    this.status.hide();
+    this.setChromeVisible(false);
+    this.summary.showQuick(quickCardFromHeadset(card), opts.pending ?? true);
+    // One chime when the card appears; an update of the same card stays quiet.
+    if (first) this.sounds?.chime();
+  }
+
   hideSummary(): void {
     this.summary.hide();
   }
@@ -140,6 +150,11 @@ export class RoundUI {
     const poses = layoutDesk(desk);
     const g = this.groups;
     for (const k of Object.keys(poses) as PanelName[]) if (!except.includes(k)) apply(g[k], poses[k]);
+  }
+
+  /** Rounds with a board: stand the brief card beyond the sheet instead of on it. */
+  layoutBriefBeyondSheet(desk: DeskFrame): void {
+    apply(this.brief.group, layoutBriefBeyondSheet(desk));
   }
 
   layoutHeadStatus(head: HeadPose): void {

@@ -51,6 +51,8 @@ export interface XRAppOptions {
   base?: WorldOptions;
   /** How long placement waits for a touch before the head-height fallback (default 6 s; tooling raises it). */
   placementFallbackMs?: number;
+  /** True while the user is speaking: UI sounds are skipped so they never reach the microphone. */
+  isUserSpeaking?: () => boolean;
   /** Raise the rate to 90 Hz when frames show headroom (default true). The device check sets rates itself. */
   adaptiveRate?: boolean;
 }
@@ -211,7 +213,9 @@ export async function createXRApp(root: HTMLElement, opts: XRAppOptions): Promis
   // Neutral indoor IBL so skin and cloth do not look plastic; the room adds one soft key light.
   world.activeLevel.value.addComponent(IBLTexture, { src: 'room', intensity: mode === 'ar' ? 0.85 : 0.6 });
 
-  const sounds = createSounds();
+  const sounds = createSounds(undefined, { isSpeaking: opts.isUserSpeaking });
+  // The samples load with the room, so the first press already plays the recorded sound.
+  void sounds.preload();
   const room = new Room(world, { mode });
   const ui = new RoundUI(sounds);
   const placementView = new PlacementView();

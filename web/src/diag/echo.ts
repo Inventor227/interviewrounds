@@ -2,7 +2,7 @@
 // stays silent, then gets talked over. Levels come from the session's own mic track (no second capture, so the
 // test hears exactly what Fish hears) and from the agent's audio. Scoring is in echoCounter.ts.
 
-import type { Panelist } from '../shared/types';
+import type { Panelist, FishSession } from '../shared/types';
 import { getAudioContext } from '../voice/audio';
 import { FishTransport, type FishSessionLike, type FishStartOptions } from '../voice/fish';
 import { EchoCounter, type EchoPhase, type EchoResults } from './echoCounter';
@@ -43,7 +43,7 @@ function localMicTrack(session: FishSessionLike | null): MediaStreamTrack | null
   return null;
 }
 
-/** The voice from POST /api/diag/echo as the panelist FishTransport expects (whole Fish response as JSON). */
+/** The voice from POST /api/diag/echo as the panelist FishTransport expects (Fish's whole session response). */
 export function echoPanelist(voice: EchoVoice): Panelist {
   const fish = voice.fish;
   return {
@@ -53,7 +53,7 @@ export function echoPanelist(voice: EchoVoice): Panelist {
     title: '',
     avatar_id: '',
     seat: 0,
-    voice: { transport: 'fish', fish: { session_token: JSON.stringify(fish), livekit_url: String(fish.livekit_url ?? '') } },
+    voice: { transport: 'fish', fish: fish as unknown as FishSession },
   };
 }
 

@@ -185,15 +185,23 @@ function drillHref(d: NextDrill, r: ReportData): string | null {
   }
 }
 
+const words = (t: string) => t.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+/** True when two lines say the same thing (case and punctuation aside). */
+export function sameWords(a: string, b: string): boolean {
+  return words(a) === words(b);
+}
+
 function NoSignal(props: { r: ReportData; meeting: boolean }) {
   const mins = Math.max(1, Math.round(props.r.session.duration_sec / 60));
   const again = props.meeting ? '/meeting/new' : props.r.session.round_id ? `/round/${props.r.session.round_id}` : '/start';
+  const label = props.meeting ? 'No decision recorded' : 'Not enough signal yet';
   return (
     <div class="nosignal" data-test="no-signal" data-kind={props.meeting ? 'meeting' : 'interview'}>
       <p class="chip chip-mid">
-        <span class="chip-name">{props.meeting ? 'No decision recorded' : 'Not enough signal yet'}</span>
+        <span class="chip-name">{label}</span>
       </p>
-      <p class="verdict-summary">{props.r.headline.summary}</p>
+      {/* The server's summary for such a round is often the same words as the chip: say it once. */}
+      {sameWords(props.r.headline.summary, label) ? null : <p class="verdict-summary">{props.r.headline.summary}</p>}
       <p>
         {props.meeting
           ? `The meeting lasted about ${plural(mins, 'minute')} and ended before the room made a decision. What they said is below.`

@@ -4,6 +4,7 @@ import { createBoardXR } from './boardXR';
 import { ghostRect, GHOST_SETTLE_MS } from './ghosts';
 import { HLD_KIT } from './kits';
 import { emptyBoard } from './model';
+import type { BoardPoint } from './input';
 import { BoardStore } from './ops';
 import type { SfxName } from './port';
 import { along, roughBox } from './testkit';
@@ -191,5 +192,39 @@ describe('board in XR', () => {
     port.pinchStroke('right', roughBox(8, 8, 10, 6, 0.4, 2));
     expect(store.board.items).toEqual([]);
     expect(port.sheetAnchor.children).toHaveLength(0);
+  });
+
+  it('another pointer (the mouse in the 2D preview) draws on the same sheet and sends the same ops', () => {
+    const port = new FakePort();
+    const store = new BoardStore(emptyBoard());
+    const sent: BoardOp[] = [];
+    const subs = { down: new Set<(p: BoardPoint) => void>(), move: new Set<(p: BoardPoint) => void>(), up: new Set<(p: BoardPoint) => void>() };
+    const on = (set: Set<(p: BoardPoint) => void>) => (cb: (p: BoardPoint) => void) => (set.add(cb), () => set.delete(cb));
+    let destroyed = 0;
+    const pointer = { onDown: on(subs.down), onMove: on(subs.move), onUp: on(subs.up), destroy: () => void destroyed++ };
+    const xr = createBoardXR(port, {
+      store,
+      dominantHand: 'right',
+      send: (op) => sent.push(op),
+      sendGhostReject: () => {},
+      makeCanvas: stubCanvas,
+      pointer,
+    });
+    port.frame();
+    expect(xr.hands).toBeNull();
+
+    const pts = along(roughBox(8, 8, 10, 6, 0.4, 2), 0.35);
+    let t = 1000;
+    const at = (i: number): BoardPoint => ({ x_cm: pts[i]![0], y_cm: pts[i]![1], t_ms: (t += 16), hand: 'mouse' });
+    subs.down.forEach((cb) => cb(at(0)));
+    for (let i = 1; i < pts.length; i++) subs.move.forEach((cb) => cb(at(i)));
+    subs.up.forEach((cb) => cb(at(pts.length - 1)));
+    port.frame();
+
+    expect(store.board.items.map((i) => i.kind)).toEqual(['component']);
+    expect(sent.map((o) => `${o.src} ${o.op}`)).toEqual(['hand item.create']);
+    expect(xr.sheet.stats.boardUploads).toBeGreaterThan(0);
+    xr.destroy();
+    expect(destroyed).toBe(1);
   });
 });

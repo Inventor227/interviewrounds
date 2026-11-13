@@ -18,8 +18,8 @@ export interface PanelPose {
 export type PanelName = 'roundBar' | 'brief' | 'status' | 'summary' | 'captions';
 
 /** Panel sizes in metres (for layout margins). */
-const BRIEF_W = 0.3;
-const BRIEF_H = 0.12;
+export const BRIEF_W = 0.3;
+export const BRIEF_H = 0.12;
 
 export function layoutDesk(desk: DeskFrame): Record<PanelName, PanelPose> {
   const f = forwardOf(desk.yaw);
@@ -47,6 +47,25 @@ export function layoutDesk(desk: DeskFrame): Record<PanelName, PanelPose> {
     // Captions about 1 m away, just below the lead interviewer's chin (Meta caption guidance).
     captions: facingEyes(0.96, 0.2),
   };
+}
+
+/** How far the brief card leans back in a round with a board (from upright): low and flat, like a propped card. */
+export const BRIEF_BEYOND_TILT = 50 * DEG;
+/** Its right edge stays this far left of the sheet's centre line, clear of the lead's hands and chest. */
+export const BRIEF_BEYOND_CLEAR = 0.1;
+
+/**
+ * The brief card in a round with a board: propped just beyond the sheet's far edge, to the left of the lead (whose
+ * hands rest at the centre) and well inside the next seat (0.75 m to the side), leaning back so it stays low. The
+ * whole sheet stays free for drawing, and the card never stands in front of anyone's chest or hands.
+ */
+export function layoutBriefBeyondSheet(desk: DeskFrame): PanelPose {
+  const u = -BRIEF_BEYOND_CLEAR - BRIEF_W / 2;
+  // Leaning back, its lower edge comes toward the user: the centre sits far enough out that the lower edge stays
+  // just past the sheet's far edge and covers none of it.
+  const edge = sheetPoint(desk, u, SHEET_D + 0.004 + (BRIEF_H / 2) * Math.sin(BRIEF_BEYOND_TILT), 0);
+  const rise = (BRIEF_H / 2) * Math.cos(BRIEF_BEYOND_TILT);
+  return { pos: v3(edge.x, edge.y + rise + 0.008, edge.z), yaw: desk.yaw, tilt: -BRIEF_BEYOND_TILT };
 }
 
 /** The status card before the desk is known: in front of the head, a little low. */

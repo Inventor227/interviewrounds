@@ -30,4 +30,11 @@ export interface SummaryView {
   canRetry: boolean;
 }
 
+/** The quick card shown a few seconds after the round, before the full summary. */
+export interface QuickCardView {
+  oneLine: string;
+  strength: { title: string; quote: string | null } | null;
+  fix: { title: string; quote: string | null } | null;
+}
+
 export type StatusStage = 'placing' | 'connecting' | 'metrics' | 'scoring' | 'done' | 'paused' | 'hear' | 'error';

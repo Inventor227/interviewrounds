@@ -6,7 +6,7 @@ import { loadMe, useAsync } from '../components/data';
 import { clock } from '../components/format';
 import { ReadyPanel, useHeadset, useMic } from '../components/Ready';
 import { ErrorState, Loading, Page } from '../components/Ui';
-import { isFake } from '../fake/mode';
+import { voiceChoice } from '../voiceChoice';
 import { useNow } from './Home';
 
 function ResumeBody(props: { id: string; me: Me }) {
@@ -42,7 +42,7 @@ function ResumeBody(props: { id: string; me: Me }) {
         mic={mic}
         xr={xr}
         questUrl={typeof location === 'undefined' ? '' : `${location.origin}/resume/${encodeURIComponent(props.id)}`}
-        input={{ kind: 'resume', sessionId: props.id, voice: isFake() ? 'fake' : 'fish' }}
+        input={{ kind: 'resume', sessionId: props.id, voice: voiceChoice() }}
         title={r.round_title}
         me={props.me}
         enterLabel={xr === 'none' ? 'Resume on this screen' : 'Enter the room'}

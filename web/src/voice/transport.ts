@@ -31,6 +31,8 @@ export type VoiceErrorCode =
   | 'mic_denied'
   | 'no_mic'
   | 'mic_busy'
+  /** The mic could not be muted or unmuted; the voice connection itself is fine. */
+  | 'mic_toggle_failed'
   | 'audio_blocked'
   | 'connect_failed'
   | 'session_expired'
@@ -64,7 +66,8 @@ export interface VoiceTransport {
   readonly panelistId: string;
   start(): Promise<void>;
   stop(): Promise<void>;
-  setMicMuted(muted: boolean): void;
+  /** Resolves once the change has taken effect (the capture track is muted); never rejects. */
+  setMicMuted(muted: boolean): void | Promise<void>;
   /** A marker turn (`[event: ...]`): the agent answers it out loud. */
   sendEvent(marker: string): void;
   /** A typed user turn (dev console). */
