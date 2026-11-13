@@ -755,7 +755,10 @@ export class RoundController {
     this.socketUp ??= s
       .connect()
       .then(() => {
-        const heard = s.heard?.();
+        // The typed-turn voice posts straight to our own endpoint, which serves a round only once
+        // the server has taken the hello: wait for its first frame. A real voice takes longer to
+        // reach us than the hello does, so it never waits here.
+        const heard = this.req?.voice === 'fake' ? s.heard?.() : undefined;
         if (!heard) return;
         return Promise.race([heard, new Promise<void>((r) => setTimeout(r, HELLO_WAIT_MS))]);
       })
