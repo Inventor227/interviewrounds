@@ -47,6 +47,9 @@ pub struct FishSessionToken {
     /// Join deadline as Fish sent it (string or number, kept as text).
     #[serde(default, deserialize_with = "string_or_number")]
     pub expires_at: Option<String>,
+    /// The whole response as Fish sent it (`max_duration_seconds` and anything newer), passed to the browser as is.
+    #[serde(skip)]
+    pub raw: Value,
 }
 
 /// `GET /v1/agent/sessions/{id}`, the parts we use.
