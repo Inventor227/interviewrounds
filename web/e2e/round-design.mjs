@@ -18,7 +18,7 @@ const S = L.SETUPS[process.env.EMU_ROOM ?? 'home_office'] ?? L.SETUPS.home_offic
 await waitReady();
 await go('/');
 await until('the home page', () => !!document.querySelector('[data-test="try-quick"]'));
-await setupTab({ ghostSettle: 120 });
+await setupTab({ ghostSettle: 300 });
 await shot('01-home');
 
 // Tap 1: the mic, the session and the room load.
@@ -49,9 +49,46 @@ const ANSWERS = [
   'At a high level a client talks to an API service. The service writes the mapping to a key value store and reads go through a cache in front of it.',
   'For the short code I would use a counter based id encoded in base 62, handed out in ranges so that the API servers never collide.',
 ];
+/**
+ * Accepts a pending suggestion by pinch. Suggestions wait five minutes in this run (ir_ghost_settle) instead of 4 s,
+ * so the scripted hand is in time; the check is that the suggestion is gone and committed right after the pinch.
+ */
+let pinched = null;
+async function pinchGhost(waitRounds) {
+  let ghost = null;
+  for (let i = 0; i < waitRounds && !ghost; i++) {
+    await sleep(1500);
+    ghost = await page(() => {
+      const d = globalThis.__round.room.debug;
+      const g = d.store.board.ghosts[0];
+      return g ? { op_id: g.op_id, op: g.op, rect: d.ghostRect(g.op_id), pending: d.store.board.ghosts.length } : null;
+    });
+  }
+  if (!ghost?.rect) return null;
+  const before = (await board()).log.filter((e) => e.src === 'scribe' && e.accepted).length;
+  await look(S, -52);
+  await sleep(600);
+  await shot('08-ghost');
+  const tapAt = Date.now();
+  await tap(ghost.rect.x + ghost.rect.w / 2, ghost.rect.y + ghost.rect.h / 2);
+  await sleep(1500);
+  const b2 = await board();
+  const stillThere = b2.ghosts.some((g) => g.op_id === ghost.op_id);
+  const scribe = b2.log.filter((e) => e.src === 'scribe');
+  const accepted = scribe.filter((e) => e.accepted).length;
+  stage('suggestion accepted by pinch', { ghost, tapMs: Date.now() - tapAt, stillThere, acceptedBefore: before, acceptedNow: accepted, pendingNow: b2.ghosts.length, scribe });
+  if (stillThere || accepted <= before) await fail('the pinch did not accept the suggestion', { ghost, b2 });
+  await look(S, -52);
+  await sleep(800);
+  await shot('09-after-ghost');
+  return ghost;
+}
+
 for (const [i, text] of ANSWERS.entries()) {
   const reply = await answer(text);
   stage(`answer ${i + 1}`, reply);
+  // The Scribe suggests after an answer that names parts: take the first suggestion that shows up.
+  if (!pinched && i >= 1) pinched = await pinchGhost(6);
 }
 await look(S, -14);
 await sleep(800);
@@ -76,36 +113,11 @@ await sleep(800);
 await shot('07-drawn');
 if (!b.edges.length) console.error('WARNING: the connector did not become an edge');
 
-// One more answer about the drawing, so the Scribe has something to suggest. Suggestions wait two minutes in this run
-// (ir_ghost_settle) instead of 4 s, so the scripted hand is in time to accept one by pinch.
-const before = (await board()).log.filter((e) => e.src === 'scribe' && e.accepted).length;
+// One more answer about the drawing; if no suggestion was pinched yet, this is the last chance.
 const reply4 = await answer('The box on the left is the API service and the one on the right is the key value store. The service reads and writes the store.');
 stage('answer 4', reply4);
-let ghost = null;
-for (let i = 0; i < 30 && !ghost; i++) {
-  await sleep(1500);
-  ghost = await page(() => {
-    const d = globalThis.__round.room.debug;
-    const g = d.store.board.ghosts[0];
-    return g ? { op_id: g.op_id, op: g.op, rect: d.ghostRect(g.op_id), pending: d.store.board.ghosts.length } : null;
-  });
-}
-if (!ghost?.rect) await fail('no suggestion arrived to accept', await board());
-await look(S, -52);
-await sleep(600);
-await shot('08-ghost');
-const tapAt = Date.now();
-await tap(ghost.rect.x + ghost.rect.w / 2, ghost.rect.y + ghost.rect.h / 2);
-await sleep(1500);
-b = await board();
-const stillThere = b.ghosts.some((g) => g.op_id === ghost.op_id);
-const scribe = b.log.filter((e) => e.src === 'scribe');
-const accepted = scribe.filter((e) => e.accepted).length;
-stage('suggestion accepted by pinch', { ghost, tapMs: Date.now() - tapAt, stillThere, acceptedBefore: before, acceptedNow: accepted, pendingNow: b.ghosts.length, scribe });
-if (stillThere || accepted <= before) await fail('the pinch did not accept the suggestion', { ghost, b });
-await look(S, -52);
-await sleep(800);
-await shot('09-after-ghost');
+if (!pinched) pinched = await pinchGhost(20);
+if (!pinched) await fail('no suggestion arrived to accept', await board());
 await look(S, -5);
 await sleep(800);
 await shot('10-wall-board');
