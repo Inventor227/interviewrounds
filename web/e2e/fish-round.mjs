@@ -42,7 +42,9 @@ const ROUNDS = {
 };
 const R = ROUNDS[ROUND];
 if (!R) throw new Error(`unknown ROUND ${ROUND}`);
-const lines = JSON.parse(readFileSync(path.join(APP, 'e2e', 'fish-lines.json'), 'utf8'))[ROUND];
+// LINES=d3 (comma separated ids) says only those lines.
+const only = process.env.LINES ? process.env.LINES.split(',') : null;
+const lines = JSON.parse(readFileSync(path.join(APP, 'e2e', 'fish-lines.json'), 'utf8'))[ROUND].filter((l) => !only || only.includes(l.id));
 
 // The candidate's speech is served by the dev server from public/ on this server copy only.
 const voiceDir = path.join(APP, 'public', '__emu_voice');
@@ -55,7 +57,14 @@ const save = () => writeFileSync(path.join(SHOTS, 'run.json'), JSON.stringify({ 
 
 async function shot(name) {
   try {
+    // Drawing is off while the candidate speaks: on for the capture only (between turns).
+    const off = await page(() => !!globalThis.__irNoRender).catch(() => false);
+    if (off) {
+      await page(() => (globalThis.__irNoRender = false));
+      await sleep(1500);
+    }
     await L.screenshot(name);
+    if (off) await page(() => (globalThis.__irNoRender = true));
     stage(`shot ${name}`);
   } catch (e) {
     stage(`shot ${name} failed`, String(e.message ?? e).slice(0, 200));
@@ -103,7 +112,7 @@ async function setupTab() {
     sessionStorage.setItem('ir_offer', '1');
     sessionStorage.setItem('ir_fallback', '180');
     sessionStorage.setItem('ir_one_world', '1');
-    const ctx = new AudioContext({ sampleRate: 48000 });
+    const ctx = new AudioContext({ sampleRate: 48000, latencyHint: 'playback' });
     const dest = ctx.createMediaStreamDestination();
     navigator.mediaDevices.getUserMedia = async () => new MediaStream(dest.stream.getAudioTracks().map((t) => t.clone()));
     const sp = (globalThis.__speech = { ctx, dest, src: null, said: [] });
@@ -316,6 +325,9 @@ try {
     // The room on screen (the video shows it, not the page header).
     await page(() => (document.querySelector('[data-test="session-stage"]')?.scrollIntoView({ block: 'center' }), true)).catch(() => undefined);
   }
+  // The emulator draws in software, which slows its audio to about 0.6 of real time (e2e/audio-probe.mjs): no
+  // drawing while the candidate speaks into the microphone (NO_RENDER=0 keeps it).
+  if (process.env.NO_RENDER !== '0') await page(() => (globalThis.__irNoRender = true));
   // The candidate's microphone is part of the recording too.
   await page(() => globalThis.__recorder?.attachAudio('candidate', globalThis.__speech.dest.stream));
   await waitState(['live'], 120000);
@@ -346,6 +358,7 @@ try {
       await collectFish();
     }
   }
+  await page(() => (globalThis.__irNoRender = false)).catch(() => undefined);
   await shot('06-before-end');
 } catch (e) {
   failed = String(e.stack ?? e).slice(0, 2000);
@@ -353,6 +366,7 @@ try {
 } finally {
   // Whatever happened: end the round, so the server ends every voice it opened.
   await endRound(failed ? 'failure' : 'done').catch(() => undefined);
+  await page(() => (globalThis.__irNoRender = false)).catch(() => undefined);
 }
 
 try {
