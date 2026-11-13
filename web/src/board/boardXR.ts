@@ -8,7 +8,7 @@ import { GhostLayer } from './ghosts';
 import { VOICE_FOCUS_MS, voiceLabel, type VoiceLabel } from './grammar';
 import { HandAdapter } from './hand';
 import { MAX_TEXT_CHARS } from './validate';
-import { BoardInput } from './input';
+import { BoardInput, type PointerAdapter } from './input';
 import { HLD_KIT, type Kit } from './kits';
 import { IdGen } from './model';
 import type { BoardStore } from './ops';
@@ -35,12 +35,18 @@ export interface BoardXROptions {
   sfx?: Sfx;
   makeCanvas?: MakeCanvas;
   ids?: IdGen;
+  /**
+   * Another pointer instead of the hands: the 2D preview draws with the mouse on a flat view of
+   * the same board. The sheet, the wall mirror, ghosts, voice labels and sounds work the same.
+   */
+  pointer?: PointerAdapter & { destroy(): void };
 }
 
 export interface BoardXR {
   kit: Kit;
   sheet: Sheet;
-  hands: HandAdapter;
+  /** The hand pointer; null when another pointer drives the board (the 2D preview). */
+  hands: HandAdapter | null;
   ghosts: GhostLayer;
   input: BoardInput;
   /**
@@ -93,7 +99,8 @@ export function createBoardXR(port: BoardXRPort, opts: BoardXROptions): BoardXR 
   });
 
   const projector = new SheetProjector(port.sheetAnchor);
-  const hands = new HandAdapter(port, (p) => projector.project(p), { zone: kit.view });
+  const hands = opts.pointer ? null : new HandAdapter(port, (p) => projector.project(p), { zone: kit.view });
+  const pointer: PointerAdapter & { destroy(): void } = opts.pointer ?? hands!;
 
   const commit = (op: BoardOp): boolean => {
     const r = store.apply(op, { local: true });
@@ -104,7 +111,7 @@ export function createBoardXR(port: BoardXRPort, opts: BoardXROptions): BoardXR 
     return true;
   };
 
-  const ghosts = new GhostLayer(hands, store, kit, {
+  const ghosts = new GhostLayer(pointer, store, kit, {
     now,
     accept: (g) => {
       const local = store.isLocalGhost(g.op_id);
@@ -153,7 +160,7 @@ export function createBoardXR(port: BoardXRPort, opts: BoardXROptions): BoardXR 
     }
     sheet.group.visible = placed;
     ghosts.update(t);
-    sheet.update(store.board, { hovers: input.hovers(), overlays: input.overlays, rings: ghosts.rings(t), pointers: hands.pointers() });
+    sheet.update(store.board, { hovers: input.hovers(), overlays: input.overlays, rings: ghosts.rings(t), pointers: hands?.pointers() ?? [] });
   });
 
   return {
@@ -177,7 +184,7 @@ export function createBoardXR(port: BoardXRPort, opts: BoardXROptions): BoardXR 
       offClock();
       input.destroy();
       ghosts.destroy();
-      hands.destroy();
+      pointer.destroy();
       port.sheetAnchor.remove(sheet.group);
       port.wallboardTexture?.(null);
       sheet.dispose();

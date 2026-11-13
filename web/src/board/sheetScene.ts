@@ -185,7 +185,7 @@ export async function createDevSheet(root: HTMLElement): Promise<DevSheetHandle>
   });
 
   const pinches: DevSheetHandle['pinches'] = [];
-  xr.hands.onDown((p) => pinches.push({ x_cm: Math.round(p.x_cm * 100) / 100, y_cm: Math.round(p.y_cm * 100) / 100, hand: p.hand }));
+  xr.hands?.onDown((p) => pinches.push({ x_cm: Math.round(p.x_cm * 100) / 100, y_cm: Math.round(p.y_cm * 100) / 100, hand: p.hand }));
 
   const handle: DevSheetHandle = {
     pinches,
