@@ -32,6 +32,9 @@ const COPY: Record<LimitReason, { title: string; body: string }> = {
   },
 };
 
+/** The guest limit with no reset (after judging: one round per device in all). */
+const GUEST_PASS_USED = { title: 'You’ve used the guest round on this device', body: 'Your reports and history stay here.' };
+
 export function CapNotice(props: {
   reason: LimitReason;
   resetsAt: string | null;
@@ -39,8 +42,9 @@ export function CapNotice(props: {
   isGuest?: boolean;
   now?: Date;
 }) {
-  const c = COPY[props.reason];
-  const withTime = props.reason !== 'free_rounds_used';
+  const used = props.reason === 'guest_daily_limit' && !props.resetsAt;
+  const c = used ? GUEST_PASS_USED : COPY[props.reason];
+  const withTime = props.reason !== 'free_rounds_used' && !used;
   return (
     <div class="cap" role="status" data-test="cap-notice" data-reason={props.reason}>
       <svg class="cap-icon" viewBox="0 0 24 24" aria-hidden="true">

@@ -836,7 +836,12 @@ async fn drive(app: AppState, hub: Arc<Hub>, handle: Arc<Mutex<SessionState>>) {
         let now = Instant::now();
 
         let (v, owed, phase_idx, status, elapsed_ms, hard_stop_ms, key, snap, speech_commits) = {
-            let st = handle.lock().await;
+            let mut st = handle.lock().await;
+            // A round with its own closing line (a retry) says it at its time, with no model call: armed here,
+            // asked for with a time check, spoken on the next app event (`SessionState::arm_timed_close`).
+            if st.arm_timed_close(now) {
+                tracing::info!(session_id = %hub.session_id, "closing line due");
+            }
             let owed = time_check_owed(&st, now);
             let elapsed = st.elapsed_ms(now);
             let key = format!(

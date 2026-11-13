@@ -3,6 +3,7 @@
 //
 //   DEV_KEY=... node tools/smoke/round.mjs [--origin https://rounds.dijmo.com] [--out <dir>] [--only interview]
 //     [--share-retry]
+//   DEV_KEY=... node tools/smoke/round.mjs --revoke-share <slug>   (take one public link down)
 //
 // Creates a short system design round, opens the session socket, plays the browser's part (typed events, four
 // answers through the custom LLM endpoint, playback reports, three board ops and a focus), ends the round, waits for
@@ -222,6 +223,8 @@ function validateReport(data) {
 
 const MODE = opt("--only", "both");
 const SHARE_RETRY = args.includes("--share-retry");
+// Operator clean-up: take down one public link (needs DEV_KEY), then exit.
+const REVOKE = opt("--revoke-share", null);
 
 async function diagCheck() {
   // A device check result, stored for the caller (a guest).
@@ -232,6 +235,13 @@ async function diagCheck() {
 }
 
 async function main() {
+  if (REVOKE) {
+    await api("GET", "/api/me");
+    const res = await api("DELETE", `/api/shares/${encodeURIComponent(REVOKE)}`, undefined, { "X-Dev-Key": DEV_KEY });
+    const gone = await page(`/s/${encodeURIComponent(REVOKE)}`);
+    say(`revoke ${REVOKE}: DELETE ${res.status}, page ${gone.status}`);
+    process.exit(res.status === 204 && gone.status === 410 ? 0 : 1);
+  }
   mkdirSync(OUT, { recursive: true });
   await diagCheck();
   if (MODE !== "meeting") {
@@ -426,6 +436,10 @@ async function shareAndRetry(id) {
   check("report with the retry matches report.v1", v.ok, v.ok ? undefined : v.errors?.slice?.(0, 5));
   const viaChild = await api("GET", `/api/sessions/${child}/report`);
   check("the retry answers its parent's report", viaChild.status === 200 && viaChild.data?.session?.id === id, { status: viaChild.status });
+  // Leave nothing public behind.
+  const off = await api("DELETE", `/api/shares/${slug2}`);
+  const gone = await page(`/s/${slug2}`);
+  check("share link taken down", off.status === 204 && gone.status === 410, { delete: off.status, page: gone.status });
 }
 
 // ---------- a meeting rehearsal ----------

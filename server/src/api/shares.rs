@@ -9,7 +9,7 @@
 
 use axum::Json;
 use axum::extract::{Extension, Path, State};
-use axum::http::{HeaderValue, StatusCode, header};
+use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
@@ -134,21 +134,25 @@ pub async fn create(
     Ok(Json(json!({ "slug": slug, "url": url })).into_response())
 }
 
-/// `DELETE /api/shares/{slug}` -> 204. Takes the link down (idempotent); 404 when it is not the caller's.
+/// `DELETE /api/shares/{slug}` -> 204. Takes the link down (idempotent); 404 when it is not the caller's. With
+/// the `X-Dev-Key` header any link can be taken down (operators clean up after smoke runs).
 pub async fn delete(
     State(app): State<AppState>,
     Extension(identity): Extension<Identity>,
+    headers: HeaderMap,
     Path(slug): Path<String>,
 ) -> AppResult<StatusCode> {
     if !valid_slug(&slug) {
         return Err(AppError::NotFound);
     }
+    let operator = super::sessions::dev_key_ok(&app, &headers);
     let done = sqlx::query(
         "update shares set revoked_at = coalesce(revoked_at, now()) \
-         where slug = $1 and identity_id = $2",
+         where slug = $1 and (identity_id = $2 or $3)",
     )
     .bind(&slug)
     .bind(identity.id)
+    .bind(operator)
     .execute(&app.db)
     .await?
     .rows_affected();

@@ -99,7 +99,7 @@ fn enum_str<T: serde::Serialize>(v: &T) -> String {
         .unwrap_or_default()
 }
 
-fn dev_key_ok(app: &AppState, headers: &HeaderMap) -> bool {
+pub(crate) fn dev_key_ok(app: &AppState, headers: &HeaderMap) -> bool {
     headers
         .get(DEV_KEY_HEADER)
         .and_then(|v| v.to_str().ok())

@@ -291,3 +291,41 @@ async fn revoked_share_is_410() {
         .await;
     assert_eq!(res.status, StatusCode::NOT_FOUND);
 }
+
+#[tokio::test]
+async fn operator_can_revoke_any_link() {
+    let app = live::test_app(Options::default()).await;
+    let me = app.guest().await;
+    let operator = app.guest().await;
+    let id = scored(&app, &me, short_req("fake"), &LEAD_ASKS, example_report).await;
+    let slug = slug_of(&share(&app, &me, &id, true).await);
+    let path = format!("/api/shares/{slug}");
+
+    // A wrong key is just another guest.
+    let res = app
+        .call_with(
+            Method::DELETE,
+            &path,
+            Some(&operator),
+            None,
+            &[("x-dev-key", "wrong")],
+        )
+        .await;
+    assert_eq!(res.status, StatusCode::NOT_FOUND);
+    assert_eq!(get_raw(&app, &format!("/s/{slug}")).await.0, StatusCode::OK);
+
+    let res = app
+        .call_with(
+            Method::DELETE,
+            &path,
+            Some(&operator),
+            None,
+            &[("x-dev-key", "test-dev-key")],
+        )
+        .await;
+    assert_eq!(res.status, StatusCode::NO_CONTENT);
+    assert_eq!(
+        get_raw(&app, &format!("/s/{slug}")).await.0,
+        StatusCode::GONE
+    );
+}

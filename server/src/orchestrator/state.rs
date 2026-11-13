@@ -328,6 +328,11 @@ pub struct SessionState {
     pub message_owners: HashMap<usize, String>,
     /// Background meeting state updates: one per confirmed user turn, one at a time.
     pub meeting_updates: crate::meeting::live::Updates,
+    /// A closing line the app says itself, word for word and with no model call, once the round clock reaches this
+    /// time (ms): a retry's goodbye. Armed by `arm_timed_close`.
+    pub timed_close: Option<(u64, String)>,
+    /// That closing line, due: it answers the floor panelist's next app event, then the round ends.
+    pub pending_close: Option<String>,
 }
 
 impl SessionState {
@@ -506,6 +511,8 @@ impl SessionState {
             speech_commits: 0,
             message_owners: HashMap::new(),
             meeting_updates: Default::default(),
+            timed_close: None,
+            pending_close: None,
         })
     }
 
@@ -1055,6 +1062,18 @@ impl SessionState {
         // The note and the reply follow the user message they answer. When another reply was recorded after that
         // message (joined panel, a late confirmation), the history cannot take a note after an assistant turn: the
         // line goes to the next turn's note instead.
+        // The app's own closing line (`timed_close`) ends the round once it is said.
+        let closes = handover_line_used
+            && self.pending_close.as_deref().is_some_and(|line| {
+                let said: String = reply
+                    .iter()
+                    .filter_map(|b| match b {
+                        ContentBlock::Text { text, .. } => Some(text.as_str()),
+                        _ => None,
+                    })
+                    .collect();
+                said.trim() == line.trim()
+            });
         let ends_on_user = self.history.last().is_some_and(|m| m.role == Role::User);
         if ends_on_user {
             let mut messages = draft.messages;
@@ -1125,7 +1144,33 @@ impl SessionState {
         }
 
         // No subscriber (no socket yet) is fine.
-        self.apply_tool_calls(&tool_calls)
+        let mut events = self.apply_tool_calls(&tool_calls);
+        if closes && let Some(line) = self.pending_close.take() {
+            self.closing_line = Some(line.clone());
+            let ev = ServerEvent::RoundEnding { closing_line: line };
+            let _ = self.events.send(ev.clone());
+            events.push(ev);
+        }
+        events
+    }
+
+    /// Arms the app's own closing line once the round clock reaches its time (once per round): the round moves to
+    /// its last phase, so the next `round.state` asks for a time check, and the floor's next app event gets the
+    /// line. True when it was armed now.
+    pub fn arm_timed_close(&mut self, now: Instant) -> bool {
+        let Some((at_ms, line)) = self.timed_close.clone() else {
+            return false;
+        };
+        if self.status != SessionStatus::Live
+            || self.pending_close.is_some()
+            || self.closing_line.is_some()
+            || self.elapsed_ms(now) < at_ms
+        {
+            return false;
+        }
+        self.phase_idx = self.round.phases.len().saturating_sub(1);
+        self.pending_close = Some(line);
+        true
     }
 }
 

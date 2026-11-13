@@ -470,6 +470,11 @@ function Share(props: { r: ReportData }) {
             Public scorecard link
           </p>
           <p class="fine">Shows the verdict, scores, strengths and what to work on. Turn it off any time.</p>
+          {props.r.session.mode === 'meeting' && (
+            <p class="fine" data-test="share-names-note">
+              It may name the people in your meeting.
+            </p>
+          )}
         </div>
         <button
           type="button"

@@ -461,9 +461,11 @@ fn turn_stream(
             st.resolve_provisional(&panelist, fish_last.as_deref());
             st.observe_fish_transcript(&panelist, fish_last.as_deref());
             st.sync_meeting_phase(Instant::now());
-            // A line written in advance is spoken word for word: a hand-over, or a meeting's opening line.
+            // A line written in advance is spoken word for word: a hand-over, a meeting's opening line, or the app's
+            // own closing line once it is due (a retry's goodbye, on the floor's next app event).
             let handover_line = match input {
                 UserInput::Event(EventKind::Handover | EventKind::Start) => st.pending_handover.get(&panelist).cloned(),
+                UserInput::Event(_) if panelist == st.floor => st.pending_close.clone(),
                 _ => None,
             };
             // Fish sends the whole utterance again on each request; `record_user` revises or extends what is
