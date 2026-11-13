@@ -88,6 +88,9 @@ const wrapCache = new Map<string, string[]>();
 /** Bumped when web fonts finish loading: text measured with a fallback font is stale. */
 let fontEpoch = 0;
 
+/** Changes when web fonts finish loading (surfaces that cache their own canvas repaint then). */
+export const fontsEpoch = (): number => fontEpoch;
+
 /** Forget text measured so far and make BoardViews repaint (fonts changed). */
 export function onFontsChanged(): void {
   wrapCache.clear();
@@ -1432,7 +1435,7 @@ export class BoardView {
     const highlight = state.highlight ?? null;
     const rings = state.rings ?? [];
     const drawLive = state.drawLive !== false;
-    const key = `${highlight ?? ''}|${drawLive ? overlays.map(overlayKey).join('|') : overlays.flatMap((o) => (o.kind === 'drag' ? [o.id] : [])).sort().join('|')}|${drawLive ? ringKey(rings) : ''}|${fontEpoch}`;
+    const key = `${highlight ?? ''}|${drawLive ? overlays.map(overlayKey).join('|') : overlays.flatMap((o) => (o.kind === 'drag' ? [o.id] : [])).sort().join('|')}|${drawLive ? ringKey(rings) : ''}|${fontEpoch}|${this.opts.kit?.panelKey?.() ?? ''}`;
     if (board === this.lastBoard && key === this.lastKey) return false;
     this.lastBoard = board;
     this.lastKey = key;
@@ -1442,7 +1445,7 @@ export class BoardView {
     const { pxPerCm: k, originCm, dpr, kit, targets } = this.opts;
     // Every dragged item (one per hand) is left out of the board layer and drawn live.
     const dragIds = overlays.flatMap((o) => (o.kind === 'drag' ? [o.id] : [])).sort();
-    const binHot = overlays.some((o) => (o.kind === 'drag' || o.kind === 'tray') && o.overBin);
+    const binHot = overlays.some((o) => ((o.kind === 'drag' || o.kind === 'tray') && o.overBin) || (o.kind === 'kit' && o.draw.overBin === true));
 
     // Static layer: once per size and framing.
     const sk = `${this.canvas.width}x${this.canvas.height}:${k}:${dpr}:${originCm.x},${originCm.y}:${board.size.w}x${board.size.h}:${kit ? `${kit.id}:${kit.tray.length}:${kit.bin.x},${kit.bin.y}` : '-'}`;
@@ -1457,7 +1460,7 @@ export class BoardView {
     }
 
     // Board layer: only when the committed board, highlight or dragged item changes.
-    const bk = `${highlight ?? ''}|${dragIds.join(',')}|${fontEpoch}`;
+    const bk = `${highlight ?? ''}|${dragIds.join(',')}|${fontEpoch}|${this.opts.kit?.panelKey?.() ?? ''}`;
     let full = false;
     if (board !== this.boardOf || bk !== this.boardKey) {
       const bc = this.staticLayer ? this.layerCtx(this.boardLayer) : null;

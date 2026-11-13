@@ -1,12 +1,13 @@
-// The code panel in XR: a standing screen beside the sheet on the dominant side (40 x 30 cm),
-// showing the kit's panel (board.code lines, gutter, trace marker). Like the sheet, its texture
-// uploads only when the code changes; a dragged line or the moving trace marker goes on a
-// small gesture mesh just in front of it.
+// The code panel in XR: a standing screen beside the sheet on the dominant side (kit.panel,
+// 44 x 34 cm), showing the kit's panel (board.code lines, gutter, trace marker). Like the sheet,
+// its texture uploads only when the code changes (or the panel is scrolled, or web fonts
+// arrive); a dragged line or the moving trace marker goes on a small gesture mesh in front of it.
 import { Group, Object3D, type CanvasTexture, type Mesh, type MeshBasicMaterial, type PlaneGeometry } from 'three';
 import type { Board } from '../shared/types';
 import type { Overlay } from './input';
 import type { Kit } from './kits';
 import type { Rect } from './model';
+import { fontsEpoch } from './render';
 import { panelToLocal, placePanelFrame } from './sheetMath';
 import { canvasTexture, defaultCanvas, sheetPlane, type BoardCanvas, type MakeCanvas } from './xrmesh';
 
@@ -24,6 +25,7 @@ export class CodePanel {
   private readonly canvas: BoardCanvas;
   private readonly rect: Rect;
   private lastCode: Board['code'] | undefined = undefined;
+  private lastKey = '';
   private g: { canvas: BoardCanvas; tex: CanvasTexture } | null = null;
   private gKey = '';
 
@@ -50,8 +52,10 @@ export class CodePanel {
 
   /** Call every frame: redraws the screen when the code changed, the gesture strip when it moved. */
   update(board: Board, overlays: Overlay[]): void {
-    if (board.code !== this.lastCode) {
+    const key = `${this.kit.panelKey?.() ?? ''}|${fontsEpoch()}`;
+    if (board.code !== this.lastCode || key !== this.lastKey) {
       this.lastCode = board.code;
+      this.lastKey = key;
       const ctx = this.canvas.getContext('2d') as CanvasRenderingContext2D | null;
       if (ctx) {
         const k = PANEL_PX_PER_CM;
@@ -64,9 +68,9 @@ export class CodePanel {
       this.stats.uploads += 1;
     }
     const mine = overlays.filter((o): o is Extract<Overlay, { kind: 'kit' }> => o.kind === 'kit' && o.draw.surface === 'panel');
-    const key = mine.map((o) => o.draw.key).join('|');
-    if (key === this.gKey) return;
-    this.gKey = key;
+    const gKey = mine.map((o) => o.draw.key).join('|');
+    if (gKey === this.gKey) return;
+    this.gKey = gKey;
     if (!mine.length) {
       this.gestureMesh.visible = false;
       return;

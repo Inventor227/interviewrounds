@@ -54,6 +54,8 @@ export interface KitPress {
   start: Pt;
   x: number;
   y: number;
+  /** Time of the latest sample (ms, the pointer's clock): dwell times. */
+  t_ms: number;
   state: unknown;
 }
 
@@ -75,6 +77,8 @@ export interface KitDraw {
   draw(ctx: CanvasRenderingContext2D, board: Board, pxPerCm: number): void;
   /** Where it shows: on the sheet (default) or on the code panel (its own surface in XR). */
   surface?: 'sheet' | 'panel';
+  /** Letting go here deletes what is held: the bin lights up. */
+  overBin?: boolean;
 }
 
 export interface KitHandler {
@@ -84,8 +88,8 @@ export interface KitHandler {
   move?(press: KitPress, ctx: KitContext): KitOp[];
   /** The pointer let go: the ops to send, and the item to focus (undefined leaves focus). */
   up(press: KitPress, ctx: KitContext): { ops: KitOp[]; focus?: string | null };
-  /** How the live press looks. */
-  overlay?(press: KitPress, board: Board): KitDraw | null;
+  /** How the live press looks (kit: the kit as placed, mirrored for left-handed users). */
+  overlay?(press: KitPress, board: Board, kit: Kit): KitDraw | null;
 }
 
 export interface Kit {
@@ -116,6 +120,8 @@ export interface Kit {
   panel?: Rect;
   /** Draws the code panel at `panel` (board cm; the 2D view, and the XR panel's own canvas). */
   renderPanel?(ctx: CanvasRenderingContext2D, board: Board, pxPerCm: number): void;
+  /** Changes when the panel shows something else for the same board (it was scrolled). */
+  panelKey?(): string;
   /** What a drawn box or circle becomes (default: a service card, a client card); null keeps it ink. */
   drawn?: { rect?: TrayMake | null; circle?: TrayMake | null };
 }

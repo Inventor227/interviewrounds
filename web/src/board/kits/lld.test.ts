@@ -92,4 +92,13 @@ describe('LLD kit', () => {
     adapter.up(mx, my);
     expect(emitted[1]).toMatchObject({ op: 'edge.set_rel', args: { rel: 'has_a' } });
   });
+
+  it('a Scribe edge with no relation starts the cycle at "uses"', () => {
+    const { store, adapter, emitted } = setup();
+    store.apply({ op_id: 'e', src: 'scribe', op: 'edge.create', args: { id: 'e9', from: 'c1', to: 'c2', label: null, dir: '->', rel: null } } as BoardOp);
+    const [mx, my] = edgeMid(store.board, store.board.edges[0]!)!;
+    adapter.down(mx, my);
+    adapter.up(mx, my);
+    expect(emitted[0]).toMatchObject({ op: 'edge.set_rel', args: { id: 'e9', rel: 'uses' } });
+  });
 });

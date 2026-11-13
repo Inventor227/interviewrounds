@@ -1,7 +1,8 @@
 // The Parsons puzzle for the short coding round (and the no-microphone fallback): the lines of
 // a reference solution, shuffled, with a distractor or two mixed in. The first line (the
 // `def`) and the last (the `return`) stay locked in place; the candidate orders and indents
-// the rest on the code panel, drops distractors on the bin, then checks.
+// the rest on the code panel (drag up and down, nudge sideways, like any code line), drops
+// distractors on the bin, then checks: order and indent both count.
 
 export interface ParsonsBlock {
   id: string;
@@ -42,9 +43,14 @@ export function parsons(lines: readonly { id: string; text: string; indent: numb
     const j = Math.floor(r() * (i + 1));
     [order[i], order[j]] = [order[j]!, order[i]!];
   }
-  // Never hand out the answer: if the shuffle left the real lines in order, rotate once.
-  const real = order.filter((b) => !b.distractor).map((b) => b.id);
-  if (order.length > 1 && real.join() === lines.slice(1, -1).map((l) => l.id).join()) order.push(order.shift()!);
+  // Never hand out the answer: if the real lines came out in solution order, swap the first
+  // two of them (a lone middle line has only one order).
+  const want = lines.slice(1, -1).map((l) => l.id).join();
+  const realAt = order.flatMap((b, i) => (b.distractor ? [] : [i]));
+  if (realAt.length > 1 && realAt.map((i) => order[i]!.id).join() === want) {
+    const [a, b] = [realAt[0]!, realAt[1]!];
+    [order[a], order[b]] = [order[b]!, order[a]!];
+  }
   return [
     { id: first.id, text: first.text, indent: first.indent, locked: true, distractor: false },
     ...order,
@@ -52,11 +58,31 @@ export function parsons(lines: readonly { id: string; text: string; indent: numb
   ];
 }
 
-/** Checks the candidate's order (line ids, top to bottom) against the solution. */
-export function checkParsons(order: readonly string[], solution: readonly string[]): { correct: boolean; firstWrongIndex: number | null } {
+/** A line as checked: its id, or its id and indent (then the indent must match too). */
+export type ParsonsLine = string | { id: string; indent: number };
+
+const lineId = (l: ParsonsLine) => (typeof l === 'string' ? l : l.id);
+const lineIndent = (l: ParsonsLine) => (typeof l === 'string' ? null : l.indent);
+
+/**
+ * Checks the candidate's lines (top to bottom) against the solution. With indents on both
+ * sides (code lines as they are on the panel, and the reference solution), a line at the
+ * wrong indent is wrong too; firstWrongIndex is the first line out of place or out of line.
+ */
+export function checkParsons(order: readonly ParsonsLine[], solution: readonly ParsonsLine[]): { correct: boolean; firstWrongIndex: number | null } {
   const n = Math.max(order.length, solution.length);
   for (let i = 0; i < n; i++) {
-    if (order[i] !== solution[i]) return { correct: false, firstWrongIndex: i };
+    const o = order[i];
+    const w = solution[i];
+    if (o === undefined || w === undefined || lineId(o) !== lineId(w)) return { correct: false, firstWrongIndex: i };
+    const oi = lineIndent(o);
+    const wi = lineIndent(w);
+    if (oi !== null && wi !== null && oi !== wi) return { correct: false, firstWrongIndex: i };
   }
   return { correct: true, firstWrongIndex: null };
+}
+
+/** The panel's lines as checkParsons takes them: id and indent, top to bottom. */
+export function parsonsAnswer(lines: readonly { id: string; indent: number }[]): { id: string; indent: number }[] {
+  return lines.map((l) => ({ id: l.id, indent: l.indent }));
 }

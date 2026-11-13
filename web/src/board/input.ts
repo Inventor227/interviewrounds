@@ -174,7 +174,7 @@ export class BoardInput {
 
   /** Live overlays, one per active hand. */
   get overlays(): Overlay[] {
-    const kitOverlay = this.kit.handler?.overlay ? (p: KitPress) => this.kit.handler!.overlay!(p, this.board) : undefined;
+    const kitOverlay = this.kit.handler?.overlay ? (p: KitPress) => this.kit.handler!.overlay!(p, this.board, this.kit) : undefined;
     return [...this.gestures.entries()].map(([hand, g]) => toOverlay(hand, g, kitOverlay)).filter((o) => o.kind !== 'none');
   }
 
@@ -223,7 +223,7 @@ export class BoardInput {
 
     // The kit's own parts (code lines, member rows, agenda rows, number cards) come first.
     const kstate = this.kit.handler?.hit(x, y, this.ctx());
-    if (kstate != null) return { kind: 'kit', press: { hand: 'mouse', start: [x, y], x, y, state: kstate } };
+    if (kstate != null) return { kind: 'kit', press: { hand: 'mouse', start: [x, y], x, y, t_ms: 0, state: kstate } };
 
     // The card under the point: its core drags it, its rim draws (so lines from a card's edge connect).
     let core: BoardItem | null = null;
@@ -285,7 +285,10 @@ export class BoardInput {
       g = { kind: 'ink', stroke, grab: ink ? { id: ink, start: [x, y], t0: p.t_ms } : null };
     }
     if (!g) return;
-    if (g.kind === 'kit') g.press.hand = p.hand;
+    if (g.kind === 'kit') {
+      g.press.hand = p.hand;
+      g.press.t_ms = p.t_ms;
+    }
     this.gestures.set(p.hand, g);
     this.hoverBy.delete(p.hand);
     this.changed();
@@ -333,6 +336,7 @@ export class BoardInput {
       case 'kit': {
         g.press.x = x;
         g.press.y = y;
+        g.press.t_ms = p.t_ms;
         for (const op of this.kit.handler?.move?.(g.press, this.ctx()) ?? []) this.op(op);
         break;
       }
@@ -422,7 +426,7 @@ export class BoardInput {
       const e = this.board.edges.find((x) => x.id === g.id);
       if (!e) return;
       if (this.kit.edgeChip === 'rel') {
-        const next = REL_CYCLE[(REL_CYCLE.indexOf(e.rel ?? 'uses') + 1) % REL_CYCLE.length]!;
+        const next = e.rel ? REL_CYCLE[(REL_CYCLE.indexOf(e.rel) + 1) % REL_CYCLE.length]! : 'uses';
         this.op({ op: 'edge.set_rel', args: { id: e.id, rel: next } });
         return;
       }

@@ -158,7 +158,7 @@ export class Sheet {
       this.texture.needsUpdate = true;
       this.stats.boardUploads += 1;
     }
-    this.bin.setHot(overlays.some((o) => (o.kind === 'drag' || o.kind === 'tray') && o.overBin));
+    this.bin.setHot((st.overlays ?? []).some((o) => ((o.kind === 'drag' || o.kind === 'tray') && o.overBin) || (o.kind === 'kit' && o.draw.overBin === true)));
     this.drawGesture(board, overlays, st.rings ?? []);
     this.placeShadows(st.pointers ?? []);
     this.placeHovers(board, st.hovers ?? [], overlays);

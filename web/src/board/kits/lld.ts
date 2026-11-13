@@ -38,15 +38,17 @@ const members: KitHandler = {
     if (to) return { ops: [{ op: 'member.move', args: { id: s.row.member.id, to_class_id: to.id } }], focus: to.id };
     return { ops: [] };
   },
-  overlay(press: KitPress) {
+  overlay(press: KitPress, _board, kit) {
     const s = press.state as MemberPress;
+    const overBin = inRect(kit.bin, press.x, press.y);
     if (Math.hypot(press.x - press.start[0], press.y - press.start[1]) < DRAG_THRESHOLD_CM) return null;
     const text = memberText(s.row.member, s.row.section === 'methods');
     const w = Math.min(16, 2 + text.length * 0.42);
     const r = { x: press.x - w / 2, y: press.y - 0.9, w, h: 1.8 };
     return {
-      key: `${s.row.member.id}:${press.x.toFixed(1)}:${press.y.toFixed(1)}`,
+      key: `${s.row.member.id}:${press.x.toFixed(1)}:${press.y.toFixed(1)}:${overBin}`,
       bounds: r,
+      overBin,
       draw(ctx, _board, k) {
         ctx.save();
         ctx.shadowColor = 'rgba(28, 27, 26, 0.2)';

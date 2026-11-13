@@ -3,10 +3,10 @@ import type { Board, BoardCode, BoardOp } from '../../shared/types';
 import { BoardInput } from '../input';
 import { emptyBoard } from '../model';
 import { applyOp, BoardStore } from '../ops';
-import { checkParsons, parsons } from '../parsons';
+import { checkParsons, parsons, parsonsAnswer } from '../parsons';
 import { FakeAdapter } from '../testkit';
 import { kitFor } from '../tray';
-import { CHIPS, codeLineRect, createCodingKit, INDENT_CM, SLOTS, traceMarkerRect } from './coding';
+import { AXIS_LOCK_CM, CHIPS, codeLineRect, createCodingKit, INDENT_CM, LINE_H, SLOTS, TRACE_DWELL_MS, traceMarkerRect, visibleLines } from './coding';
 
 const LINES: BoardCode['lines'] = [
   { id: 'l1', indent: 0, text: 'def two_sum(nums, target):', src: 'scribe' },
@@ -90,21 +90,132 @@ describe('coding kit', () => {
     expect(CHIPS).toEqual(['O(1)', 'O(log n)', 'O(n)', 'O(n log n)', 'O(n²)', 'O(2ⁿ)']);
   });
 
-  it('walks the trace marker down the lines, one code.trace per line it reaches', () => {
+  it('walks the trace marker down the lines: one code.trace per line it stops on', () => {
     const { store, adapter, kit } = setup();
     const m = traceMarkerRect(kit.panel!, store.board);
     const start: [number, number] = [m.x + m.w / 2, m.y + m.h / 2];
+    const mid = (i: number) => codeLineRect(kit.panel!, i).y + LINE_H / 2;
     adapter.down(...start);
-    for (const i of [1, 1, 2, 3]) {
-      const r = codeLineRect(kit.panel!, i);
-      adapter.move(start[0], r.y + r.h / 2);
+    for (const i of [1, 2, 3]) {
+      adapter.move(start[0], mid(i));
+      adapter.wait(TRACE_DWELL_MS + 10);
+      adapter.move(start[0], mid(i) + 0.05);
     }
-    adapter.up(start[0], codeLineRect(kit.panel!, 3).y + 0.7);
+    adapter.up(start[0], mid(3));
     expect(store.board.code!.trace.map((t) => [t.line, t.t])).toEqual([
       ['l2', 300],
       ['l3', 300],
       ['l4', 300],
     ]);
+  });
+
+  it('the trace marker ignores a hand jittering on a line boundary (hysteresis), and lines it only passes', () => {
+    const { store, adapter, emitted, kit } = setup();
+    const m = traceMarkerRect(kit.panel!, store.board);
+    const x = m.x + m.w / 2;
+    const boundary = codeLineRect(kit.panel!, 1).y;
+    adapter.down(x, m.y + m.h / 2);
+    // A few mm either side of the line 1 / line 2 boundary, held well past the dwell.
+    for (let i = 0; i < 20; i++) {
+      adapter.move(x, boundary + (i % 2 ? 0.3 : -0.3));
+      adapter.wait(TRACE_DWELL_MS);
+    }
+    expect(emitted).toEqual([]);
+    // Sweeping through lines 2 and 3 without stopping, then stopping on line 4: only line 4.
+    adapter.move(x, codeLineRect(kit.panel!, 1).y + LINE_H / 2);
+    adapter.move(x, codeLineRect(kit.panel!, 2).y + LINE_H / 2);
+    adapter.move(x, codeLineRect(kit.panel!, 3).y + LINE_H / 2);
+    adapter.wait(TRACE_DWELL_MS + 10);
+    adapter.move(x, codeLineRect(kit.panel!, 3).y + LINE_H / 2 + 0.1);
+    adapter.up(x, codeLineRect(kit.panel!, 3).y + LINE_H / 2 + 0.1);
+    expect(emitted.map((o) => o.args)).toEqual([{ line: 'l4', t: 300 }]);
+  });
+
+  it('a pinch on the trace marker logs the line it is on (so the first line can be traced), once', () => {
+    const { store, adapter, emitted, kit } = setup();
+    const m = traceMarkerRect(kit.panel!, store.board);
+    adapter.stroke([[m.x + m.w / 2, m.y + m.h / 2]]);
+    adapter.stroke([[m.x + m.w / 2, m.y + m.h / 2]]);
+    expect(emitted.map((o) => o.args)).toEqual([{ line: 'l1', t: 300 }]);
+    // Letting go clearly inside another line logs it (a release is a stop).
+    adapter.stroke([[m.x + m.w / 2, m.y + m.h / 2], [m.x + m.w / 2, codeLineRect(kit.panel!, 2).y + LINE_H / 2]]);
+    expect(emitted.map((o) => (o.args as { line: string }).line)).toEqual(['l1', 'l3']);
+  });
+
+  it('axis lock: a sideways indent nudge that drifts down does not reorder', () => {
+    const { store, adapter, emitted, kit } = setup();
+    const r = codeLineRect(kit.panel!, 1);
+    const y = r.y + r.h / 2;
+    // The first centimetre is mostly sideways: indent. Then 1.2 cm of vertical drift.
+    adapter.stroke([[r.x + 6, y], [r.x + 6 + AXIS_LOCK_CM + 0.2, y + 0.2], [r.x + 6 + INDENT_CM + 0.2, y + 1.2]]);
+    expect(emitted).toEqual([expect.objectContaining({ op: 'code.indent', args: { id: 'l2', delta: 1 } })]);
+    expect(ids(store.board)).toEqual(['l1', 'l2', 'l3', 'l4', 'l5']);
+    // And a drag that starts down keeps reordering only, whatever it does sideways.
+    const r3 = codeLineRect(kit.panel!, 3);
+    adapter.stroke([[r3.x + 6, r3.y + r3.h / 2], [r3.x + 6.2, r3.y + r3.h / 2 - AXIS_LOCK_CM - 0.2], [r3.x + 6 + 2 * INDENT_CM, r3.y + r3.h / 2 - LINE_H]]);
+    expect(emitted.slice(1)).toEqual([expect.objectContaining({ op: 'code.move', args: { id: 'l4', after: 'l2' } })]);
+  });
+
+  it('reorders by how far the hand moved, not where it was pinched: small drift never reorders', () => {
+    const { adapter, emitted, kit } = setup();
+    const r = codeLineRect(kit.panel!, 1);
+    // Pinched near the lower edge, drifting 0.7 cm down into the next line: nothing.
+    adapter.stroke([[r.x + 6, r.y + r.h - 0.1], [r.x + 6, r.y + r.h + 0.2], [r.x + 6, r.y + r.h + 0.6]]);
+    expect(emitted).toEqual([]);
+    // One line's travel moves it one line.
+    adapter.stroke([[r.x + 6, r.y + 0.2], [r.x + 6, r.y + 1.4], [r.x + 6, r.y + 0.2 + LINE_H]]);
+    expect(emitted).toEqual([expect.objectContaining({ op: 'code.move', args: { id: 'l2', after: 'l3' } })]);
+  });
+
+  it('pushing a line far to the right only indents it; off the panel toward the sheet deletes it', () => {
+    const { store, adapter, emitted, kit } = setup();
+    const r = codeLineRect(kit.panel!, 4);
+    adapter.stroke([[r.x + 30, r.y + r.h / 2], [r.x + 32, r.y + r.h / 2], [r.x + 30 + 20, r.y + r.h / 2]]);
+    expect(emitted.map((o) => o.op)).toEqual(['code.indent']);
+    const r1 = codeLineRect(kit.panel!, 1);
+    adapter.stroke([[r1.x + 6, r1.y + r1.h / 2], [r1.x, r1.y + r1.h / 2], [kit.panel!.x - 10, r1.y + r1.h / 2]]);
+    expect(emitted.map((o) => o.op)).toEqual(['code.indent', 'code.delete']);
+    expect(ids(store.board)).toEqual(['l1', 'l3', 'l4', 'l5']);
+  });
+
+  it('a line held over the bin lights it', () => {
+    const { store, adapter, kit } = setup();
+    const input = new BoardInput(store, adapter, kit, () => {});
+    const r = codeLineRect(kit.panel!, 1);
+    adapter.down(r.x + 6, r.y + r.h / 2);
+    adapter.move(kit.bin.x + 2, kit.bin.y + 2);
+    const o = input.overlays.find((x) => x.kind === 'kit');
+    expect(o).toMatchObject({ kind: 'kit', draw: { overBin: true } });
+  });
+
+  it('long code scrolls: tap the "more" strip to page, pull it to scroll, and lines map to what is shown', () => {
+    const many = Array.from({ length: 30 }, (_, i) => ({ id: `l${i + 1}`, indent: 1, text: `x${i + 1} = ${i}`, src: 'scribe' as const }));
+    const store = new BoardStore(codingBoard(many));
+    const adapter = new FakeAdapter();
+    const kit = createCodingKit();
+    const emitted: BoardOp[] = [];
+    new BoardInput(store, adapter, kit, (op) => {
+      emitted.push(op);
+      store.apply(op, { local: true });
+    }, { now_s: () => 1 });
+    const p = kit.panel!;
+    const rows = visibleLines(p);
+    expect(rows).toBeGreaterThanOrEqual(15);
+    const footerY = codeLineRect(p, rows - 1).y + LINE_H + 0.8;
+    expect(kit.panelKey!()).toBe('0');
+    adapter.stroke([[p.x + 20, footerY]]);
+    const top = Number(kit.panelKey!());
+    expect(top).toBe(rows - 2);
+    // The first row shown is now line top + 1: drag it sideways to indent that line.
+    const r0 = codeLineRect(p, 0);
+    adapter.stroke([[r0.x + 6, r0.y + r0.h / 2], [r0.x + 8, r0.y + r0.h / 2], [r0.x + 6 + INDENT_CM, r0.y + r0.h / 2]]);
+    expect(emitted).toEqual([expect.objectContaining({ op: 'code.indent', args: { id: `l${top + 1}`, delta: 1 } })]);
+    // Never past the end.
+    adapter.stroke([[p.x + 20, codeLineRect(p, rows - 1).y + LINE_H + 0.8]]);
+    expect(Number(kit.panelKey!())).toBe(30 - rows);
+    // Pull the header down to scroll back by lines.
+    adapter.stroke([[p.x + 20, p.y + 1], [p.x + 20, p.y + 3], [p.x + 20, p.y + 1 + 3 * LINE_H]]);
+    expect(Number(kit.panelKey!())).toBe(30 - rows - 3);
   });
 
   it('puts the panel on the dominant side', () => {
@@ -135,6 +246,42 @@ describe('Parsons puzzle', () => {
     expect(checkParsons(['l1', 'l2', 'l3', 'l4'], solution)).toEqual({ correct: false, firstWrongIndex: 4 });
     // A distractor left in is wrong where it stands.
     expect(checkParsons(['l1', 'l2', 'd1', 'l3', 'l4', 'l5'], solution)).toEqual({ correct: false, firstWrongIndex: 2 });
+  });
+
+  it('checkParsons checks indents too: the right order at a wrong indent is wrong there', () => {
+    const want = parsonsAnswer(LINES);
+    expect(checkParsons(want, want)).toEqual({ correct: true, firstWrongIndex: null });
+    const flat = LINES.map((l) => ({ id: l.id, indent: 0 }));
+    expect(checkParsons(flat, want)).toEqual({ correct: false, firstWrongIndex: 1 });
+    const oneOff = want.map((l) => (l.id === 'l4' ? { ...l, indent: 1 } : l));
+    expect(checkParsons(oneOff, want)).toEqual({ correct: false, firstWrongIndex: 3 });
+  });
+
+  it('parsons never deals the solution order, whatever the seed', () => {
+    for (let middle = 2; middle <= 5; middle++) {
+      const lines = Array.from({ length: middle + 2 }, (_, i) => ({ id: `l${i + 1}`, text: `line ${i + 1}`, indent: 1 }));
+      for (const distractors of [[], ['x'], ['x', 'y']]) {
+        for (let seed = 1; seed <= 300; seed++) {
+          const real = parsons(lines, distractors, seed).filter((b) => !b.distractor).map((b) => b.id);
+          expect(real).not.toEqual(lines.map((l) => l.id));
+        }
+      }
+    }
+  });
+
+  it('a Parsons block is indented like any code line, and the check sees it', () => {
+    const blocks = parsons(LINES, ['seen.add(x)'], 7);
+    const kit = createCodingKit({ locked: ['l1', 'l5'] });
+    // Board lines as dealt (the session writes them; here straight into a fresh board).
+    const dealt = new BoardStore(codingBoard(blocks.map((b) => ({ id: b.id, indent: b.indent, text: b.text, src: 'scribe' as const }))));
+    const a = new FakeAdapter();
+    new BoardInput(dealt, a, kit, (op) => dealt.apply(op, { local: true }), { now_s: () => 1 });
+    const row = dealt.board.code!.lines.findIndex((l) => l.id === 'l2');
+    const r = codeLineRect(kit.panel!, row);
+    a.stroke([[r.x + 6, r.y + r.h / 2], [r.x + 8, r.y + r.h / 2], [r.x + 6 + INDENT_CM, r.y + r.h / 2]]);
+    expect(dealt.board.code!.lines.find((l) => l.id === 'l2')!.indent).toBe(1);
+    const res = checkParsons(parsonsAnswer(dealt.board.code!.lines), parsonsAnswer(LINES));
+    expect(res.correct).toBe(false);
   });
 
   it('a parsons kit will not move a locked line, nor drop a line above the first or below the last', () => {
