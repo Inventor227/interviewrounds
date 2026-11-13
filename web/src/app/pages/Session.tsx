@@ -127,6 +127,9 @@ function LiveSession(props: { launch: Taken }) {
 
   useEffect(() => {
     const current = () => controller.session ?? props.launch.session;
+    // The round may have moved on between the Enter tap and this page listening.
+    setState(controller.state);
+    if (controller.state === 'live') setBegan(true);
     const offs = [
       controller.on('state', (s) => {
         setState(s);
