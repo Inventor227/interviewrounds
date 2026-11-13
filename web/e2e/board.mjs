@@ -147,7 +147,7 @@ if (r?.labels?.[0] !== 'Shortener service') fail('the voice label did not land o
 // 5. Pull a cache card from the tray, connect the service to it with its tab, draw a client circle and a note.
 r = await step(
   'board-05-tray-and-tab',
-  // The cache card is the 7th tray slot: x -12..-2, y 0.5 + 6 * 3.
+  `// The cache card is the 7th tray slot: x -12..-2, y 0.5 + 6 * 3.
   await stroke([[-7, 19.8], [0, 22], [14, 27], [21, 30]]);
   const items = (await board()).items;
   const svc = items[0];
