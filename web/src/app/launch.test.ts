@@ -34,7 +34,7 @@ describe('placeholder room', () => {
 
   it('dispose_destroys_the_world_and_its_host', async () => {
     const xr = placeholderXr(false, false);
-    await xr.preload!();
+    await xr.preload!({} as never);
     expect(document.body.querySelectorAll('div[aria-hidden="true"]')).toHaveLength(1);
     xr.dispose!();
     expect(entry.handles[0]!.destroy).toHaveBeenCalledTimes(1);
@@ -45,7 +45,7 @@ describe('placeholder room', () => {
     let open!: () => void;
     entry.gate = new Promise<void>((r) => (open = r));
     const xr = placeholderXr(false, false);
-    const loading = xr.preload!();
+    const loading = xr.preload!({} as never);
     xr.dispose!();
     open();
     await loading;

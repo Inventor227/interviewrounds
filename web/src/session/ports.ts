@@ -6,7 +6,9 @@ import type { CloseInfo, SocketStatus } from '../net/ws';
 import type {
   ClientMsgMap,
   ClientMsgType,
+  CreateSessionRes,
   HeadSample,
+  HeadsetCard,
   Report,
   RoundStatePayload,
   ServerMsgMap,
@@ -39,10 +41,11 @@ export interface SeatPoseLike {
 /** The XR app (room, placement, round UI). */
 export interface XRPort {
   /**
-   * Loads the room (code, world, renderer) without requesting an XR session, so enter() has
-   * nothing left to load. Called by prepare(), in the mic tap.
+   * Loads the room (code, world, renderer) and this round's people without requesting an XR
+   * session, so enter() has nothing left to load. Called by prepare(), in the mic tap, with the
+   * session it just got.
    */
-  preload?(): Promise<void>;
+  preload?(session: CreateSessionRes): Promise<void>;
   /**
    * Enters the immersive session. Needs the user activation of the Enter tap: call requestSession
    * first. Must reject when requestSession rejects (lost activation, refused), so the session page
@@ -58,9 +61,13 @@ export interface XRPort {
   /** Resolves once the desk is placed (dwell or fallback). */
   place(): Promise<void>;
   exit?(): void;
+  /** Any pinch in the room (a user gesture): the controller retries blocked audio on it. */
+  onGesture?(cb: () => void): () => void;
   ui: {
     setRoundState(s: RoundStatePayload & { controller: ControllerState }): void;
     showSummary(report: Report): void;
+    /** The quick card a few seconds after the round: one line, the top strength and the top fix. */
+    showCard?(card: HeadsetCard): void;
     setStatus(text: string | null, progress?: number): void;
     onAction(cb: (action: UiAction) => void): () => void;
   };

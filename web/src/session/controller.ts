@@ -19,7 +19,13 @@
 // - Every await in the start path re-checks the state, so an end, pause or dispose that lands
 //   meanwhile never leaves a voice session running or greets into an ended round.
 // - A greeting watchdog offers "Tap to hear your interviewer" when the agent stays silent (autoplay
-//   blocked); every round bar tap also retries agent playback.
+//   blocked); every round bar tap and every pinch in the room also retries agent playback.
+// - The voices connect while the user places the desk (muted until then), so the greeting starts
+//   as soon as the desk is down.
+// - `voice.spoken` once per reply with the first words as they played: the server keeps a reply,
+//   and runs its actions, only once it is known to have played.
+// - After the round: the status card with progress, the quick card as soon as the server has it,
+//   then the full summary.
 
 import type { ApiError } from '../net/api';
 import {
@@ -28,6 +34,7 @@ import {
   type CreateSessionReq,
   type CreateSessionRes,
   type EndReason,
+  type HeadsetCard,
   type Panelist,
   type RoundStatePayload,
   type VoiceChoice,
@@ -44,6 +51,7 @@ import {
   type VoiceTransport,
 } from '../voice/transport';
 import { LatencyTracker, type LatencySplit } from './latency';
+import type { StageTimings } from './timings';
 import type {
   ApiPort,
   AvatarPort,
@@ -76,6 +84,14 @@ export const GREETING_WATCHDOG_MS = 8000;
 export const USER_SEGMENT_STALE_MS = 10_000;
 /** Reconnecting for longer than this shows a status line and a typed error. */
 export const RECONNECT_WARN_MS = 8000;
+/** `voice.spoken` goes out once this much of a reply has played (or when a shorter reply ends). */
+export const SPOKEN_MIN_CHARS = 24;
+/** At most this much of the reply is reported. */
+export const SPOKEN_MAX_CHARS = 60;
+/** The mic stays closed this long at most around a typed long-answer marker. */
+export const LONG_ANSWER_MUTE_MS = 2500;
+/** Pinches retry blocked audio at most this often. */
+const GESTURE_UNLOCK_MS = 1000;
 /** Board activity reaches the voice service at most this often. */
 const ACTIVITY_THROTTLE_MS = 1000;
 /** A phase change counts as "on time" when the old phase had at most this much left. */
@@ -154,6 +170,8 @@ export interface RoundControllerDeps {
   head?: HeadSamplerPort;
   visibility?: VisibilityPort;
   timing?: Partial<RoundTiming>;
+  /** Stage timings of the start (loading budget). */
+  timings?: StageTimings;
 }
 
 interface CandidateTurn {
@@ -164,14 +182,13 @@ interface CandidateTurn {
 }
 
 type VoiceStateMsg = ClientMsgMap['voice.state'] & { latency?: LatencySplit };
-/** `time_check_due` is new on the server; older payloads lack it. */
-type RoundState = RoundStatePayload & { time_check_due?: boolean };
+type RoundState = RoundStatePayload;
 
 const isActive = (s: ControllerState) => s === 'live' || s === 'greeting' || s === 'paused';
 
 export class RoundController {
   private readonly events = new Emitter<ControllerEvents>();
-  private readonly timing: RoundTiming;
+  private timing: RoundTiming;
   private readonly latency = new LatencyTracker();
   private readonly unsubs: (() => void)[] = [];
 
@@ -198,6 +215,15 @@ export class RoundController {
   private userMuted = false;
   private handingOver = 0;
   private pendingHandOver: { to: string; openingLine: string } | null = null;
+  private voicesStarting: Promise<void> | null = null;
+  private placed = false;
+  private timeCheckOwed = false;
+  private hearTaps = 0;
+  private lastGestureUnlock = -Infinity;
+  /** Replies whose first words were reported (`voice.spoken`), by panelist and segment. */
+  private readonly spokenSent = new Set<string>();
+  private spokenPending: { key: string; panelistId: string; text: string } | null = null;
+  private longAnswerUnmute: ReturnType<typeof setTimeout> | null = null;
   private lastAgentSegment: string | null = null;
   private lastActivitySent = -Infinity;
 
@@ -231,6 +257,7 @@ export class RoundController {
   private endingSawSpeech = false;
   private endingTimer: ReturnType<typeof setTimeout> | null = null;
   private finishing: Promise<void> | null = null;
+  private cardShown = false;
 
   constructor(private readonly deps: RoundControllerDeps) {
     this.timing = { ...DEFAULT_TIMING, ...deps.timing };
@@ -279,6 +306,7 @@ export class RoundController {
     }
     this.preparing = true;
     const { media, api, xr } = this.deps;
+    this.deps.timings?.mark('prepare');
     const voice = input.kind === 'new' ? input.req.voice : input.voice;
     try {
       if (opts.mic) {
@@ -316,11 +344,12 @@ export class RoundController {
         }
         this.preparedRes = res;
       }
+      this.deps.timings?.mark('session_created');
       if (this.disposed) return this.releaseMic();
 
       if (xr.preload) {
         try {
-          await xr.preload();
+          await xr.preload(res);
         } catch (err) {
           this.releaseMic();
           const e = new SessionError('room_load_failed', 'Could not load the room', err);
@@ -332,8 +361,17 @@ export class RoundController {
 
       this.req = input.kind === 'new' ? input.req : reqFor(res, voice);
       this.res = res;
+      if (res.timing) {
+        // The server's values for this round, level and persona; deps.timing still wins (tests).
+        this.timing = {
+          silenceWaitSeconds: res.timing.silence_wait_seconds,
+          interruptAfterSeconds: res.timing.interrupt_after_seconds,
+          ...this.deps.timing,
+        };
+      }
       this.openSocket(res);
       this.watchPage();
+      this.deps.timings?.mark('prepared');
     } finally {
       this.preparing = false;
     }
@@ -354,8 +392,10 @@ export class RoundController {
     if (!res) throw new SessionError('not_prepared', 'Call prepare() first');
     const { xr, api } = this.deps;
 
+    const timings = this.deps.timings;
     if (this.st === 'idle') {
       // Phase B: the room request is the first await, so it runs inside the user's tap.
+      timings?.mark('enter');
       try {
         await xr.enter();
       } catch (err) {
@@ -364,30 +404,51 @@ export class RoundController {
         throw e;
       }
       if (this.disposed || this.st !== 'idle') return;
+      timings?.mark('xr_started');
       this.setState('placing');
     }
     if (this.st !== 'placing') return;
+
+    // The voices connect while the user places the desk. Nobody hears the user until the desk is
+    // down, so nothing is said before the greeting.
+    let panel = this.panel;
+    if (!panel || panel.isStopped) {
+      panel = new PanelController(res, (p, o) => this.wire(this.deps.makeTransport(p, o, res)), {
+        api,
+        waitQuiet: (t) => this.waitQuiet(t),
+      });
+      this.panel = panel;
+      this.voicesStarting = null;
+    }
+    if (!this.voicesStarting) {
+      const starting = panel.start().then(() => {
+        timings?.mark('voices_connected');
+        if (!this.placed && !panel.isStopped) panel.muteAll(true);
+      });
+      starting.catch(() => undefined); // reported below, once placement is done
+      this.voicesStarting = starting;
+    }
+    const voices = this.voicesStarting;
 
     try {
       await xr.place();
     } catch (err) {
       const e = new SessionError('placement_failed', 'Could not place the desk', err);
       this.emitError(e);
-      throw e; // still `placing`: enter() retries placement
+      throw e; // still `placing`: enter() retries placement, the voices stay connected and muted
     }
     if (this.disposed || this.st !== 'placing') return;
+    this.placed = true;
+    timings?.mark('placed');
+    // The touch that placed the desk: a good moment to retry audio that autoplay rules held back.
+    this.unlockAudio();
 
     this.setState('greeting');
-    const panel = new PanelController(res, (p, o) => this.wire(this.deps.makeTransport(p, o, res)), {
-      api,
-      waitQuiet: (t) => this.waitQuiet(t),
-    });
-    this.panel = panel;
-    if (this.userMuted) panel.muteAll(true);
     try {
-      await panel.start();
+      await voices;
     } catch (err) {
       await panel.stopAll();
+      this.voicesStarting = null;
       this.releaseMic();
       const e = err instanceof VoiceError ? err : new VoiceError('connect_failed', String(err), err);
       if (!this.disposed && isActive(this.st)) this.setState('failed');
@@ -399,6 +460,8 @@ export class RoundController {
     if (this.disposed || panel.isStopped || !isActive(this.st)) return;
 
     this.voicesUp = true;
+    // Paused meanwhile: everyone stays muted until Resume.
+    if (this.st !== 'paused') panel.muteAll(this.userMuted);
     const head = this.deps.head;
     if (head) {
       head.setFloor(panel.floor);
@@ -426,7 +489,17 @@ export class RoundController {
 
   /** Asks the floor panelist for a time check (the server says a phase ran out). */
   timeCheck(): void {
-    if (this.st === 'live' && !this.handingOver) this.floorT()?.sendEvent(VOICE_MARKERS.timeCheck);
+    if (this.st === 'paused' || (this.st === 'live' && this.handingOver)) {
+      this.timeCheckOwed = true; // sent on Resume, or once the hand-over is done
+      return;
+    }
+    if (this.st === 'live') this.floorT()?.sendEvent(VOICE_MARKERS.timeCheck);
+  }
+
+  private flushTimeCheck(): void {
+    if (!this.timeCheckOwed || this.st !== 'live' || this.handingOver) return;
+    this.timeCheckOwed = false;
+    this.floorT()?.sendEvent(VOICE_MARKERS.timeCheck);
   }
 
   /**
@@ -469,7 +542,10 @@ export class RoundController {
       this.handOver(handOver.to, handOver.openingLine);
     } else if (this.voicesUp) {
       this.floorT()?.sendEvent(VOICE_MARKERS.resume);
+      // Still not greeted: keep offering "Tap to hear" if the voice stays silent.
+      if (!this.greeted) this.armWatchdog();
     }
+    this.flushTimeCheck();
   }
 
   /** Ends the round: the interviewer says goodbye, then the round is scored. */
@@ -486,6 +562,7 @@ export class RoundController {
     this.clearWatchdog();
     if (this.endingTimer) clearTimeout(this.endingTimer);
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+    if (this.longAnswerUnmute) clearTimeout(this.longAnswerUnmute);
     for (const u of this.unsubs.splice(0)) u();
     this.deps.head?.stop();
     this.releaseMic();
@@ -504,13 +581,13 @@ export class RoundController {
       s.on('panel.hand_over', (d) => this.handOver(d.to, d.opening_line)),
       s.on('round.ending', () => this.beginEnding(null)),
       s.on('round.ended', () => this.onRoundEnded()),
-      s.on('report.progress', (d) => {
-        if (this.st === 'scoring') this.deps.xr.ui.setStatus('Writing your scorecard', d.pct);
-      }),
+      s.on('report.progress', (d) => this.onReportProgress(d)),
       s.on('report.ready', () => void this.showReport()),
       s.on('error', (d) => {
         // Rejected board ops belong to the board.
-        if (d.code !== 'op_rejected') this.emitError(new SessionError('server_error', d.message, d));
+        if (d.code === 'op_rejected') return;
+        this.emitError(new SessionError('server_error', d.message, d));
+        if (d.code === 'report_failed') this.reportUnavailable();
       }),
     );
     if (s.onTerminal) {
@@ -518,6 +595,12 @@ export class RoundController {
         s.onTerminal((info) => {
           if (this.disposed) return;
           this.socketTerminal = true;
+          // After the round the server closes the room for good once the report is done (or late).
+          if (this.st === 'summary') return;
+          if (this.st === 'scoring') {
+            void this.showReport(true);
+            return;
+          }
           this.emitError(new SessionError('socket_terminal', `The room connection closed (${info.code})`, info));
           this.deps.xr.ui.setStatus('We lost the connection to the room');
         }),
@@ -562,6 +645,18 @@ export class RoundController {
     const board = this.deps.board;
     if (board) this.unsubs.push(board.onActivity(() => this.noteUserActivity()));
     this.unsubs.push(this.deps.xr.ui.onAction((a) => this.onAction(a)));
+    const onGesture = this.deps.xr.onGesture;
+    if (onGesture) {
+      this.unsubs.push(
+        onGesture(() => {
+          // A pinch is a user gesture too (the placement touch, drawing): retry blocked audio.
+          const now = Date.now();
+          if (now - this.lastGestureUnlock < GESTURE_UNLOCK_MS) return;
+          this.lastGestureUnlock = now;
+          this.unlockAudio();
+        }),
+      );
+    }
   }
 
   private onAction(a: UiAction): void {
@@ -602,15 +697,18 @@ export class RoundController {
 
   private sendStart(): void {
     this.floorT()?.sendEvent(VOICE_MARKERS.start);
+    this.deps.timings?.mark('start_sent');
     this.armWatchdog();
   }
 
   private handOver(to: string, openingLine: string): void {
-    if (this.st === 'paused') {
-      this.pendingHandOver = { to, openingLine }; // nobody new speaks while the user is away
+    if (this.st === 'paused' || this.st === 'greeting') {
+      // Nobody new speaks while the user is away, and nobody takes over before the greeting is
+      // done (a swap during the greeting would greet twice). Replayed on Resume or once live.
+      this.pendingHandOver = { to, openingLine };
       return;
     }
-    if (this.st !== 'live' && this.st !== 'greeting') return;
+    if (this.st !== 'live') return;
     const panel = this.panel;
     if (!panel || panel.isStopped) return;
     this.handingOver++;
@@ -627,6 +725,7 @@ export class RoundController {
       .finally(() => {
         this.handingOver--;
         this.rearmSilence();
+        this.flushTimeCheck();
       });
   }
 
@@ -664,14 +763,20 @@ export class RoundController {
     this.watchdog = null;
   }
 
-  /** The "Tap to hear" action: retry playback, and resend the start if the agent never reacted. */
+  /**
+   * The "Tap to hear" action. The tap itself retries playback (unlockAudio in onAction). The start
+   * marker is sent again only when the agent never reacted at all, and for a real voice only from
+   * the second tap on: a voice held back by autoplay rules still has the first greeting queued,
+   * and a second marker would make it greet twice.
+   */
   private hearAgain(): void {
     if (this.st !== 'greeting' || !this.voicesUp) return;
     if (this.audioBlocked) {
       this.audioBlocked = false;
       this.deps.xr.ui.setStatus(null);
     }
-    if (!this.sawAgent) this.floorT()?.sendEvent(VOICE_MARKERS.start);
+    const taps = this.hearTaps++;
+    if (!this.sawAgent && (taps > 0 || this.req?.voice === 'fake')) this.floorT()?.sendEvent(VOICE_MARKERS.start);
     this.armWatchdog();
   }
 
@@ -691,8 +796,14 @@ export class RoundController {
       }
     }
     if (m === 'thinking') this.latency.thinking(now);
-    if (m === 'thinking' || m === 'speaking') this.sawAgent = true;
+    if (m === 'thinking' || m === 'speaking') {
+      this.sawAgent = true;
+      this.endLongAnswerMute(); // the agent took the turn: the mic opens again
+    }
+    // The reply is over: report a short one that never reached the usual length.
+    if (m !== 'speaking' && this.spokenPending?.panelistId === t.panelistId) this.flushSpoken();
     if (m === 'speaking') {
+      this.deps.timings?.mark('first_audio');
       this.cand = null; // the agent answered: the candidate's turn is over
       this.silenceFired = false;
       this.greeted = true;
@@ -710,7 +821,7 @@ export class RoundController {
     this.socket?.send('voice.state', msg);
 
     if (m === 'listening') {
-      if (this.st === 'greeting' && this.greeted) this.setState('live');
+      if (this.st === 'greeting' && this.greeted) this.goLive();
       if (this.st === 'ending' && this.endingSawSpeech) void this.finishEnding();
     }
     this.rearmSilence();
@@ -742,7 +853,7 @@ export class RoundController {
       });
       const agentPlaying = this.agentIs('speaking') ? this.lastAgentSegment : null;
       this.latency.userFinal(now, agentPlaying);
-      if (this.st === 'greeting') this.setState('live');
+      if (this.st === 'greeting') this.goLive();
     } else {
       this.armStaleSegment();
     }
@@ -761,6 +872,7 @@ export class RoundController {
     this.lastAgentSegment = e.segmentId;
     const split = this.latency.agentText(Date.now(), e.segmentId);
     if (split) this.events.emit('latency', split);
+    this.noteSpoken(t.panelistId, e);
     this.events.emit('transcript', {
       panelistId: t.panelistId,
       role: 'agent',
@@ -768,6 +880,37 @@ export class RoundController {
       text: e.text,
       final: false,
     });
+  }
+
+  /** Greeting over: the round is live, and a hand-over that waited for it runs now. */
+  private goLive(): void {
+    this.setState('live');
+    const h = this.pendingHandOver;
+    if (!h || this.st !== 'live') return;
+    this.pendingHandOver = null;
+    this.handOver(h.to, h.openingLine);
+  }
+
+  /**
+   * `voice.spoken`: the first words of a reply as they played, once per reply. Sent as soon as
+   * enough has played, so the server's actions for the reply land while it is being said.
+   */
+  private noteSpoken(panelistId: string, e: AgentText): void {
+    const key = `${panelistId}.${e.segmentId}`;
+    if (this.spokenSent.has(key)) return;
+    if (this.spokenPending && this.spokenPending.key !== key) this.flushSpoken();
+    this.spokenPending = { key, panelistId, text: e.text };
+    if (e.text.trim().length >= SPOKEN_MIN_CHARS) this.flushSpoken();
+  }
+
+  private flushSpoken(): void {
+    const p = this.spokenPending;
+    this.spokenPending = null;
+    if (!p) return;
+    const text = p.text.trim();
+    if (!text) return;
+    this.spokenSent.add(p.key);
+    this.socket?.send('voice.spoken', { panelist_id: p.panelistId, text_prefix: [...text].slice(0, SPOKEN_MAX_CHARS).join('') });
   }
 
   private onEnded(t: VoiceTransport, reason: string): void {
@@ -834,8 +977,20 @@ export class RoundController {
     const ongoing = c.inSegment || now - c.lastFinal < TURN_GAP_MS;
     if (ongoing && now - c.start > this.timing.interruptAfterSeconds * 1000) {
       c.sent = true;
+      // The voice service ignores typed turns while it hears the user talk: close the mic, send
+      // the marker, and open the mic again once the agent takes the turn (or shortly after).
+      this.panel?.muteAll(true);
       this.floorT()?.sendEvent(VOICE_MARKERS.longAnswer);
+      if (this.longAnswerUnmute) clearTimeout(this.longAnswerUnmute);
+      this.longAnswerUnmute = setTimeout(() => this.endLongAnswerMute(), LONG_ANSWER_MUTE_MS);
     }
+  }
+
+  private endLongAnswerMute(): void {
+    if (!this.longAnswerUnmute) return;
+    clearTimeout(this.longAnswerUnmute);
+    this.longAnswerUnmute = null;
+    if (this.st === 'live' || this.st === 'greeting') this.panel?.muteAll(this.userMuted);
   }
 
   // ---------- silence ----------
@@ -931,6 +1086,7 @@ export class RoundController {
     this.clearWatchdog();
     this.resetUserSpeech();
     this.deps.head?.stop();
+    this.flushSpoken();
     await this.panel?.stopAll();
     if (this.disposed) return;
     this.setState('scoring');
@@ -941,7 +1097,25 @@ export class RoundController {
     }
   }
 
-  private async showReport(): Promise<void> {
+  /** Scoring progress (pct 0 to 100), and the quick card a few seconds after the round. */
+  private onReportProgress(d: { stage: string; pct: number; card?: HeadsetCard }): void {
+    if (this.st !== 'scoring') return;
+    const ui = this.deps.xr.ui;
+    if (d.stage === 'card' && d.card && ui.showCard) {
+      this.cardShown = true;
+      ui.setStatus(null);
+      ui.showCard(d.card);
+      return;
+    }
+    // Once the card is up it stays; the summary replaces it when the report is ready.
+    if (!this.cardShown) ui.setStatus('Writing your scorecard', Math.max(0, Math.min(1, d.pct > 1 ? d.pct / 100 : d.pct)));
+  }
+
+  /**
+   * The report is ready (or the room closed while it was being written: `late`). When it cannot
+   * be read, the user still gets a card with a way on: the report page keeps trying.
+   */
+  private async showReport(late = false): Promise<void> {
     const res = this.res;
     if (!res || this.st === 'summary') return;
     try {
@@ -951,8 +1125,23 @@ export class RoundController {
       this.deps.xr.ui.showSummary(report);
       this.setState('summary');
     } catch (err) {
-      this.emitError(err as ApiError);
+      if (this.disposed) return;
+      if (!late) this.emitError(err as ApiError);
+      this.reportUnavailable();
     }
+  }
+
+  /** No report in the headset: keep the quick card, or show a short one, with See full report. */
+  private reportUnavailable(): void {
+    if (this.st !== 'scoring' || this.disposed) return;
+    const ui = this.deps.xr.ui;
+    if (!this.cardShown) {
+      ui.setStatus(null);
+      if (ui.showCard) ui.showCard({ one_line: 'Your scorecard is taking longer than usual. Open the full report to see it.', top_strength: null, top_fix: null });
+      else ui.setStatus('Your scorecard is taking longer than usual');
+      this.cardShown = true;
+    }
+    this.setState('summary');
   }
 
   // ---------- helpers ----------

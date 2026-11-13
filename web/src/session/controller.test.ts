@@ -3,6 +3,8 @@ import type {
   ClientMsgMap,
   ClientMsgType,
   CreateSessionReq,
+  CreateSessionRes,
+  HeadsetCard,
   Panelist,
   Report,
   ServerMsgMap,
@@ -13,6 +15,7 @@ import { ScriptedTransport, sessionRes } from '../voice/testkit';
 import { VoiceError, type TransportOptions } from '../voice/transport';
 import { RoundController, SessionError, type RoundControllerDeps, type RoundError } from './controller';
 import type { AvatarPort, HeadSamplerPort, SocketPort, UiAction, VisibilityPort, XRPort } from './ports';
+import { StageTimings } from './timings';
 
 class FakeSocket implements SocketPort {
   sent: { t: string; d: Record<string, unknown> }[] = [];
@@ -95,6 +98,8 @@ function harness(
     voice?: 'fish' | 'fake';
     panelMode?: 'swap' | 'joined';
     slow?: string[];
+    res?: Partial<CreateSessionRes>;
+    noTiming?: boolean;
   } = {},
 ) {
   const log: string[] = [];
@@ -102,6 +107,9 @@ function harness(
   const socket = new FakeSocket(log);
   const visibility = new FakeVisibility();
   let uiAction: ((a: UiAction) => void) | null = null;
+  let gesture: (() => void) | null = null;
+  const showCard = vi.fn();
+  const timings = new StageTimings();
   const avatars = new Map<string, AvatarPort & { modes: string[] }>();
   const avatarFor = (pid: string) => {
     let a = avatars.get(pid);
@@ -115,9 +123,14 @@ function harness(
   const xr: XRPort = {
     enter: vi.fn(async () => void log.push('xr.enter')),
     place: vi.fn(async () => void log.push('xr.place')),
+    onGesture: (cb) => {
+      gesture = cb;
+      return () => (gesture = null);
+    },
     ui: {
       setRoundState: vi.fn(),
       showSummary: vi.fn(),
+      showCard,
       setStatus: vi.fn(),
       onAction: (cb) => {
         uiAction = cb;
@@ -139,7 +152,7 @@ function harness(
   const api = {
     createSession: vi.fn(async (_req: CreateSessionReq) => {
       log.push('api.createSession');
-      return sessionRes({ panel_mode: opts.panelMode ?? 'swap' });
+      return sessionRes({ panel_mode: opts.panelMode ?? 'swap', ...opts.res });
     }),
     retry: vi.fn(async (_id: string) => {
       log.push('api.retry');
@@ -176,7 +189,8 @@ function harness(
     head,
     media,
     visibility,
-    timing: { silenceWaitSeconds: 20, interruptAfterSeconds: 10 },
+    timing: opts.noTiming ? undefined : { silenceWaitSeconds: 20, interruptAfterSeconds: 10 },
+    timings,
   };
   const ctl = new RoundController(deps);
   const req: CreateSessionReq = {
@@ -206,6 +220,9 @@ function harness(
     micTrack,
     board: () => boardCbs.forEach((cb) => cb()),
     ui: (a: UiAction) => uiAction?.(a),
+    gesture: () => gesture?.(),
+    showCard,
+    timings,
   };
 }
 
@@ -505,7 +522,7 @@ describe('RoundController', () => {
     expect(h.ctl.state).toBe('scoring');
 
     h.socket.serverSend('report.progress', { stage: 'scoring', pct: 40 });
-    expect(h.xr.ui.setStatus).toHaveBeenLastCalledWith(expect.any(String), 40);
+    expect(h.xr.ui.setStatus).toHaveBeenLastCalledWith(expect.any(String), 0.4); // the bar wants 0 to 1
     h.socket.serverSend('report.ready', { session_id: 'sess1' });
     await vi.waitFor(() => expect(h.xr.ui.showSummary).toHaveBeenCalledWith(REPORT));
     expect(states).toEqual(['ending', 'scoring', 'summary']);
@@ -699,7 +716,9 @@ describe('RoundController lifecycle races', () => {
     await h.ctl.dispose();
     placed();
     await starting;
-    expect(h.transports).toHaveLength(0);
+    // The voice was connecting during placement: it is stopped and never greets.
+    expect(h.transports.every((t) => t.stopped)).toBe(true);
+    expect(h.markers()).toEqual([]);
   });
 
   it('mic_busy_is_not_reported_as_denied', async () => {
@@ -850,8 +869,8 @@ describe('RoundController socket, audio and server signals', () => {
     expect(h.xr.ui.setStatus).toHaveBeenLastCalledWith('Tap to hear your interviewer');
 
     h.ui('hear');
-    expect(t.audioStarts).toBe(1);
-    expect(t.sentEvents).toEqual(['[event: start]', '[event: start]']); // nothing came back: resend
+    expect(t.audioStarts).toBe(2); // once with the placement touch, once with this tap
+    expect(t.sentEvents).toEqual(['[event: start]', '[event: start]']); // fake voice, nothing came back: resend
     expect(h.xr.ui.setStatus).toHaveBeenLastCalledWith(null);
 
     t.mode('thinking');
@@ -868,8 +887,8 @@ describe('RoundController socket, audio and server signals', () => {
     const t = await live(h);
     h.ui('mute');
     h.ui('unmute');
-    expect(t.audioStarts).toBe(2);
-    expect(h.media.resumeAudio).toHaveBeenCalledTimes(3);
+    expect(t.audioStarts).toBe(3); // the placement touch and both taps
+    expect(h.media.resumeAudio).toHaveBeenCalledTimes(4);
   });
 
   it('time_check_follows_time_check_due', async () => {
@@ -926,3 +945,240 @@ describe('RoundController socket, audio and server signals', () => {
   });
 });
 
+const CARD: HeadsetCard = {
+  one_line: 'Clear on scale, thin on failure cases.',
+  top_strength: { title: 'Sized the system first', evidence_id: 'c1', quote: 'about a hundred million a day', t_start_sec: 41 },
+  top_fix: { title: 'Say what happens when the cache is cold', evidence_id: 'c2', quote: 'it just reads through', t_start_sec: 188 },
+};
+
+/** Ends a live round and leaves the controller in `scoring`. */
+async function scoring(h: ReturnType<typeof harness>, t: ScriptedTransport) {
+  h.ui('end');
+  t.mode('speaking');
+  t.mode('listening');
+  await vi.waitFor(() => expect(h.ctl.state).toBe('scoring'));
+}
+
+describe('RoundController in the room', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-11-13T10:00:00Z'));
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('voices_connect_while_the_desk_is_placed_and_stay_muted_until_it_is_down', async () => {
+    const h = harness();
+    let placed!: () => void;
+    vi.mocked(h.xr.place).mockImplementationOnce(() => new Promise<void>((r) => (placed = r)));
+    const starting = h.ctl.start(h.req);
+    await vi.waitFor(() => expect(h.transports[0]?.started).toBe(true));
+    const t = h.transports[0]!;
+    expect(h.ctl.state).toBe('placing');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(t.muted).toBe(true); // nobody hears the user before the greeting
+    expect(t.sentEvents).toEqual([]);
+
+    placed();
+    await starting;
+    expect(t.muted).toBe(false);
+    expect(t.sentEvents).toEqual(['[event: start]']);
+    expect(t.audioStarts).toBe(1); // the placement touch retried playback
+    expect(h.transports).toHaveLength(1);
+  });
+
+  it('a_failed_placement_keeps_the_connected_voice_for_the_retry', async () => {
+    const h = harness();
+    vi.mocked(h.xr.place).mockRejectedValueOnce(new Error('session ended'));
+    await expect(h.ctl.start(h.req)).rejects.toMatchObject({ code: 'placement_failed' });
+    await h.ctl.enter();
+    expect(h.transports).toHaveLength(1);
+    expect(h.transports[0]!.sentEvents).toEqual(['[event: start]']);
+  });
+
+  it('stage_timings_cover_the_start', async () => {
+    const h = harness();
+    await h.ctl.start(h.req);
+    const t = h.floor();
+    await vi.advanceTimersByTimeAsync(900);
+    t.mode('speaking');
+    const s = h.timings.spans();
+    for (const k of ['session_ms', 'prepare_ms', 'xr_start_ms', 'placement_ms', 'voice_connect_ms', 'first_audio_ms', 'enter_to_first_word_ms'] as const) {
+      expect(s[k], k).not.toBeNull();
+    }
+    expect(s.first_audio_ms).toBeGreaterThanOrEqual(900);
+  });
+
+  it('the_session_timing_sets_the_long_answer_and_silence_waits', async () => {
+    const timing = { silence_wait_seconds: 7, interrupt_after_seconds: 5, target_minutes: 15, hard_stop_minutes: 20 };
+    const h = harness({ noTiming: true, res: { timing } });
+    const t = await live(h);
+    await vi.advanceTimersByTimeAsync(6_999);
+    expect(t.sentEvents).toEqual([]);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(t.sentEvents).toEqual(['[event: silence_check]']);
+  });
+
+  it('a_hand_over_during_the_greeting_waits_until_the_round_is_live', async () => {
+    const h = harness();
+    await h.ctl.start(h.req);
+    const t = h.floor();
+    h.socket.serverSend('panel.hand_over', { from: 'p1', to: 'p2', opening_line: 'Hi' });
+    await vi.advanceTimersByTimeAsync(10);
+    expect(h.api.joinPanelist).not.toHaveBeenCalled();
+    t.mode('speaking');
+    t.mode('listening'); // greeting done
+    await vi.waitFor(() => expect(h.api.joinPanelist).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(t.stopped).toBe(true));
+    expect(h.markers()).toEqual(['[event: start]']); // one greeting only
+  });
+
+  it('tap_to_hear_resends_the_start_to_a_real_voice_only_on_the_second_tap', async () => {
+    const h = harness({ voice: 'fish' });
+    await h.ctl.start(h.req);
+    const t = h.floor();
+    await vi.advanceTimersByTimeAsync(8_000);
+    h.ui('hear');
+    expect(t.sentEvents).toEqual(['[event: start]']); // the held greeting may still play
+    await vi.advanceTimersByTimeAsync(8_000);
+    expect(h.xr.ui.setStatus).toHaveBeenLastCalledWith('Tap to hear your interviewer');
+    h.ui('hear');
+    expect(t.sentEvents).toEqual(['[event: start]', '[event: start]']);
+  });
+
+  it('resume_before_the_greeting_played_offers_tap_to_hear_again', async () => {
+    const h = harness();
+    const errors = errorsOf(h);
+    await h.ctl.start(h.req);
+    h.ui('pause');
+    h.ui('resume');
+    await vi.advanceTimersByTimeAsync(8_000);
+    expect(errors.map((e) => (e as VoiceError).code)).toEqual(['audio_blocked']);
+  });
+
+  it('a_time_check_that_falls_due_while_paused_is_sent_on_resume', async () => {
+    const h = harness();
+    const t = await live(h);
+    h.ui('pause');
+    h.socket.serverSend('round.state', rs(0, 0, true));
+    expect(t.sentEvents).toEqual([]);
+    h.ui('resume');
+    expect(t.sentEvents).toEqual(['[event: resume]', '[event: time_check]']);
+  });
+
+  it('voice_spoken_goes_out_once_per_reply_with_the_first_words', async () => {
+    const h = harness();
+    const t = await live(h);
+    t.mode('speaking');
+    t.agent('a1', 'Good.', 'Good.');
+    expect(h.socket.of('voice.spoken')).toEqual([]); // too short to tell yet
+    t.agent('a1', ' Tell me how you would size the cache for this system and why.', 'Good. Tell me how you would size the cache for this system and why.');
+    t.agent('a1', ' Take your time.', 'Good. Tell me how you would size the cache for this system and why. Take your time.');
+    const sent = h.socket.of('voice.spoken');
+    expect(sent).toHaveLength(1);
+    expect(sent[0]!.panelist_id).toBe('p1');
+    expect(sent[0]!.text_prefix).toBe('Good. Tell me how you would size the cache for this system a');
+    expect(sent[0]!.text_prefix).toHaveLength(60);
+
+    // A short reply is reported when it ends.
+    t.mode('listening');
+    t.mode('speaking');
+    t.agent('a2', 'Go on.');
+    expect(h.socket.of('voice.spoken')).toHaveLength(1);
+    t.mode('listening');
+    expect(h.socket.of('voice.spoken').at(-1)).toEqual({ panelist_id: 'p1', text_prefix: 'Go on.' });
+    expect(h.socket.of('voice.spoken')).toHaveLength(2);
+  });
+
+  it('long_answer_closes_the_mic_around_the_marker', async () => {
+    const h = harness();
+    const t = await live(h);
+    t.user('s1', 'So', false);
+    for (let i = 0; i < 10; i++) {
+      vi.advanceTimersByTime(1_000);
+      t.user('s1', `So ${i}`, false);
+    }
+    vi.advanceTimersByTime(100);
+    const at = h.log.lastIndexOf('event:p1:[event: long_answer]');
+    expect(at).toBeGreaterThan(0);
+    expect(h.log[at - 1]).toBe('mute:p1');
+    expect(t.muted).toBe(true);
+    t.mode('thinking'); // the interviewer takes the turn
+    expect(t.muted).toBe(false);
+
+    // With no reaction the mic opens again by itself.
+    const h2 = harness();
+    const t2 = await live(h2);
+    t2.user('s1', 'So', false);
+    for (let i = 0; i < 10; i++) {
+      vi.advanceTimersByTime(1_000);
+      t2.user('s1', `So ${i}`, false);
+    }
+    vi.advanceTimersByTime(100);
+    expect(t2.muted).toBe(true);
+    vi.advanceTimersByTime(2_500);
+    expect(t2.muted).toBe(false);
+  });
+
+  it('a_pinch_retries_blocked_audio_at_most_once_a_second', async () => {
+    const h = harness();
+    const t = await live(h);
+    const before = t.audioStarts;
+    h.gesture();
+    h.gesture();
+    expect(t.audioStarts).toBe(before + 1);
+    await vi.advanceTimersByTimeAsync(1_000);
+    h.gesture();
+    expect(t.audioStarts).toBe(before + 2);
+  });
+
+  it('the_quick_card_shows_first_and_the_summary_replaces_it', async () => {
+    const h = harness();
+    const t = await live(h);
+    await scoring(h, t);
+    h.socket.serverSend('report.progress', { stage: 'metrics', pct: 10 });
+    expect(h.xr.ui.setStatus).toHaveBeenLastCalledWith('Writing your scorecard', 0.1);
+    h.socket.serverSend('report.progress', { stage: 'card', pct: 50, card: CARD });
+    expect(h.showCard).toHaveBeenCalledWith(CARD);
+    expect(h.xr.ui.setStatus).toHaveBeenLastCalledWith(null);
+    // Later progress never covers the card.
+    h.socket.serverSend('report.progress', { stage: 'scoring', pct: 80 });
+    expect(h.xr.ui.setStatus).toHaveBeenLastCalledWith(null);
+    expect(h.ctl.state).toBe('scoring');
+    h.socket.serverSend('report.ready', { session_id: 'sess1' });
+    await vi.waitFor(() => expect(h.xr.ui.showSummary).toHaveBeenCalledWith(REPORT));
+    expect(h.ctl.state).toBe('summary');
+  });
+
+  it('a_failed_report_still_leaves_a_card_with_a_way_on', async () => {
+    const h = harness();
+    const t = await live(h);
+    await scoring(h, t);
+    h.socket.serverSend('error', { code: 'report_failed', message: 'scoring gave up' });
+    expect(h.showCard).toHaveBeenCalledTimes(1);
+    expect(h.showCard.mock.calls[0]![0].top_fix).toBeNull();
+    expect(h.ctl.state).toBe('summary'); // Retry and See full report are live
+  });
+
+  it('the_room_closing_after_the_round_is_not_an_error', async () => {
+    const h = harness();
+    const t = await live(h);
+    await scoring(h, t);
+    const errors = errorsOf(h);
+    h.socket.serverSend('report.ready', { session_id: 'sess1' });
+    await vi.waitFor(() => expect(h.ctl.state).toBe('summary'));
+    h.socket.terminal(4409);
+    expect(errors).toEqual([]);
+    expect(h.xr.ui.setStatus).toHaveBeenLastCalledWith(null);
+
+    // Closed before report.ready arrived: read the report anyway.
+    const h2 = harness();
+    const t2 = await live(h2);
+    await scoring(h2, t2);
+    const errors2 = errorsOf(h2);
+    h2.socket.terminal(4409);
+    await vi.waitFor(() => expect(h2.xr.ui.showSummary).toHaveBeenCalledWith(REPORT));
+    expect(errors2).toEqual([]);
+  });
+});
