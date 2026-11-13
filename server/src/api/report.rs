@@ -186,12 +186,17 @@ async fn post_board_image(
     // Write next to the target under a name of its own, then rename, so a reader never sees half an image and
     // two uploads at once never write the same file.
     let tmp = full.with_extension(format!("{}.part", Uuid::new_v4().simple()));
-    tokio::fs::write(&tmp, &body)
-        .await
-        .map_err(|e| AppError::Internal(anyhow::anyhow!("writing {}: {e}", tmp.display())))?;
-    tokio::fs::rename(&tmp, &full)
-        .await
-        .map_err(|e| AppError::Internal(anyhow::anyhow!("renaming {}: {e}", full.display())))?;
+    let written = match tokio::fs::write(&tmp, &body).await {
+        Ok(()) => tokio::fs::rename(&tmp, &full)
+            .await
+            .map_err(|e| anyhow::anyhow!("renaming {}: {e}", full.display())),
+        Err(e) => Err(anyhow::anyhow!("writing {}: {e}", tmp.display())),
+    };
+    if let Err(err) = written {
+        // No half-written temporary file is left behind.
+        let _ = tokio::fs::remove_file(&tmp).await;
+        return Err(AppError::Internal(err));
+    }
     let mut tx = app.db.begin().await?;
     sqlx::query("delete from board_images where session_id = $1")
         .bind(id)
