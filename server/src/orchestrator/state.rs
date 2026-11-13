@@ -180,7 +180,9 @@ pub struct Turn {
 /// reply to it. One rule keeps every word in the history and the turn log once: the words already committed in
 /// earlier (frozen) messages are `base`; on each request the utterance minus `base` goes into the trailing message
 /// (`tail`), which is replaced while it is the last message in the history and frozen into `base` once anything
-/// follows it.
+/// follows it. The turn log keeps the same rule with its own frozen words (`line_frozen`, `line_tail`), because a
+/// line and a message stop being last at different times (a typed event follows only the line, a reply committed
+/// late follows only the message).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Unanswered {
     /// Words of this utterance in frozen user messages (nothing in them is rewritten again).
@@ -189,9 +191,13 @@ pub struct Unanswered {
     pub tail: String,
     /// That trailing message, while it is the last one in the history.
     pub tail_idx: Option<usize>,
-    /// The candidate line in the turn log that ends with `tail`, while it is the last line.
+    /// Words of this utterance in turn-log lines that are no longer rewritten.
+    pub line_frozen: String,
+    /// Words of this utterance in the candidate line at `line_idx`.
+    pub line_tail: String,
+    /// The candidate line in the turn log that ends with `line_tail`, while it is the last line.
     pub line_idx: Option<usize>,
-    /// That line's text before `tail`.
+    /// That line's text before `line_tail`.
     pub line_base: String,
     /// The app event already logged for this utterance (Fish repeats it on every request).
     pub event: Option<EventKind>,
@@ -204,6 +210,14 @@ impl Unanswered {
     /// Everything recorded for this utterance.
     pub fn text(&self) -> String {
         join_words(&self.base, &self.tail)
+    }
+
+    /// The candidate line can no longer be rewritten (something follows it): its words are frozen.
+    fn freeze_line(&mut self) {
+        self.line_frozen = join_words(&self.line_frozen, &self.line_tail);
+        self.line_tail.clear();
+        self.line_idx = None;
+        self.line_base.clear();
     }
 }
 
@@ -623,8 +637,7 @@ impl SessionState {
             u.tail_idx = None;
         }
         if u.line_idx.is_some() && u.line_idx != self.turns.len().checked_sub(1) {
-            u.line_idx = None;
-            u.line_base.clear();
+            u.freeze_line();
         }
 
         let words = after_common_prefix(&u.base, &speech);
@@ -669,25 +682,26 @@ impl SessionState {
             }
         }
 
-        // The turn log follows the same rule.
-        if !words.trim().is_empty() {
+        // The turn log follows the same rule, measured against its own frozen words.
+        let line_words = after_common_prefix(&u.line_frozen, &speech);
+        if !line_words.trim().is_empty() {
             match u.line_idx.and_then(|i| self.turns.get_mut(i)) {
                 Some(line) if line.speaker == "candidate" => {
-                    line.text = join_words(&u.line_base, &words);
+                    line.text = join_words(&u.line_base, &line_words);
                 }
                 _ => {
-                    let (idx, line_base) = self.push_candidate_words(&words, at_ms);
+                    let (idx, line_base) = self.push_candidate_words(&line_words, at_ms);
                     u.line_idx = Some(idx);
                     u.line_base = line_base;
                 }
             }
+            u.line_tail = line_words;
         }
         if let Some(k) = new_event {
             self.push_app_turn(Some(k), at_ms);
             u.event = Some(k);
             // The app line follows the candidate line, so it can no longer grow in place.
-            u.line_idx = None;
-            u.line_base.clear();
+            u.freeze_line();
         }
         self.unanswered.insert(panelist, u);
     }
@@ -929,8 +943,7 @@ impl SessionState {
             u.base = u.text();
             u.tail.clear();
             u.tail_idx = None;
-            u.line_idx = None;
-            u.line_base.clear();
+            u.freeze_line();
         }
 
         // The note and the reply follow the user message they answer. When another reply was recorded after that
