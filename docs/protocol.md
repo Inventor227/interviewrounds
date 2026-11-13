@@ -35,21 +35,27 @@ JSON; cookie `ir_id` identifies the device/user; all under same origin.
 
 ## WebSocket
 
-`/ws/session/{id}`: envelope `{"t": type, "seq": n, "d": {...}}`, server acks with `seq`; ping every 20 s.
+`/ws/session/{id}`: envelope `{"t": type, "seq": n, "d": {...}}`, server acks with an `ack` field (rules below); ping every 20 s.
 
 Sequencing and acks:
 
-- `hello` and `ping` frames use `seq: 0`. Every other client frame carries its own `seq`, increasing from 1 for the
-  life of the session (it does not restart on reconnect).
-- Any server frame may carry `ack: n`: the highest client `seq` the server has processed. The client drops every
-  queued frame with `seq <= n`.
+- `hello` and `ping` frames use `seq: 0`. Every other client frame carries its own `seq`, increasing from 1.
+- Client `seq` and the server's record of processed client frames are kept **per `client_token`**, not per session. A
+  reconnect with the same token continues the count. `POST /api/sessions/{id}/resume` issues a new `client_token`, and
+  a reloaded page opens a new socket under it that counts from 1 again; the server starts a fresh record for that token,
+  so those frames are never mistaken for duplicates.
+- Any server frame may carry `ack: n`: the highest client `seq` the server has processed for this connection's
+  `client_token`. The client drops every queued frame with `seq <= n`.
 - Server frames with `seq > 0` are numbered from 1 per session and buffered on the server. `hello {client_token,
   last_seq}` gives the highest server `seq` the client has seen; the server replays every buffered frame after it.
-  Server frames with `seq: 0` (such as `pong`) are not buffered or replayed.
+  Server frames with `seq: 0` (such as `pong`) are not buffered or replayed. Server `seq` stays per session across
+  tokens: a client that kept its state sends the highest `seq` it saw; a reloaded page has none, sends `last_seq: 0`, and
+  gets the whole buffer replayed, which is intended (it rebuilds its view from the replay).
 - After a reconnect the client sends `hello` first, then replays its unacked frames with their original `seq` (it keeps
   at most 1000, dropping the oldest).
-- Duplicates are ignored by `seq`: the server skips a client frame whose `seq` it already processed, and the client
-  skips a server frame whose `seq` is not above the highest it has seen.
+- Duplicates are ignored by `seq`: the server skips a client frame whose `seq` it already processed for that
+  `client_token`, and the client skips a server frame with `seq > 0` whose `seq` is not above the highest it has seen
+  (frames with `seq: 0` are never treated as duplicates).
 
 - Client → server: `hello {client_token, last_seq}` (first frame), `board.op {op_id, rev_base, src, op, args, at_ms}`,
   `transcript.mark {segment_id, panelist_id, first_at_ms, final_at_ms, text}`, `head.samples {samples:[{t_ms, yaw, pitch,
