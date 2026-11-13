@@ -30,6 +30,7 @@ import { createHeadPort } from './headPort';
 import { People, type AvatarLike } from './people';
 import type { HeadSamplerPort, SocketPort, UiAction, XRPort } from './ports';
 import { clearLiveRoom, setLiveRoom, type LiveRoom } from './room';
+import { createRoundClock, itemCentre } from './roundClock';
 import { StageTimings } from './timings';
 
 /** Longest the mic tap waits for the avatars; slower ones appear when they are loaded. */
@@ -135,9 +136,8 @@ export function createRoundRuntime({ preview }: RuntimeOptions): RoundController
 
   // ---------- the room socket: board sync and pointing ----------
 
-  // Round time as the server counts it (no pauses), carried forward locally between snapshots.
-  let clock = { elapsed: 0, at: 0, running: false };
-  const roundClock = () => clock.elapsed + (clock.running ? (performance.now() - clock.at) / 1000 : 0);
+  const clock = createRoundClock();
+  const roundClock = () => clock.now_s();
 
   /** Binds the board, the cues and the pointing to the current room socket (again when the session was remade). */
   const wireSocket = () => {
@@ -158,15 +158,10 @@ export function createRoundRuntime({ preview }: RuntimeOptions): RoundController
       socketCleanups.push(() => cu.dispose());
     }
     socketCleanups.push(
-      so.on('round.state', (d) => {
-        clock = { elapsed: d.elapsed_s, at: performance.now(), running: d.status === 'live' };
-      }),
+      so.on('round.state', (d) => clock.sync(d.elapsed_s, d.status)),
       so.on('avatar.point_at', (d) => {
-        const item = store?.board.items.find((i) => i.id === d.item_id);
-        if (!item || !sheetToWorld || !('x' in item)) return;
-        const w = 'w' in item && typeof item.w === 'number' ? item.w : 0;
-        const h = 'h' in item && typeof item.h === 'number' ? item.h : 0;
-        people?.pointAt(d.panelist_id, sheetToWorld(item.x + w / 2, item.y + h / 2, POINT_ABOVE_CM));
+        const c = itemCentre(store?.board.items.find((i) => i.id === d.item_id));
+        if (c && sheetToWorld) people?.pointAt(d.panelist_id, sheetToWorld(c.x, c.y, POINT_ABOVE_CM));
       }),
       // The round is over: the sheet goes to the server as a picture for the report, while the
       // scorecard is written. Nothing waits for it.
