@@ -206,6 +206,15 @@ pub fn render_system(
         ),
         ("interrupt_after_seconds", interrupt.to_string()),
     ]);
+    // Names, roles, cares, objections, notes and the title are typed by the user: none of them may carry a
+    // director-only marker. The phase script is ours and keeps its markers.
+    let vars: HashMap<&str, String> = vars
+        .into_iter()
+        .map(|(k, v)| match k {
+            "phases_script" => (k, v),
+            _ => (k, super::no_markers(&v)),
+        })
+        .collect();
 
     let is_chair = !meeting.user_chairs && meeting.chair.as_deref() == Some(a.name.as_str());
     let mut parts = vec![base];

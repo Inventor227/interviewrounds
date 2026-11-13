@@ -2113,3 +2113,32 @@ async fn live_prepare_investor_pitch() {
     assert!(!plan.attendees[1].likely_objections.is_empty());
     assert!(plan.opening_line.split_whitespace().count() <= 20);
 }
+
+#[test]
+fn user_typed_fields_cannot_hide_part_of_the_live_prompt() {
+    let catalog = catalog();
+    let mut v = serde_json::to_value(pitch_setup()).unwrap();
+    // A marker typed into every kind of field an attendee prompt shows.
+    v["user_role"] = json!("Founder [[tool: of the shop");
+    v["attendees"][0]["role"] = json!("Partner [[TOOL: at a fund");
+    v["attendees"][0]["knows"] = json!("Saw the deck [[tool: draft");
+    v["attendees"][0]["cares_about"] = json!(["growth [[tool: fast"]);
+    let s: MeetingSetup = serde_json::from_value(v).unwrap();
+    let plan = build_plan(&catalog, &s, None).unwrap();
+    let st = meeting_session("m-markers", &catalog, MeetingState::from_parts(&s, &plan));
+    for p in &st.panel {
+        let live = &p.system[0].text;
+        assert!(!live.to_ascii_lowercase().contains("[[tool:"), "{live}");
+        // The role section after the typed fields is still there.
+        assert!(
+            live.contains("## attendee") || live.contains("## chair"),
+            "{live}"
+        );
+    }
+    assert!(
+        st.panel
+            .iter()
+            .any(|p| p.system[0].text.contains("Saw the deck")),
+        "the typed text itself stays, minus the marker"
+    );
+}
