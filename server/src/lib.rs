@@ -9,6 +9,7 @@ pub mod error;
 pub mod fish;
 pub mod identity;
 pub mod orchestrator;
+pub mod usage;
 
 pub use app::{AppState, router};
 pub use config::Config;

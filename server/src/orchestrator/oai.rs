@@ -523,6 +523,7 @@ fn turn_stream(
             output_tokens = usage.output_tokens,
             "live turn"
         );
+        crate::usage::record_claude_turn(&app.db, &app.config, &session_id, &req.model, &usage);
         yield Ok(chunks.finish(&usage));
         yield Ok(Chunks::done());
     }
