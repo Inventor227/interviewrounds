@@ -99,7 +99,7 @@ fn enum_str<T: serde::Serialize>(v: &T) -> String {
         .unwrap_or_default()
 }
 
-fn dev_key_ok(app: &AppState, headers: &HeaderMap) -> bool {
+pub(crate) fn dev_key_ok(app: &AppState, headers: &HeaderMap) -> bool {
     headers
         .get(DEV_KEY_HEADER)
         .and_then(|v| v.to_str().ok())
@@ -471,9 +471,56 @@ async fn create_inner(
         st.brief = crate::orchestrator::initial_brief(&st.question);
     }
     st.paused_since = Some(now);
+    launch(
+        app,
+        identity,
+        Launch {
+            session_id,
+            st,
+            now,
+            length: length_str(req.length),
+            cap_length: req.length,
+            parent: req.parent_session_id,
+            meeting_plan_id: plan.as_ref().map(|(id, _)| *id),
+            retry: None,
+        },
+    )
+    .await
+}
 
+/// A built session, ready to be stored and voiced (from `create` or `retry`).
+struct Launch {
+    session_id: Uuid,
+    st: SessionState,
+    now: Instant,
+    /// `sessions.length`: `short`, `full` or `retry`.
+    length: &'static str,
+    /// What the caps count it as (a retry counts as a quick round).
+    cap_length: Length,
+    parent: Option<Uuid>,
+    meeting_plan_id: Option<Uuid>,
+    /// `sessions.retry`: what a retry re-asks.
+    retry: Option<Value>,
+}
+
+/// Checks the caps, stores the session, mints its voices and puts it live in memory: `CreateSessionRes`.
+async fn launch(
+    app: &AppState,
+    identity: &Identity,
+    l: Launch,
+) -> AppResult<Result<Value, usage::CapError>> {
+    let Launch {
+        session_id,
+        st,
+        now,
+        length,
+        cap_length,
+        parent,
+        meeting_plan_id,
+        retry,
+    } = l;
     let mode = app.config.panel_mode;
-    let fish = req.voice == VoiceKind::Fish;
+    let fish = st.settings.voice == VoiceKind::Fish;
     let reservation = if fish {
         usage::fish_reservation(&st.round, st.panel.len(), mode, &app.config)
     } else {
@@ -488,7 +535,7 @@ async fn create_inner(
         .execute(&mut *tx)
         .await?;
     let start = StartRequest {
-        length: req.length,
+        length: cap_length,
         fish,
         reservation_usd: reservation,
     };
@@ -507,24 +554,25 @@ async fn create_inner(
     .await?;
     sqlx::query(
         "insert into sessions (id, identity_id, parent_session_id, mode, round_id, meeting_plan_id, length, \
-           level, style, voice, panel_mode, settings, panel, status, fish_reserved_usd, question_id) \
+           level, style, voice, panel_mode, settings, panel, status, fish_reserved_usd, question_id, retry) \
          values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, \
-           coalesce((select data from settings where identity_id = $2), '{}'::jsonb), $12, 'created', $13, $14)",
+           coalesce((select data from settings where identity_id = $2), '{}'::jsonb), $12, 'created', $13, $14, $15)",
     )
     .bind(session_id)
     .bind(identity.id)
-    .bind(req.parent_session_id)
-    .bind(enum_str(&req.mode))
+    .bind(parent)
+    .bind(enum_str(&st.mode))
     .bind(&st.round.id)
-    .bind(plan.as_ref().map(|(id, _)| *id))
-    .bind(length_str(req.length))
-    .bind(req.level.as_str())
-    .bind(req.style.as_str())
-    .bind(enum_str(&req.voice))
+    .bind(meeting_plan_id)
+    .bind(length)
+    .bind(st.settings.level.as_str())
+    .bind(st.settings.style.as_str())
+    .bind(enum_str(&st.settings.voice))
     .bind(mode.as_str())
     .bind(json!(panel_entries(&st)))
     .bind(reservation)
     .bind(&question_id)
+    .bind(&retry)
     .execute(&mut *tx)
     .await?;
     let (token, _, _) = persist::issue_token(&mut tx, session_id, false).await?;
@@ -566,12 +614,128 @@ async fn create_inner(
 
     let limits = current_limits(app, identity).await?;
     let res = create_res(&st, &token, &voices, mode, &limits);
+    let round_id = st.round.id.clone();
+    let voice = enum_str(&st.settings.voice);
     let handle = app.registry.insert(st);
     let hub = ws::attach(app, session_id, handle.clone()).await;
     remember_voices(&hub, &voices);
     prewarm(app, &hub, &*handle.lock().await, session_id);
-    tracing::info!(session_id = %session_id, round_id = %round.id, voice = %enum_str(&req.voice), "session created");
+    tracing::info!(session_id = %session_id, round_id = %round_id, voice = %voice, length, "session created");
     Ok(Ok(res))
+}
+
+/// `POST /api/sessions/{id}/retry` -> `CreateSessionRes`: a two minute retry of the weakest moment of the caller's
+/// scored round (`crate::retry`). 409 `no_retry` when the report offers none; caps as for a quick round.
+pub async fn retry(
+    State(app): State<AppState>,
+    Extension(identity): Extension<Identity>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Response {
+    match retry_inner(&app, &identity, &headers, &id).await {
+        Ok(Ok(v)) => Json(v).into_response(),
+        Ok(Err(refusal)) => refusal,
+        Err(err) => err.into_response(),
+    }
+}
+
+async fn retry_inner(
+    app: &AppState,
+    identity: &Identity,
+    headers: &HeaderMap,
+    id: &str,
+) -> AppResult<Result<Value, Response>> {
+    let parent = owned(app, identity, id).await?;
+    let no_retry = || {
+        Ok(Err(refuse(
+            StatusCode::CONFLICT,
+            "no_retry",
+            "This report has no answer to retry.",
+        )))
+    };
+    if parent.status != "scored" || parent.length == "retry" || parent.mode != "interview" {
+        return no_retry();
+    }
+    let report: Option<Value> =
+        sqlx::query_scalar("select report from reports where session_id = $1")
+            .bind(parent.id)
+            .fetch_optional(&app.db)
+            .await?;
+    let (Some(report), Some(base)) = (
+        report,
+        parent
+            .round_id
+            .as_deref()
+            .and_then(|r| app.catalog.round(r))
+            .cloned(),
+    ) else {
+        return no_retry();
+    };
+    let lines = crate::retry::lines(&app.db, parent.id).await?;
+    let Some(spec) =
+        crate::retry::spec_from(&report, &lines, &parent.panel_entries(), &base.panel.lead)
+    else {
+        return no_retry();
+    };
+    let voice: VoiceKind = serde_json::from_value(json!(parent.voice))
+        .map_err(|_| anyhow::anyhow!("unexpected voice {:?}", parent.voice))?;
+    if voice == VoiceKind::Fake && !dev_key_ok(app, headers) {
+        return Ok(Err(refuse(
+            StatusCode::FORBIDDEN,
+            "dev_only",
+            "The text voice is for development only.",
+        )));
+    }
+    let settings = SessionSettings {
+        level: serde_json::from_value::<Level>(json!(parent.level))
+            .map_err(|_| anyhow::anyhow!("unexpected level {:?}", parent.level))?,
+        style: serde_json::from_value::<Style>(json!(parent.style))
+            .map_err(|_| anyhow::anyhow!("unexpected style {:?}", parent.style))?,
+        voice,
+    };
+
+    let session_id = Uuid::new_v4();
+    let now = Instant::now();
+    let mut st = crate::retry::state(
+        NewSession {
+            id: session_id.to_string(),
+            identity_id: identity.id.to_string(),
+            mode: Mode::Interview,
+            round_id: base.id.clone(),
+            settings,
+            panel: vec![PanelSeat {
+                panelist_id: "p1".into(),
+                persona_id: spec.persona_id.clone(),
+            }],
+            question_id: parent.question_id.clone(),
+            meeting: None,
+        },
+        &spec,
+        &base,
+        &app.catalog,
+        LiveSettings::from_config(&app.config),
+        now,
+    )
+    .map_err(|e| AppError::Internal(e.context("building a retry")))?;
+    st.status = SessionStatus::Created;
+    crate::retry::prime(&mut st, &spec);
+    st.paused_since = Some(now);
+    let res = launch(
+        app,
+        identity,
+        Launch {
+            session_id,
+            st,
+            now,
+            length: "retry",
+            cap_length: Length::Short,
+            parent: Some(parent.id),
+            meeting_plan_id: None,
+            retry: Some(json!(spec)),
+        },
+    )
+    .await?;
+    Ok(res.map_err(IntoResponse::into_response))
 }
 
 /// The caller's own session (others look like they do not exist).
@@ -845,7 +1009,6 @@ pub async fn join(
             st.commit_turn(
                 TurnCommit {
                     draft,
-                    extra: Vec::new(),
                     reply: vec![ContentBlock::text(line.clone())],
                     spoken,
                     tool_calls: Vec::new(),
@@ -892,11 +1055,15 @@ pub async fn status(
     Path(id): Path<String>,
 ) -> AppResult<Json<Value>> {
     let row = owned(&app, &identity, &id).await?;
-    let report_ready: bool =
+    // A retry has no report of its own: its report (the parent's, with the retry on it) is ready once scored.
+    let report_ready: bool = if row.length == "retry" {
+        row.status == "scored"
+    } else {
         sqlx::query_scalar("select exists (select 1 from reports where session_id = $1)")
             .bind(row.id)
             .fetch_one(&app.db)
-            .await?;
+            .await?
+    };
     Ok(Json(
         json!({ "status": row.status, "report_ready": report_ready }),
     ))

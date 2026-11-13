@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, bail};
 use futures::StreamExt;
-use ir_server::claude::{ClaudeClient, ContentBlock, MessagesRequest, StreamEvent, SystemBlock};
+use ir_server::claude::{ClaudeClient, ContentBlock, MessagesRequest, StreamEvent, ToolChoice};
 use ir_server::content::Catalog;
 use ir_server::orchestrator::director;
 use ir_server::orchestrator::markers::{EventKind, UserInput};
@@ -265,7 +265,6 @@ fn commit_text(state: &mut SessionState, input: &UserInput, reply: &str) {
     state.commit_turn(
         TurnCommit {
             draft,
-            extra: Vec::new(),
             reply: vec![ContentBlock::text(reply)],
             spoken: reply.to_string(),
             tool_calls: Vec::new(),
@@ -282,16 +281,27 @@ fn trimmed(system: &str) -> String {
     format!("{}\n\n{}", &system[..cut_from], &system[script_at..])
 }
 
+/// The app's live request is speech only (no tools, the speak-only note last). The tools variants put the tools
+/// back, in place of the note, to measure what carrying them would cost in time to first token.
 fn shape_request(req: &mut MessagesRequest, v: &Variant) {
-    match v.tools {
-        Tools::Strict => {}
-        Tools::Loose => req.tools.iter_mut().for_each(|t| t.strict = None),
-        Tools::None => {
-            req.tools.clear();
-            req.tool_choice = None;
-            req.system
-                .push(SystemBlock::text(director::SPEAK_ONLY_NOTE));
+    let with_tools = |req: &mut MessagesRequest, strict: bool| {
+        if req
+            .system
+            .last()
+            .is_some_and(|b| b.text == director::SPEAK_ONLY_NOTE)
+        {
+            req.system.pop();
         }
+        req.tools = tools::definitions();
+        if !strict {
+            req.tools.iter_mut().for_each(|t| t.strict = None);
+        }
+        req.tool_choice = Some(ToolChoice::Auto);
+    };
+    match v.tools {
+        Tools::Strict => with_tools(req, true),
+        Tools::Loose => with_tools(req, false),
+        Tools::None => {}
     }
     if v.prompt == Prompt::Trimmed
         && let Some(first) = req.system.first_mut()

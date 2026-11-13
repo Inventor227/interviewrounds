@@ -39,13 +39,36 @@ JSON; cookie `ir_id` identifies the device/user; all under same origin. A new gu
 - `POST /api/sessions/{id}/end` `{reason:"completed"|"user_ended"|"time_limit"|"disconnected"|"headset_removed"}` → 202. Ends
   the round at once with this reason (also during the goodbye after `ui.event {kind: "end"}`).
 - `GET /api/sessions/{id}` → `{status:"created"|"live"|"paused"|"scoring"|"scored"|"failed"|"abandoned", report_ready}`
-- `GET /api/sessions/{id}/report` → `Report` (404 until ready, and for a session that is not the caller's)
+- `GET /api/sessions/{id}/report` → `Report` (404 until ready, and for a session that is not the caller's). Its
+  `share` block is the session's live public link: `{public_slug, include_quotes}` (`include_quotes` is the link's
+  `include_transcript`), `public_slug: null` when there is none. A retry session has no report of its own: it answers
+  its parent's report (with the retry's entry in `weakest_moment.retries`) once the retry is scored, and 404 before.
+  `GET /api/sessions/{id}` gives a retry `report_ready: true` once it is `scored`. The web app shows a retry's report
+  at its parent's address (`/report/{parent}`).
 - `POST /api/sessions/{id}/report` → 202 `{status:"scoring"}`: score a `failed` session again ("Try again"). Scoring
   makes at most 2 attempts per session; this gives 2 fresh ones. At most 2 per session per day (429
   `rescore_limit`); 409 when the session is scored or has not ended; 202 no-op when already `scoring`.
 - `POST /api/sessions/{id}/board-image` (body `image/png`, ≤ 2 MB, ≤ 4096 px a side) → 204. One image per session:
   a new one replaces the old. Only while the session is `live`, `paused` or `scoring` (409 after).
-- `POST /api/sessions/{id}/retry` → `CreateSessionRes` (2-minute re-ask of the weakest moment)
+- `POST /api/sessions/{id}/retry` (no body) → `CreateSessionRes`: a 2-minute re-ask of the weakest moment of the
+  caller's scored interview round. Only when its report has `weakest_moment.retry.prompt`; else `409 {code:
+  "no_retry"}` (also for a meeting, a round not yet `scored`, or a retry); 404 for a session that is not the
+  caller's. The retry is a new session with `parent_session_id` = the round, stored with length `retry`, on the same
+  round id, level, style and voice (`voice: "fake"` needs `X-Dev-Key` as on create). Its `round` is a `RoundPublic`
+  of the parent round with `length: "short"`, `target_minutes: 2`, `hands: "none"`, `board_kit: null`, two phases
+  (`retry` 1.5 min, then `close` 0.5 min; the time check at 90 s) and one panelist: the persona who asked the weakest
+  question. `timing`: `silence_wait_seconds` at most 20 (then scaled by level), `interrupt_after_seconds` at most 90,
+  `hard_stop_minutes` 2.5. The opening line on `[event: start]` is `retry.prompt` (its first two sentences), spoken
+  word for word with no model call; the brief card holds the same line. At 120 s the server moves to the `close`
+  phase, `round.state` asks for a time check, and the next app event (`[event: time_check]`, or any other marker)
+  gets the fixed closing line "Thanks, that's time. Your before and after is on your report." word for word with no
+  model call; then `round.ending` and the round ends (`completed`) after the usual grace. Nothing waits on the
+  model's tools; the 150 s hard stop is only a backstop. Caps and guest limits are those of a quick round (a retry
+  counts as one). Scoring is one `FAST_MODEL` call that scores the new answer 1 to 4 on the parent's weakest-moment
+  competency, then appends `{session_id, at, before_score, after_score, note}` to the parent report's
+  `weakest_moment.retries` (once per retry); the socket gets `report.progress` and `report.ready` as for a round (no
+  headset card). At most 2 calls per retry, each ledgered as a `retry_scoring` row; `POST
+  /api/sessions/{id}/report` on a failed retry gives 2 fresh ones, as for rounds.
 - `GET /api/me` → `{identity:{kind:"guest"|"user", name?, email?}, sign_in_available, settings, onboarding_done,
   streak:{current, best, today_done}, daily:{round_id, title}|null, resumable:{session_id, round_title, expires_at}|null,
   limits, entitlements}`. `resumable` is a dropped live session the user can still resume (`POST /api/sessions/{id}/resume`)
@@ -55,11 +78,25 @@ JSON; cookie `ir_id` identifies the device/user; all under same origin. A new gu
 - `GET /api/me/skills?role=` → `{competencies:[{id, name, points:[{session_id, at, score}]}]}`
 - `PUT /api/me/settings` `Settings`; `POST /api/me/onboarding-done`; `DELETE /api/me`
 - `POST /api/meetings/prepare` `MeetingSetup` → `{meeting_plan_id, plan:MeetingPlan}`
-- `POST /api/shares` `{session_id, include_transcript}` → `{slug, url}`; `DELETE /api/shares/{slug}`
-  `POST /api/shares` is an upsert per session: a session has at most one live public link, and a new POST for a
-  session that already has one replaces it (the old slug stops working). The web app still deletes the old slug
-  before posting a change, so either side alone keeps a single live link.
-- `GET /s/{slug}` server-rendered scorecard; `GET /auth/google/start`, `/auth/google/callback`, `POST /auth/logout`
+- `POST /api/shares` `{session_id, include_transcript}` → `{slug, url}`; `DELETE /api/shares/{slug}` → 204
+  Only the owner of a `scored` session with a report (else 404 for a session that is not the caller's, 409
+  `{code: "not_scored"}` before the report). `slug` is 10 random URL-safe characters (`A-Z a-z 0-9 - _`), never
+  derived from ids; `url` is `{PUBLIC_BASE_URL}/s/{slug}` (`PUBLIC_BASE_URL` defaults to `APP_ORIGIN`). DELETE sets
+  the link's `revoked_at` (idempotent: 204 again for a revoked link) and answers 404 for a link that is not the
+  caller's.
+  `POST /api/shares` is an upsert per session: a session has at most one live public link. A POST with the same
+  `include_transcript` as the live link returns that link; one with a different value revokes it and makes a new one.
+  The web app still deletes the old slug before posting a change, so either side alone keeps a single live link.
+  With the `X-Dev-Key` header, DELETE takes down any link (operator clean-up after smoke runs).
+- `GET /s/{slug}` server-rendered scorecard, public (no cookie needed), no script: round title, date, verdict and
+  confidence (meetings: the outcome), competency bars (score of 4 and a one-line rationale), top 3 strengths, top 3
+  things to work on, the weakest moment's question, next drills, and the transcript (with evidence quotes) only when
+  the link has `include_transcript`. Never a name or an id. Open Graph and Twitter tags (title "Interview Rounds
+  scorecard", the headline summary as description), `<meta name="robots" content="noindex">`, `Cache-Control:
+  private, max-age=60`. A revoked link answers `410` and an unknown one `404`, both as small pages in the same style
+  (`Cache-Control: no-store`). Every report value is escaped.
+- `GET /auth/google/start`, `/auth/google/callback`, `POST /auth/logout`: not mounted in this build (no sign-in:
+  everyone is a guest on their device, `sign_in_available` is always `false`).
 - `POST /v1/chat/completions` Fish custom LLM (bearer `FISH_LLM_SECRET`, or the session `client_token` when the session's
   voice is `fake`); OpenAI chat format in, SSE `chat.completion.chunk` out. Turns are served only while the round is `live`
   (or ending, for the goodbye): else `409 {code: "session_not_live"}`. With the `client_token` a turn is at most 2,000

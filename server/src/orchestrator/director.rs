@@ -86,12 +86,10 @@ pub fn build_request(
         .last_mut()
         .filter(|m| m.role != Role::System)
         .and_then(|m| {
-            m.content.iter_mut().rev().find(|b| {
-                matches!(
-                    b,
-                    ContentBlock::Text { .. } | ContentBlock::ToolResult { .. }
-                )
-            })
+            m.content
+                .iter_mut()
+                .rev()
+                .find(|b| matches!(b, ContentBlock::Text { .. }))
         })
     {
         block.set_cache_control(Some(CacheControl::ephemeral()));

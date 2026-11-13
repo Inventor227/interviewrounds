@@ -6,7 +6,6 @@ import { MeetingSetup } from './pages/MeetingSetup';
 import { NotSupported } from './pages/NotSupported';
 import { PickRole } from './pages/PickRole';
 import { PickRound } from './pages/PickRound';
-import { Pricing } from './pages/Pricing';
 import { Report } from './pages/Report';
 import { Resume } from './pages/Resume';
 import { Session } from './pages/Session';
@@ -15,6 +14,7 @@ import { Start } from './pages/Start';
 
 // App shell: the top bar and the routes. Pages live in ./pages. Keep the paths and the data-test
 // ids stable.
+// This build has nothing to buy, so the plans page (pages/Pricing.tsx) is neither linked nor routed.
 
 /**
  * Quest Browser shows 2D pages large and bright in the headset, so it gets a dimmed palette
@@ -38,7 +38,6 @@ export const ROUTES = {
   report: '/report/:id',
   history: '/history',
   settings: '/settings',
-  pricing: '/pricing',
   notSupported: '/not-supported',
   resume: '/resume/:id',
   devAvatar: '/dev/avatar',
@@ -97,7 +96,6 @@ function TopBar() {
       <nav class="nav" aria-label="Main">
         {link('/history', 'History')}
         {link('/settings', 'Settings')}
-        {link('/pricing', 'Plans')}
       </nav>
     </header>
   );
@@ -119,7 +117,6 @@ export function App() {
             <Route path={ROUTES.report} component={Report} />
             <Route path={ROUTES.history} component={History} />
             <Route path={ROUTES.settings} component={Settings} />
-            <Route path={ROUTES.pricing} component={Pricing} />
             <Route path={ROUTES.notSupported} component={NotSupported} />
             <Route path={ROUTES.resume} component={Resume} />
             <Route path={ROUTES.diag} component={Diag} />

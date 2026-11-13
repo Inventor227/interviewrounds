@@ -116,7 +116,7 @@ pub struct OrchestratorOptions {
     pub idle_timeout: Duration,
     /// How long a turn waits for the previous turn of the same session to finish.
     pub turn_wait: Duration,
-    /// The whole turn, from request start: every call, continuation and retry shares it (Fish allows 10 s).
+    /// The whole turn, from request start: the call and its one retry share it (Fish allows 10 s).
     pub turn_deadline: Duration,
     /// Spoken when no model produced anything, so Fish never gets an empty reply.
     pub hold_line: String,

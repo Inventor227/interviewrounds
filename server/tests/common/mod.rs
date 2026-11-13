@@ -3,6 +3,7 @@
 #![allow(dead_code)]
 
 pub mod live;
+pub mod scored;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};

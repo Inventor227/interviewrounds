@@ -1128,8 +1128,9 @@ async fn card_is_sent_once_per_run_and_kept_across_attempts() {
     let paid = err
         .downcast_ref::<report::UsageOnError>()
         .expect("usage travels with the error");
-    assert_eq!(paid.0.len(), 1);
-    assert_eq!(paid.0[0].kind, "scoring_card");
+    // The main call answered (bad JSON, but paid for) and the card call ran: both travel with the error.
+    let kinds: Vec<&str> = paid.0.iter().map(|c| c.kind).collect();
+    assert_eq!(kinds, ["scoring", "scoring_card"]);
 
     let second = report::score_with_card(&senv, &input, &slot).await.unwrap();
     assert_eq!(llm.card_calls(), 1, "one card call per run");
@@ -1722,7 +1723,7 @@ async fn score_session_stores_report_and_serves_it() {
             .await
             .unwrap();
     assert_eq!(model.as_deref(), Some("claude-opus-5-5"));
-    // One attempt row, filled with the main call's usage (the card call failed: no usage, no row).
+    // The attempt row with the main call's usage, plus the card call's estimate.
     let rows: Vec<(String, Option<i32>)> = sqlx::query_as(
         "select kind, input_tokens from usage_events where session_id = $1 and provider = 'anthropic'",
     )
@@ -1730,13 +1731,22 @@ async fn score_session_stores_report_and_serves_it() {
     .fetch_all(&db)
     .await
     .unwrap();
-    assert_eq!(rows, vec![("scoring".to_string(), Some(9000))]);
+    // The main call's row, and an estimate for the card call that failed before reporting usage.
+    assert_eq!(rows.len(), 2, "{rows:?}");
+    assert_eq!(rows[0], ("scoring".to_string(), Some(9000)));
+    assert_eq!(rows[1].0, "scoring_card");
+    assert!(rows[1].1.unwrap_or(0) > 0, "{rows:?}");
 
     let res = common::get(app.clone(), &format!("/api/sessions/{id}/report")).await;
     assert_eq!(res.status(), StatusCode::OK);
-    let body = common::body_json(res).await;
-    assert_eq!(body, report);
+    let mut body = common::body_json(res).await;
+    // As served, the report carries the session's live public link (none here).
     assert!(schema().errors(&body).is_empty());
+    assert_eq!(
+        body.as_object_mut().unwrap().remove("share"),
+        Some(json!({"public_slug": null, "include_quotes": false}))
+    );
+    assert_eq!(body, report);
     let stranger = report_app(&db, &data, identity(Uuid::new_v4()));
     let res = common::get(stranger, &format!("/api/sessions/{id}/report")).await;
     assert_eq!(
@@ -2364,9 +2374,44 @@ async fn a_scored_session_is_ledgered_once_even_through_the_metered_client() {
     .fetch_all(&db)
     .await
     .unwrap();
-    assert_eq!(
-        rows,
-        vec![("scoring".to_string(), Some(9000))],
-        "one row for the one model call"
-    );
+    // One row per model call: the main call, and the card call (it failed, so an estimate). Nothing from the
+    // metered client.
+    assert_eq!(rows.len(), 2, "one row per call: {rows:?}");
+    assert_eq!(rows[0], ("scoring".to_string(), Some(9000)));
+    assert_eq!(rows[1].0, "scoring_card");
+}
+
+#[tokio::test]
+async fn a_scoring_call_that_fails_still_counts_in_the_ledger() {
+    let _serial = db_lock().lock().await;
+    let db = pool().await;
+    let data = common::temp_dir("data");
+    let input = long_design_input();
+    let id = insert_session(&db, &input).await;
+    // Every call fails before it reports any usage (both attempts, and their card calls).
+    let llm = ScriptedLlm::new(vec![
+        Err(ClaudeError::BadRequest("overloaded".into())),
+        Err(ClaudeError::BadRequest("overloaded".into())),
+        Err(ClaudeError::BadRequest("overloaded".into())),
+        Err(ClaudeError::BadRequest("overloaded".into())),
+    ]);
+    let d = deps(&db, llm.clone(), &data);
+    assert!(scoring::score_session(&d, id).await.is_err());
+    assert_eq!(status(&db, id).await, "failed");
+    let rows: Vec<(String, Option<i32>, f64)> = sqlx::query_as(
+        "select kind, input_tokens, cost_usd::float8 from usage_events \
+         where session_id = $1 and provider = 'anthropic' and kind = 'scoring' order by id",
+    )
+    .bind(id)
+    .fetch_all(&db)
+    .await
+    .unwrap();
+    assert_eq!(rows.len(), 2, "two attempts: {rows:?}");
+    for (_, tokens, cost) in &rows {
+        assert!(
+            tokens.unwrap_or(0) > 1000,
+            "the request was estimated: {rows:?}"
+        );
+        assert!(*cost > 0.0, "and priced, so the caps see it: {rows:?}");
+    }
 }

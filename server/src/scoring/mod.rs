@@ -206,6 +206,8 @@ pub struct ScoringDeps {
     pub max_tokens: u32,
     /// Model of the quick headset card (`claude-sonnet-5-5`).
     pub card_model: String,
+    /// `FAST_MODEL`: scores a retry (one before and after call).
+    pub fast_model: String,
     pub data_dir: PathBuf,
     pub usage_phase: UsagePhase,
     pub events: Arc<dyn ReportEvents>,
@@ -243,6 +245,7 @@ impl ScoringDeps {
             effort: DEFAULT_EFFORT.to_string(),
             max_tokens: MAX_TOKENS,
             card_model: CARD_MODEL.to_string(),
+            fast_model: crate::config::DEFAULT_LIVE_MODEL.to_string(),
             data_dir: PathBuf::from("data"),
             usage_phase: UsagePhase::Build,
             events: Arc::new(LogEvents),
@@ -264,6 +267,7 @@ impl ScoringDeps {
             &app.config.scoring_model,
         );
         deps.fish = Some(app.fish.clone());
+        deps.fast_model = app.config.fast_model.clone();
         deps.data_dir = app.config.data_dir.clone();
         deps.usage_phase = app.config.usage_phase;
         if let Ok(effort) = std::env::var("SCORING_EFFORT")
@@ -810,6 +814,10 @@ pub async fn mark_failed(deps: &ScoringDeps, session_id: Uuid) {
 /// Scores a session within its attempt budget (two, then `failed`) and stores the report. Every attempt is
 /// ledgered first, so a crash, a store error or a restart never buys more than two model runs.
 pub async fn score_session(deps: &ScoringDeps, session_id: Uuid) -> anyhow::Result<Value> {
+    // A retry is scored on its own terms (one fast call, ledgered like any other) into its parent's report.
+    if crate::retry::is_retry(&deps.db, session_id).await? {
+        return crate::retry::score(deps, session_id).await;
+    }
     // Scoring writes its own ledger rows (`record_usage`): the metered client must not record its calls again.
     crate::usage::LLM_UNMETERED
         .scope((), score_session_inner(deps, session_id))
@@ -821,14 +829,27 @@ async fn score_session_inner(deps: &ScoringDeps, session_id: Uuid) -> anyhow::Re
     let card = report::CardSlot::default();
     let mut last_err = anyhow!("no scoring attempt left");
     while let Some(attempt) = claim_attempt(deps, session_id).await? {
-        let result = score_attempt(deps, session_id, &card).await;
-        let calls = match &result {
+        let unreported = Arc::new(Mutex::new(Vec::new()));
+        let result = report::collecting_unreported(
+            unreported.clone(),
+            score_attempt(deps, session_id, &card),
+        )
+        .await;
+        let mut calls = match &result {
             Ok(s) => s.calls.clone(),
             Err(e) => e
                 .downcast_ref::<report::UsageOnError>()
                 .map(|u| u.0.clone())
                 .unwrap_or_default(),
         };
+        // Calls that failed, timed out or were cut off before reporting usage, as estimates; a failed main call
+        // fills the attempt's own row.
+        calls.extend(
+            unreported
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .drain(..),
+        );
         record_usage(deps, session_id, attempt, &calls).await;
         let stored = match result {
             Ok(scored) => store_report(
@@ -920,7 +941,7 @@ fn cost(model: &str, u: &Usage) -> f64 {
 }
 
 /// Fills the attempt's ledger row with the main call's usage and adds a row per side call; adds the cost to
-/// the session. Calls that failed before reporting usage cost nothing here.
+/// the session. A call that failed before reporting usage comes in as an estimate.
 async fn record_usage(
     deps: &ScoringDeps,
     session_id: Uuid,

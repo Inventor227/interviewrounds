@@ -57,6 +57,60 @@ describe('Report', () => {
     expect(drills).toEqual(['/round/sde.system_design.short?retry=demo', '/round/sde.system_design.short']);
   });
 
+  it('report_shows_the_retries_line', async () => {
+    useFakeServer();
+    const root = await renderApp('/report/demo');
+    const rows = $(root, 'retries')!.querySelectorAll('li');
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.querySelector('.retry-scores')?.textContent).toMatch(/^2\s*→\s*to\s*3$/);
+    expect(rows[0]!.textContent).toContain('Named the write path as the bottleneck and the cost of sharding.');
+  });
+
+  it('report_of_a_retry_moves_to_its_parent', async () => {
+    // A retry answers with its parent's report, which carries the new before and after.
+    const parent = fakeReport('demo');
+    parent.weakest_moment!.retries = [
+      ...(parent.weakest_moment!.retries ?? []),
+      { session_id: 'child1', at: '2026-11-13T10:00:00Z', before_score: 2, after_score: 4, note: 'You named the bottleneck and its cost.' },
+    ];
+    const server = useFakeServer({ routes: { 'GET /api/sessions/child1/report': () => parent, 'GET /api/sessions/demo/report': () => parent } });
+    const root = await renderApp('/report/child1');
+    expect(location.pathname).toBe('/report/demo');
+    expect($(root, 'retries')!.querySelectorAll('li')).toHaveLength(2);
+    expect($(root, 'retries')!.textContent).toContain('You named the bottleneck and its cost.');
+    expect($(root, 'retry-answer')?.getAttribute('href')).toBe('/round/sde.system_design.short?retry=demo');
+    // The page kept the report it had: one fetch, no second load.
+    expect(server.calls.filter((c) => c.method === 'GET' && c.path.endsWith('/report'))).toHaveLength(1);
+  });
+
+  it('report_without_a_retry_prompt_offers_no_retry', async () => {
+    const report = fakeReport('demo');
+    report.weakest_moment = { ...report.weakest_moment!, retry: undefined };
+    useFakeServer({ routes: { 'GET /api/sessions/demo/report': () => report } });
+    const root = await renderApp('/report/demo');
+    expect($(root, 'weakest')).not.toBeNull();
+    expect($(root, 'retry-answer')).toBeNull();
+    expect($$(root, 'drill').map((d) => d.getAttribute('href'))).toEqual([null, '/round/sde.system_design.short']);
+  });
+
+  it('report_share_warns_that_a_meeting_names_people', async () => {
+    useFakeServer();
+    const root = await renderApp('/report/meeting');
+    expect($(root, 'share-names-note')).not.toBeNull();
+    cleanup();
+    useFakeServer();
+    const demo = await renderApp('/report/demo');
+    expect($(demo, 'share-names-note')).toBeNull();
+  });
+
+  it('report_share_shows_what_the_live_link_shares', async () => {
+    const report = { ...fakeReport('demo'), share: { public_slug: 'k7m2q1', include_quotes: true } };
+    useFakeServer({ routes: { 'GET /api/sessions/demo/report': () => report } });
+    const root = await renderApp('/report/demo');
+    expect($(root, 'share-toggle')?.getAttribute('aria-checked')).toBe('true');
+    expect(($(root, 'share-transcript') as HTMLInputElement).checked).toBe(true);
+  });
+
   it('report_keeps_the_transcript_collapsed', async () => {
     useFakeServer();
     const root = await renderApp('/report/demo');
@@ -152,6 +206,11 @@ describe('Report', () => {
     const root = await renderApp('/report/nosignal');
     expect($(root, 'no-signal')).not.toBeNull();
     expect($(root, 'verdict')).toBeNull();
+    // It says what was missing (enough answers and speech), not how long the round was.
+    const text = $(root, 'no-signal')!.textContent ?? '';
+    expect(text).toContain('two full answers');
+    expect(text).toMatch(/about a minute/);
+    expect(text).not.toContain('lasted about');
   });
 
   it('report_shows_meeting_outcome_and_no_hire_verdict', async () => {

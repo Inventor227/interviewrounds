@@ -932,10 +932,7 @@ async fn live_turns_through_the_endpoint() {
         }
         let st = state.registry.get("live").unwrap();
         let st = st.lock().await;
-        println!(
-            "{model} brief: {:?}, phase {}, pending tools {:?}",
-            st.brief, st.phase_idx, st.pending_tool_results
-        );
+        println!("{model} brief: {:?}, phase {}", st.brief, st.phase_idx);
     }
 }
 
@@ -1374,7 +1371,6 @@ async fn director_mode_speaks_without_tools_then_applies_the_directors_calls() {
     let st = state.registry.get("s1").unwrap();
     let st = st.lock().await;
     assert_eq!(st.phase_idx, 1);
-    assert!(st.pending_tool_results.is_empty());
     assert!(st.history.iter().all(|m| {
         m.content
             .iter()
@@ -1579,7 +1575,6 @@ async fn playback_reported_while_the_reply_streams_commits_it_when_done() {
         panelist_id: "p1".into(),
         input: UserInput::Speech("That covers it.".into()),
         draft: Some(draft),
-        extra: Vec::new(),
         reply: vec![ContentBlock::text("Okay. Let's move on.")],
         spoken: "Okay. Let's move on.".into(),
         tool_calls: Vec::new(),
@@ -1982,7 +1977,6 @@ fn an_early_report_survives_parking_another_reply() {
         panelist_id: "p1".into(),
         input: UserInput::Speech("Hello?".into()),
         draft: None,
-        extra: Vec::new(),
         reply: vec![ContentBlock::text("Sorry, give me a second.")],
         spoken: "Sorry, give me a second.".into(),
         tool_calls: Vec::new(),
@@ -2457,32 +2451,53 @@ async fn a_reply_that_opens_with_a_tool_name_never_leaves_an_empty_block() {
     assert!(no_empty_text(&handle.lock().await.history));
 }
 
+/// Every system note follows a user message and is last or right before an assistant turn (the API's rule).
+fn notes_well_placed(messages: &[Message]) -> bool {
+    messages.iter().enumerate().all(|(i, m)| {
+        m.role != Role::System
+            || (i > 0
+                && messages[i - 1].role == Role::User
+                && messages
+                    .get(i + 1)
+                    .is_none_or(|n| n.role == Role::Assistant))
+    })
+}
+
 #[test]
 fn live_and_director_requests_never_carry_empty_text() {
+    use ir_server::orchestrator::TurnCommit;
     let mut st = new_state("s1", "sde.system_design.short", VoiceKind::Fish);
-    // A bad entry already in the history (an empty reply, and an empty text next to real content).
-    st.history.push(Message::user_text("Hi."));
-    st.history.push(Message::assistant_text(""));
-    st.history.push(Message {
-        role: Role::User,
-        content: vec![
-            ContentBlock::text(" "),
-            ContentBlock::text("So, the cache."),
-        ],
-    });
-    let req = build_live_request(
-        &st,
-        "p1",
-        &UserInput::Speech("And the queue.".into()),
-        Instant::now(),
+    let now = Instant::now();
+    let commit = |st: &mut SessionState, said: &str, reply: &str| {
+        let draft = ir_server::orchestrator::prompt::draft_turn(
+            st,
+            "p1",
+            &UserInput::Speech(said.into()),
+            now,
+        );
+        st.commit_turn(
+            TurnCommit {
+                draft,
+                reply: vec![ContentBlock::text(reply)],
+                spoken: reply.into(),
+                tool_calls: Vec::new(),
+                handover_line_used: false,
+            },
+            now,
+        );
+    };
+    // A bad entry in the real shape (user, note, assistant): a reply with an empty text block. Then a good turn.
+    commit(&mut st, "Hi.", "");
+    commit(&mut st, "So, the cache.", "Okay. Why a cache?");
+    assert!(
+        !no_empty_text(&st.history),
+        "the history does hold the bad entry"
     );
+    let input = UserInput::Speech("And the queue.".into());
+    let req = build_live_request(&st, "p1", &input, now);
     assert!(no_empty_text(&req.messages), "{:?}", req.messages);
-    let draft = ir_server::orchestrator::prompt::draft_turn(
-        &st,
-        "p1",
-        &UserInput::Speech("And the queue.".into()),
-        Instant::now(),
-    );
+    assert!(notes_well_placed(&req.messages), "{:?}", req.messages);
+    let draft = ir_server::orchestrator::prompt::draft_turn(&st, "p1", &input, now);
     let dreq = ir_server::orchestrator::director::build_request(
         &st,
         "p1",
@@ -2491,4 +2506,113 @@ fn live_and_director_requests_never_carry_empty_text() {
         "claude-sonnet-5-5",
     );
     assert!(no_empty_text(&dreq.messages), "{:?}", dreq.messages);
+    assert!(notes_well_placed(&dreq.messages), "{:?}", dreq.messages);
+
+    // An all-whitespace user message takes its note with it.
+    let mut msgs = vec![
+        Message::user_text("Hi."),
+        Message::system_text("note 1"),
+        Message::assistant_text("Hello."),
+        Message::user_text("  "),
+        Message::system_text("note 2"),
+        Message::assistant_text("Go on."),
+    ];
+    ir_server::orchestrator::prompt::strip_empty_text(&mut msgs);
+    assert!(notes_well_placed(&msgs), "{msgs:?}");
+    assert!(!msgs.iter().any(|m| m.text() == "note 2"));
+}
+
+#[tokio::test]
+async fn a_dropped_turn_never_records_tool_text() {
+    // The first attempt opens with a tool name and is retried; the retry speaks, then Fish drops the request.
+    let llm = ScriptedLlm::new(vec![
+        reply("end_round: That's time. Thanks for designing this with me."),
+        Script::ThenHang(vec![StreamEvent::TextDelta("Right. And the".into())]),
+        // A single attempt cut at a tool name after some speech, then dropped.
+        Script::ThenHang(vec![StreamEvent::TextDelta(
+            "Okay. next_phase and on".into(),
+        )]),
+    ]);
+    let (app, state) = test_app(llm.clone());
+    state
+        .registry
+        .insert(new_state("s1", "sde.system_design.short", VoiceKind::Fish));
+    let first = post_chat_and_drop(
+        &app,
+        chat_body("s1", "p1", json!([{"role": "user", "content": "Hi."}])),
+    )
+    .await;
+    assert!(first.contains("Right. And the"), "{first}");
+    {
+        let handle = state.registry.get("s1").unwrap();
+        let st = handle.lock().await;
+        let parked: Vec<String> = st
+            .provisional
+            .iter()
+            .map(|p| {
+                p.reply
+                    .iter()
+                    .filter_map(|b| match b {
+                        ContentBlock::Text { text, .. } => Some(text.clone()),
+                        _ => None,
+                    })
+                    .collect::<String>()
+            })
+            .collect();
+        assert_eq!(parked, ["Right. And the"], "only the retry's words");
+    }
+    post_chat_and_drop(
+        &app,
+        chat_body("s1", "p1", json!([{"role": "user", "content": "Go on."}])),
+    )
+    .await;
+    let handle = state.registry.get("s1").unwrap();
+    let st = handle.lock().await;
+    let all: String = st
+        .provisional
+        .iter()
+        .chain(std::iter::empty())
+        .flat_map(|p| p.reply.iter())
+        .filter_map(|b| match b {
+            ContentBlock::Text { text, .. } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join(" | ");
+    assert!(
+        !all.contains("end_round") && !all.contains("next_phase"),
+        "{all}"
+    );
+    let history: String = st
+        .history
+        .iter()
+        .map(Message::text)
+        .collect::<Vec<_>>()
+        .join(" | ");
+    assert!(
+        !history.contains("end_round") && !history.contains("next_phase"),
+        "{history}"
+    );
+}
+
+#[test]
+fn a_cut_reply_keeps_only_what_was_spoken() {
+    use ir_server::orchestrator::oai::keep_spoken_text;
+    let thinking =
+        ContentBlock::Other(json!({"type": "thinking", "thinking": "", "signature": "x"}));
+    // Nothing spoken before the tool name: no text block is left at all.
+    let mut reply = vec![
+        thinking.clone(),
+        ContentBlock::text("end_round: That's time."),
+    ];
+    keep_spoken_text(&mut reply, "");
+    assert_eq!(reply, vec![thinking.clone()]);
+    // Something spoken: one block with exactly that.
+    let mut reply = vec![
+        thinking.clone(),
+        ContentBlock::text("Okay. next_phase"),
+        ContentBlock::text(" and more"),
+    ];
+    keep_spoken_text(&mut reply, "Okay. ");
+    assert_eq!(reply, vec![thinking, ContentBlock::text("Okay.")]);
 }

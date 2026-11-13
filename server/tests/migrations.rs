@@ -29,6 +29,23 @@ async fn new_session(pool: &PgPool, identity: Uuid) -> Uuid {
     .unwrap()
 }
 
+/// A rollback runs an older build on a newer schema: migrations it does not know are not an error.
+#[tokio::test]
+async fn older_build_boots_on_a_newer_schema() {
+    let url = common::fresh_database().await;
+    let pool = db::connect_url(&url).await.expect("connect + migrate");
+    sqlx::query(
+        "insert into _sqlx_migrations (version, description, success, checksum, execution_time) \
+         values (99999999, 'from a newer build', true, '\\x00'::bytea, 0)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    pool.close().await;
+    let again = db::connect_url(&url).await;
+    assert!(again.is_ok(), "{:?}", again.err());
+}
+
 #[tokio::test]
 async fn migration_creates_all_tables() {
     let pool = pool().await;

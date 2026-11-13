@@ -172,15 +172,6 @@ impl ContentBlock {
         }
     }
 
-    pub fn tool_result_ok(tool_use_id: impl Into<String>) -> Self {
-        ContentBlock::ToolResult {
-            tool_use_id: tool_use_id.into(),
-            content: "ok".into(),
-            is_error: None,
-            cache_control: None,
-        }
-    }
-
     /// Sets or clears `cache_control` on blocks that carry one.
     pub fn set_cache_control(&mut self, value: Option<CacheControl>) {
         match self {

@@ -582,6 +582,12 @@ pub(crate) fn data_block(tag: &str, text: &str) -> String {
     )
 }
 
+/// `text` without any director-only marker (`[[tool:`, any case): user text can never open a span that would hide
+/// part of the live prompt.
+pub(crate) fn no_markers(text: &str) -> String {
+    strip_tags(text, &["[[tool:"])
+}
+
 /// `text` without any case-insensitive (ASCII) copy of the `needles`. Works on whole characters only: positions
 /// come from `char_indices` of `text` itself, never from a changed copy, so no slice can fall inside a character.
 /// Removal repeats until no copy is left, so removing one copy cannot join the halves of another.

@@ -7,8 +7,8 @@ import { resetPhrase } from './format';
 
 const COPY: Record<LimitReason, { title: string; body: string }> = {
   guest_daily_limit: {
-    title: 'You have used today’s free rounds',
-    body: 'Guest rounds come back',
+    title: 'You’ve used today’s rounds on this device',
+    body: 'Come back for more',
   },
   guest_full_used: {
     title: 'Your full round is used',
@@ -28,9 +28,12 @@ const COPY: Record<LimitReason, { title: string; body: string }> = {
   },
   free_rounds_used: {
     title: 'You have used your free rounds',
-    body: 'Your reports and history stay free. Pick a plan to keep practicing live.',
+    body: 'Your reports and history stay here.',
   },
 };
+
+/** The guest limit with no reset (after judging: one round per device in all). */
+const GUEST_PASS_USED = { title: 'You’ve used the guest round on this device', body: 'Your reports and history stay here.' };
 
 export function CapNotice(props: {
   reason: LimitReason;
@@ -39,8 +42,9 @@ export function CapNotice(props: {
   isGuest?: boolean;
   now?: Date;
 }) {
-  const c = COPY[props.reason];
-  const withTime = props.reason !== 'free_rounds_used';
+  const used = props.reason === 'guest_daily_limit' && !props.resetsAt;
+  const c = used ? GUEST_PASS_USED : COPY[props.reason];
+  const withTime = props.reason !== 'free_rounds_used' && !used;
   return (
     <div class="cap" role="status" data-test="cap-notice" data-reason={props.reason}>
       <svg class="cap-icon" viewBox="0 0 24 24" aria-hidden="true">
@@ -65,11 +69,6 @@ export function CapNotice(props: {
             ))}
         </p>
         <div class="row">
-          {props.reason === 'free_rounds_used' && (
-            <a class="btn btn-primary" href="/pricing" data-test="cap-plans">
-              See plans
-            </a>
-          )}
           {props.reason === 'guest_full_used' && (
             <a class="btn" href="/start" data-test="cap-quick">
               Pick a quick round
