@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { ClientMsgMap } from '../shared/types';
 import { SessionSocket } from './ws';
 
 /** In-memory stand-in for the browser WebSocket, driven by the test as "the server". */
@@ -69,12 +70,12 @@ const roundState = {
   floor: 'p1',
 };
 
-const op = {
+const op: ClientMsgMap['board.op'] = {
   op_id: 'op-1',
   rev_base: 0,
-  src: 'hand' as const,
-  op: 'item.create' as const,
-  args: { id: 'n1', kind: 'component', type: 'cache', label: 'Redis' },
+  src: 'hand',
+  op: 'item.create',
+  args: { id: 'n1', kind: 'component', type: 'cache', label: 'Redis', x: 4, y: 6, w: 8, h: 5 },
   at_ms: 1200,
 };
 
