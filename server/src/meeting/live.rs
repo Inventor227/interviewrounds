@@ -135,7 +135,7 @@ pub fn render_system(
     let mut context: Vec<String> = meeting.key_facts.clone();
     if let Some(notes) = &meeting.notes {
         let trimmed: String = notes.trim().chars().take(2000).collect();
-        context.push(format!("Notes from the user: {trimmed}"));
+        context.push(format!("Notes from the candidate: {trimmed}"));
     }
     let interrupt = persona
         .interrupts_after_seconds
@@ -162,7 +162,7 @@ pub fn render_system(
         ("attendee.opening_stance", stance_words(a.stance).into()),
         ("persona.speech_habits", persona.speech_habits.join("; ")),
         ("meeting.title", meeting.title.clone()),
-        ("meeting.user_name", "the user".into()),
+        ("meeting.user_name", "the candidate".into()),
         ("meeting.user_role", meeting.user_role.clone()),
         ("meeting.goal", data_block("user_facts", &meeting.goal)),
         (
@@ -183,7 +183,10 @@ pub fn render_system(
         ),
         (
             "meeting.chair_name",
-            meeting.chair.clone().unwrap_or_else(|| "the user".into()),
+            meeting
+                .chair
+                .clone()
+                .unwrap_or_else(|| "the candidate".into()),
         ),
         (
             "meeting.approver_name",
@@ -314,20 +317,20 @@ pub fn turn_parts(
 
     if let Some(c) = &meeting.user_contradiction {
         notes.push(format!(
-            "The user contradicted their own facts: {c}. If it bears on your concerns, point it out briefly."
+            "The candidate contradicted their own facts: {c}. If it bears on your concerns, point it out briefly."
         ));
     }
     if meeting.ask_made {
         if !meeting.ask_text.is_empty() {
             notes.push(format!(
-                "The user has made the ask: \"{}\".",
+                "The candidate has made the ask: \"{}\".",
                 meeting.ask_text
             ));
         }
     } else if !meeting.user_chairs
         && (clock.decision_started || clock.remaining_s < DECISION_SECONDS)
     {
-        notes.push("The user has not made a clear ask yet.".into());
+        notes.push("The candidate has not made a clear ask yet.".into());
     }
 
     // Who speaks next.
@@ -343,14 +346,14 @@ pub fn turn_parts(
             }
         } else if meeting.user_chairs {
             notes.push(format!(
-                "If the user's last words were meant for {}, say one short line and hand over to {} with their first question in their own voice{}.",
+                "If the candidate's last words were meant for {}, say one short line and hand over to {} with their first question in their own voice{}.",
                 next.name,
                 named(next),
                 if instruction.is_empty() { String::new() } else { format!(", built on this: {instruction}") }
             ));
         } else {
             notes.push(format!(
-                "The app picked {} to speak next{}. Unless you must answer the user first, give them the floor: one short line that names them, then hand over to {} with their first question, in their voice, under twenty five words.",
+                "The app picked {} to speak next{}. Unless you must answer the candidate first, give them the floor: one short line that names them, then hand over to {} with their first question, in their voice, under twenty five words.",
                 next.name,
                 if instruction.is_empty() { String::new() } else { format!(" ({instruction})") },
                 named(next)
@@ -371,7 +374,7 @@ pub fn turn_parts(
             if_asked = decision_if_asked(meeting, clock.decision_started);
             (
                 &if_asked,
-                "If the user's last words were a clear ask for a decision, your decision is",
+                "If the candidate's last words were a clear ask for a decision, your decision is",
             )
         };
         let mut line = format!(
@@ -403,12 +406,13 @@ pub fn turn_parts(
     let mut time_line = String::new();
     if meeting.user_chairs {
         notes.push(
-            "The user runs this meeting. Never welcome anyone, keep time, move the agenda, ask what they want from you, or push for a decision. Answer and push back as yourself."
+            "The candidate runs this meeting. Never welcome anyone, keep time, move the agenda, ask what they want from you, or push for a decision. Answer and push back as yourself."
                 .into(),
         );
         if is_approver {
             notes.push(
-                "Give your decision only when the user asks for one or for your agreement.".into(),
+                "Give your decision only when the candidate asks for one or for your agreement."
+                    .into(),
             );
         }
         if clock.round_over && is_closer {

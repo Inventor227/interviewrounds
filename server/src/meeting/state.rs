@@ -576,7 +576,7 @@ pub fn render_exchange(state: &MeetingState, turns: &[Turn]) -> String {
                 names.get(t.speaker.as_str()).copied().unwrap_or("Attendee")
             };
             let text = match (&t.heard, t.interrupted) {
-                (Some(heard), true) => format!("{heard} (cut off by the user)"),
+                (Some(heard), true) => format!("{heard} (cut off by the candidate)"),
                 _ => t.text.trim().to_string(),
             };
             format!("[{}s] {who}: {text}", t.at_ms / 1000)

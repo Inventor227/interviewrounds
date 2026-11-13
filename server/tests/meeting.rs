@@ -730,7 +730,7 @@ async fn user_chairs_meeting_has_no_ai_chair() {
     assert_eq!(st.panel[0].persona.display_name, "Ravi");
     let system = &st.panel[0].system[0].text;
     assert!(
-        system.contains("The user runs this meeting, not you"),
+        system.contains("The candidate runs this meeting, not you"),
         "user_chairs section"
     );
     assert!(
@@ -742,7 +742,7 @@ async fn user_chairs_meeting_has_no_ai_chair() {
     let n = note(&st, &ravi);
     assert!(!n.contains(DECISION_LINE), "{n}");
     assert!(!n.contains("two minutes"), "{n}");
-    assert!(n.contains("The user runs this meeting"), "{n}");
+    assert!(n.contains("The candidate runs this meeting"), "{n}");
     assert!(n.contains("ask what they want from you"), "{n}");
 }
 
@@ -1069,7 +1069,7 @@ async fn opening_line_then_background_update_feeds_the_next_note() {
     assert!(n.contains("undecided"), "stance moved: {n}");
     assert!(n.contains("(partly answered)"), "{n}");
     assert!(
-        n.contains("The user has made the ask: \"A partner meeting next week\""),
+        n.contains("The candidate has made the ask: \"A partner meeting next week\""),
         "{n}"
     );
 }
@@ -1394,7 +1394,7 @@ async fn decision_turn_waits_for_the_running_update() {
     assert!(started.elapsed() < Duration::from_millis(2500));
     let n = last_note(llm.streamed().last().unwrap());
     assert!(
-        n.contains("The user has made the ask: \"A partner meeting next week\""),
+        n.contains("The candidate has made the ask: \"A partner meeting next week\""),
         "{n}"
     );
     assert!(n.contains("If you are asked for a decision, it is"), "{n}");
@@ -1409,7 +1409,9 @@ fn a_fresh_ask_in_the_decision_phase_is_not_refused_as_no_ask() {
     let rhea = st.floor.clone();
     let n = note(&st, &rhea);
     assert!(
-        n.contains("If the user's last words were a clear ask for a decision, your decision is"),
+        n.contains(
+            "If the candidate's last words were a clear ask for a decision, your decision is"
+        ),
         "{n}"
     );
     assert!(!n.contains("haven't heard a clear ask"), "{n}");
@@ -2327,4 +2329,67 @@ async fn prepare_retries_once_on_sonnet_then_uses_the_rules() {
     llm.create_err();
     assert!(prepare(llm.as_ref(), &catalog, &s).await.is_ok());
     assert_eq!(llm.created().len(), 2);
+}
+
+// ---------- never "the user" (prod smoke: "Let's regroup once the user has those two answers") ----------
+
+fn says_the_user(text: &str) -> bool {
+    let t = text.to_lowercase();
+    t.contains("the user ")
+        || t.contains("the user.")
+        || t.contains("the user,")
+        || t.contains("the user's")
+}
+
+#[tokio::test]
+async fn meeting_prompts_and_notes_never_call_the_candidate_the_user() {
+    let catalog = catalog();
+    // An AI chair (Grace joins), and a meeting the candidate runs.
+    let (s, plan) = pitch_plan(&catalog);
+    let chaired = meeting_session("m-words", &catalog, MeetingState::from_parts(&s, &plan));
+    let llm = FakeLlm::new();
+    llm.create_json(
+        model_plan(
+            false,
+            Some("Ravi"),
+            vec![model_attendee("Ravi", &[], &["Whether this is fair"], -1)],
+            "Hey, thanks for setting this up.",
+        )
+        .to_string(),
+    );
+    let review = prepare(llm.as_ref(), &catalog, &review_setup())
+        .await
+        .unwrap();
+    let led = meeting_session(
+        "m-words-led",
+        &catalog,
+        MeetingState::from_parts(&review_setup(), &review),
+    );
+    for mut st in [chaired, led] {
+        let full = (st.round.target_minutes * 60.0) as u64;
+        for remaining in [full - 10, 60] {
+            with_remaining(&mut st, remaining);
+            for p in st.panel.clone() {
+                let system: String = p.system.iter().map(|b| b.text.as_str()).collect();
+                assert!(
+                    !says_the_user(&system),
+                    "system prompt of {}",
+                    p.panelist_id
+                );
+                assert!(
+                    !says_the_user(&p.director_system),
+                    "director prompt of {}",
+                    p.panelist_id
+                );
+                let n = note(&st, &p.panelist_id);
+                assert!(!says_the_user(&n), "note for {}: {n}", p.panelist_id);
+            }
+        }
+        // And the rule that spoken lines say "you".
+        let system: String = st.panel[0].system.iter().map(|b| b.text.as_str()).collect();
+        assert!(
+            system.contains("Talk to the candidate, not about them"),
+            "{system}"
+        );
+    }
 }

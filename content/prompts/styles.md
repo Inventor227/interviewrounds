@@ -1,5 +1,5 @@
 <!--
-styles.md: interviewer style chosen by the user (warm, neutral, tough). The server picks one section by key and puts it into
+styles.md: interviewer style chosen by the candidate (warm, neutral, tough). The server picks one section by key and puts it into
 {style_rules} in house-rules.md. The persona card still sets the person; the style shifts tone, not facts or fairness.
 Sections are split on lines that start with "## " followed by the key. No placeholders.
 -->

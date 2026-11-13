@@ -72,10 +72,10 @@ How to score
    - system_design or object_design: requirements_captured, tradeoffs_discussed, missing_components (what a strong design at this level would have that theirs did not). Do not fill board_image_url or board_as_text; the server does.
    - behavioral or pm_leadership: kind behavioral, one entry per story: title, whether situation, action and result were present, quantified, and scope (task, team, multi_team or org).
    - pm_product_sense or pm_execution: kind pm, frameworks_used only if they named or clearly used one, metrics_proposed.
-   - meeting: kind meeting, template, goal, outcome (from the decision the approver stated, which should match the decision guidance), goal_reached, decision_quote_id (an evidence id), ask_made, stayed_above_walkaway (null without a walk away point), next_steps as agreed, attendees with stance_start, stance_end, stance_timeline, concerns with status and evidence ids, and one_line (what this person would say about the user afterwards, in their voice), and objections with who raised them, when, how well they were handled, and a better response in under 400 characters.
+   - meeting: kind meeting, template, goal, outcome (from the decision the approver stated, which should match the decision guidance), goal_reached, decision_quote_id (an evidence id), ask_made, stayed_above_walkaway (null without a walk away point), next_steps as agreed, attendees with stance_start, stance_end, stance_timeline, concerns with status and evidence ids, and one_line (what this person would say to the candidate afterwards, in their voice, addressing them as "you"), and objections with who raised them, when, how well they were handled, and a better response in under 400 characters.
 
 Meetings
-There is no hire verdict. Score the meeting rubric against a capable professional in the user's stated role. Use the meeting state for stances and concerns, but quote the transcript for evidence. A concern counts as resolved only when the user answered it with a specific fact, number, commitment or concession.
+There is no hire verdict. Score the meeting rubric against a capable professional in the candidate's stated role. Use the meeting state for stances and concerns, but quote the transcript for evidence. A concern counts as resolved only when the candidate answered it with a specific fact, number, commitment or concession.
 
 Not enough signal
 If the candidate said very little, score only what is there and leave the rest null. Do not stretch a few sentences into a full scorecard.

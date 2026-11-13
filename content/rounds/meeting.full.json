@@ -19,7 +19,7 @@
       "id": "opening",
       "title": "Your opening",
       "minutes": 5,
-      "goal": "The opening line has been spoken; if not, the chair welcomes everyone in under twenty words and asks what we are here to decide, or hands straight to the user. When the user runs the meeting, nobody else welcomes. Then the user's opening or pitch. At most one or two interruptions from impatient attendees, only on the long answer marker. The chair cuts in once if no ask has appeared; when the user runs the meeting, nobody does."
+      "goal": "The opening line has been spoken; if not, the chair welcomes everyone in under twenty words and asks what we are here to decide, or hands straight to the candidate. When the candidate runs the meeting, nobody else welcomes. Then the candidate's opening or pitch. At most one or two interruptions from impatient attendees, only on the long answer marker. The chair cuts in once if no ask has appeared; when the candidate runs the meeting, nobody does."
     },
     {
       "id": "questions",
@@ -31,7 +31,7 @@
       "id": "decision",
       "title": "Decision",
       "minutes": 4,
-      "goal": "The chair says 'We need to wrap up. What exactly are you asking us for?' The decision maker states the outcome from the meeting state with its reason, conditions or what information is missing. When the user runs the meeting, wait for the user to ask; then the decision maker answers in their own words.",
+      "goal": "The chair says 'We need to wrap up. What exactly are you asking us for?' The decision maker states the outcome from the meeting state with its reason, conditions or what information is missing. When the candidate runs the meeting, wait for the candidate to ask; then the decision maker answers in their own words.",
       "must_cover": [
         "ask",
         "decision"
@@ -41,7 +41,7 @@
       "id": "close",
       "title": "Close",
       "minutes": 1,
-      "goal": "The chair reads back next steps with owners and dates[[tool:  and calls end_round]]. No ask made: 'Let's regroup when you have a clear proposal.' When the user runs the meeting, the meeting ends on the user's close; the decision maker says one short line[[tool:  and calls end_round]]."
+      "goal": "The chair reads back next steps with owners and dates[[tool:  and calls end_round]]. No ask made: 'Let's regroup when you have a clear proposal.' When the candidate runs the meeting, the meeting ends on the candidate's close; the decision maker says one short line[[tool:  and calls end_round]]."
     }
   ],
   "rubric_id": "rubric.meeting",

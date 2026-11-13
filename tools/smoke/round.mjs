@@ -54,6 +54,9 @@ const ANSWERS = [
 // A tool written out by the model and spoken (identifier, or the spaced form the old filter produced).
 const TOOL_WORDS = /\b(show[ _]question|next_phase|end[ _]round|give[ _]hint|point_at|hand_over)\b/i;
 const toolSpeech = [];
+// Interviewers and attendees talk to the person ("you"), never about "the user".
+const THE_USER = /\bthe user\b/i;
+const theUserSpeech = [];
 const t0 = Date.now();
 const now = () => Date.now() - t0;
 const log = [];
@@ -186,6 +189,7 @@ async function turn(sessionId, token, text, label, panelist = "p1") {
   record("turn", label, { panelist, user: text, reply, ttft_ms: ttft, total_ms: total });
   say(`${label}: first text ${ttft} ms, ${total} ms: "${reply}"`);
   if (TOOL_WORDS.test(reply)) toolSpeech.push({ label, reply });
+  if (THE_USER.test(reply)) theUserSpeech.push({ label, reply });
   // The hold line means the model (and its fallback) failed: never a passing turn.
   if (HOLD_LINE.test(reply)) holdReplies.push({ label, reply });
   return { reply, ttft, total };
@@ -261,6 +265,7 @@ async function main() {
     }
   }
   check("no tool names in speech", toolSpeech.length === 0, toolSpeech.length ? toolSpeech : undefined);
+  check('nobody says "the user"', theUserSpeech.length === 0, theUserSpeech.length ? theUserSpeech : undefined);
   check("no hold lines (every turn got a real reply)", holdReplies.length === 0, holdReplies.length ? holdReplies : undefined);
   summary.ok = Object.values(summary.checks).every((c) => c.ok);
   summary.total_s = Math.round(now() / 100) / 10;
