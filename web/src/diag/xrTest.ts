@@ -5,7 +5,7 @@
 import { CanvasTexture, DoubleSide, Mesh, MeshBasicMaterial, PlaneGeometry, RingGeometry, SRGBColorSpace, type Object3D } from 'three';
 import { HandAdapter } from '../board/hand';
 import { SHEET } from '../board/model';
-import { boardToLocal, SheetProjector } from '../board/sheetMath';
+import { boardToLocal, SheetProjector, sheetToWorld } from '../board/sheetMath';
 import type { XRApp } from '../xr/world';
 import { DONE_BOX, HandFlow, HOLD_AT, LINE_FROM, LINE_TO, SKIP_BOX, TARGET_R, TARGETS, type HandResults } from './handFlow';
 import { frameStats, PinchCounter, selectRatio, type FrameStats, type P2 } from './stats';
@@ -85,6 +85,7 @@ export class XrTest {
   constructor(
     readonly app: XRApp,
     private readonly onUpdate: (stage: XrStage, line: string) => void,
+    private readonly windows = { frames72Ms: FRAMES_72_MS, frames90Ms: FRAMES_90_MS },
   ) {
     this.projector = new SheetProjector(app.sheetAnchor);
     this.offs.push(
@@ -166,7 +167,7 @@ export class XrTest {
       return;
     }
     this.buildOverlay();
-    this.startMeasure('frames72', performance.now(), FRAMES_72_MS);
+    this.startMeasure('frames72', performance.now(), this.windows.frames72Ms);
   }
 
   private startMeasure(stage: 'frames72' | 'frames90', now: number, ms: number): void {
@@ -203,7 +204,7 @@ export class XrTest {
           }
           this.results.rate_90.frame_rate_after = s.frameRate ? Math.round(s.frameRate) : null;
           if (this.results.rate_90.ok) {
-            this.startMeasure('frames90', performance.now(), FRAMES_90_MS);
+            this.startMeasure('frames90', performance.now(), this.windows.frames90Ms);
             return;
           }
         }
@@ -454,5 +455,15 @@ export async function createXrTest(container: HTMLElement, onUpdate: (stage: XrS
     offer: dev && q.get('offer') === '1',
     placementFallbackMs: dev && fallback > 0 ? fallback * 1000 : undefined,
   });
-  return new XrTest(app, onUpdate);
+  // Dev and emulator: short frame windows (?quick=1) and a handle for scripted hands.
+  const quick = dev && q.get('quick') === '1';
+  const test = new XrTest(app, onUpdate, quick ? { frames72Ms: 3000, frames90Ms: 2000 } : undefined);
+  if (dev) {
+    (globalThis as { __diagXr?: unknown }).__diagXr = {
+      test,
+      app,
+      toWorld: (pts: [number, number][], hCm = 1) => pts.map(([x, y]) => sheetToWorld(app.sheetAnchor, x, y, hCm)),
+    };
+  }
+  return test;
 }
