@@ -128,18 +128,20 @@ await call('xr', 'set-input-mode', { mode: 'controller' });
 await C.hold('left', { x: S.head.x - 0.3, y: 0.95, z: S.head.z - 0.1 }, { x: S.head.x - 0.3, y: 0.9, z: S.head.z - 1.1 });
 await C.hold('right', from, pts[0]);
 await sleep(2000);
-const n1 = (await board()).items.length;
+// Counted by the cards nobody has named: the Scribe may add its own cards meanwhile.
+const plain = (x) => x.items.filter((i) => i.kind === 'component' && i.label === null).length;
+const n1 = plain(await board());
 await R.strokeBoard('right', box(22, 30, 12, 7), 'near');
 await sleep(1200);
 b = await board();
 stage('a box by touch after the controllers came back', { items: b.items.length, input: await R.inputState(), round: (await roundState()).state });
-if (b.items.length !== n1 + 1) await fail('the controller did not draw after coming back', b);
+if (plain(b) !== n1 + 1) await fail('the controller did not draw after coming back', b);
 await shot('s05-controllers-back');
 await C.pressButton('right', 'primary');
 await sleep(1500);
 b = await board();
 stage('A undid the last box', { items: b.items.length, log: b.log.slice(-2), pulses: await page(() => globalThis.__xrApp.hapticLog().map((p) => `${p.hand}:${p.name}`)) });
-if (b.items.length !== n1 || b.log.at(-1).op !== 'undo') await fail('A did not undo the last action', b);
+if (plain(b) !== n1 || !b.log.some((e) => e.op === 'undo')) await fail('A did not undo the last action', b);
 
 // And down again: the rest is by hand. A fingertip pokes Pause on the round bar, then Resume, then holds End.
 await call('xr', 'set-input-mode', { mode: 'hand' });
