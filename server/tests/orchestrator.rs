@@ -1405,6 +1405,113 @@ async fn director_mode_speaks_without_tools_then_applies_the_directors_calls() {
     }));
 }
 
+#[tokio::test]
+async fn directors_show_question_and_hand_over_reach_the_browser_and_the_next_voice() {
+    let handover = "Say the cache loses a node at peak. What happens to reads?";
+    let llm = ScriptedLlm::with_creates(
+        vec![reply("Here is the problem. Ana will take the deep dive.")],
+        vec![director_reply(json!([
+            {"type": "tool_use", "id": "toolu_q", "name": "show_question", "input": {
+                "question": " Link shortener ",
+                "lines": ["100M new links a month", "  ", "Reads far outnumber writes"]
+            }},
+            {"type": "tool_use", "id": "toolu_h", "name": "hand_over", "input": {"to": "p2", "line": handover}}
+        ]))],
+    );
+    let (app, state) = test_app(llm.clone());
+    let st = new_state("s1", "sde.system_design.full", VoiceKind::Fish);
+    assert_eq!(st.floor, "p1");
+    let mut events = st.events.subscribe();
+    state.registry.insert(st);
+
+    let res = post_chat(
+        &app,
+        SECRET,
+        chat_body(
+            "s1",
+            "p1",
+            json!([{"role": "user", "content": "I am ready."}]),
+        ),
+    )
+    .await;
+    assert_eq!(
+        res.text(),
+        "Here is the problem. Ana will take the deep dive."
+    );
+
+    // show_question: the brief card, trimmed, without empty lines.
+    let mut got = Vec::new();
+    while got.len() < 2 {
+        let ev = tokio::time::timeout(Duration::from_secs(2), events.recv())
+            .await
+            .expect("director events")
+            .unwrap();
+        got.push(ev);
+    }
+    match &got[0] {
+        ServerEvent::RoundState(r) => {
+            assert_eq!(r.brief.question, "Link shortener");
+            assert_eq!(
+                r.brief.lines,
+                ["100M new links a month", "Reads far outnumber writes"]
+            );
+        }
+        other => panic!("expected the brief first: {other:?}"),
+    }
+    // hand_over: the event and its wire shape (the web and headset clients switch speakers on it).
+    assert_eq!(
+        got[1],
+        ServerEvent::HandOver {
+            from: "p1".into(),
+            to: "p2".into(),
+            opening_line: handover.into(),
+        }
+    );
+    assert_eq!(
+        serde_json::to_value(&got[1]).unwrap(),
+        json!({"t": "panel.hand_over", "d": {"from": "p1", "to": "p2", "opening_line": handover}})
+    );
+    {
+        let st = state.registry.get("s1").unwrap();
+        let st = st.lock().await;
+        assert_eq!(st.floor, "p2", "the floor moved");
+        assert_eq!(
+            st.pending_handover.get("p2").map(String::as_str),
+            Some(handover)
+        );
+        let now = Instant::now();
+        assert_eq!(st.round_state(now).floor, "p2");
+        assert_eq!(st.round_state(now).brief.question, "Link shortener");
+    }
+
+    // The new panelist's voice asks with the hand-over marker and gets the prepared line, no model call.
+    let res = post_chat(
+        &app,
+        SECRET,
+        chat_body(
+            "s1",
+            "p2",
+            json!([{"role": "user", "content": "[event: handover]"}]),
+        ),
+    )
+    .await;
+    assert_eq!(res.text(), handover);
+    assert_eq!(llm.calls(), 1, "only the first reply called the model");
+
+    // A hand-over to itself or to nobody is ignored and leaves the floor alone.
+    let st = state.registry.get("s1").unwrap();
+    let mut st = st.lock().await;
+    let call = |to: &str| ir_server::orchestrator::tools::ToolCall {
+        id: "toolu_x".into(),
+        name: "hand_over".into(),
+        input: json!({"to": to, "line": "Hi."}),
+        panelist_id: "p2".into(),
+    };
+    assert!(st.apply_tool_calls(&[call("p2")]).is_empty());
+    assert!(st.apply_tool_calls(&[call("p9")]).is_empty());
+    assert_eq!(st.floor, "p2");
+}
+
 // ---------- dev voice spike page ----------
 
 #[tokio::test]
@@ -2793,6 +2900,65 @@ async fn director_retries_once_on_the_fallback_model() {
     assert_eq!(created[1].fallbacks, None);
 }
 
+#[tokio::test]
+async fn a_director_with_both_models_down_changes_nothing_and_says_nothing() {
+    let llm = ScriptedLlm::with_creates(
+        vec![reply("Okay. Let's move on to the design."), reply("Go on.")],
+        vec![director_reply(json!([
+            {"type": "tool_use", "id": "toolu_d1", "name": "next_phase", "input": {}}
+        ]))],
+    );
+    *llm.failing_creates.lock().unwrap() = 2;
+    let (app, state) = test_app(llm.clone());
+    let st = prod_state("s1");
+    let mut events = st.events.subscribe();
+    state.registry.insert(st);
+    let res = post_chat(
+        &app,
+        SECRET,
+        chat_body(
+            "s1",
+            "p1",
+            json!([{"role": "user", "content": "The API is two calls."}]),
+        ),
+    )
+    .await;
+    assert_eq!(res.text(), "Okay. Let's move on to the design.");
+    // Both director calls failed: no event reaches the browser, the round stays where it was.
+    assert!(
+        tokio::time::timeout(Duration::from_millis(500), events.recv())
+            .await
+            .is_err(),
+        "the browser hears nothing of a failed director"
+    );
+    assert_eq!(llm.created.lock().unwrap().len(), 2);
+    {
+        let st = state.registry.get("s1").unwrap();
+        let st = st.lock().await;
+        assert_eq!(st.phase_idx, 0);
+        assert!(
+            !st.degraded,
+            "a director outage never marks the round degraded"
+        );
+    }
+    // The next live turn is untouched by it.
+    let res = post_chat(
+        &app,
+        SECRET,
+        chat_body(
+            "s1",
+            "p1",
+            json!([
+                {"role": "user", "content": "The API is two calls."},
+                {"role": "assistant", "content": "Okay. Let's move on to the design."},
+                {"role": "user", "content": "A cache in front of the store."}
+            ]),
+        ),
+    )
+    .await;
+    assert_eq!(res.text(), "Go on.");
+}
+
 fn has_thinking(req: &MessagesRequest) -> bool {
     req.messages.iter().any(|m| {
         m.content.iter().any(|b| {
@@ -2942,6 +3108,63 @@ async fn slow_fallback_gets_the_rest_of_the_turn() {
     .await;
     assert_eq!(res.text(), "Okay, slow but here.");
     assert_eq!(llm.request(1).model, "claude-haiku-5-5");
+}
+
+#[tokio::test(start_paused = true)]
+async fn an_outage_is_answered_within_3_s_and_a_hang_before_fish_gives_up() {
+    // Prod timing and models; every attempt refused the way a 529 comes back (about 0.6 s after the request).
+    let refused = || Script::DelayFail(Duration::from_millis(600), ClaudeError::Overloaded);
+    let llm = ScriptedLlm::new(vec![refused(), refused(), refused(), reply("Never asked.")]);
+    let (app, state) = test_app_with(llm.clone(), |o| {
+        o.first_text_timeout = OrchestratorOptions::default().first_text_timeout
+    });
+    state.registry.insert(prod_state("s1"));
+    let t0 = tokio::time::Instant::now();
+    let res = post_chat(
+        &app,
+        SECRET,
+        chat_body("s1", "p1", json!([{"role": "user", "content": "Hi."}])),
+    )
+    .await;
+    let took = t0.elapsed();
+    assert_eq!(res.text(), "Sorry, give me a second.", "never silence");
+    assert!(res.done);
+    assert!(took < Duration::from_secs(3), "{took:?}");
+    let models: Vec<String> = (0..llm.calls()).map(|i| llm.request(i).model).collect();
+    assert_eq!(
+        models,
+        ["claude-sonnet-5-5", "claude-haiku-5-5", "claude-sonnet-5-5"],
+        "fast retry on the fallback, then the live model once more"
+    );
+    // The second attempt went out at once, the third after the short pause.
+    let times = llm.stream_times.lock().unwrap().clone();
+    assert_eq!(times[1] - times[0], Duration::from_millis(600));
+    assert_eq!(times[2] - times[1], Duration::from_millis(1000));
+
+    // Every model hangs without a byte: the hold line still goes out inside Fish's 10 s per reply.
+    let llm = ScriptedLlm::new(vec![Script::Hang, Script::Hang, Script::Hang]);
+    let (app, state) = test_app_with(llm.clone(), |o| {
+        o.first_text_timeout = OrchestratorOptions::default().first_text_timeout
+    });
+    state.registry.insert(prod_state("s2"));
+    let t0 = tokio::time::Instant::now();
+    let res = post_chat(
+        &app,
+        SECRET,
+        chat_body("s2", "p1", json!([{"role": "user", "content": "Hi."}])),
+    )
+    .await;
+    let took = t0.elapsed();
+    assert_eq!(res.text(), "Sorry, give me a second.");
+    assert!(
+        took <= OrchestratorOptions::default().turn_deadline + Duration::from_millis(50),
+        "{took:?}"
+    );
+    assert_eq!(
+        llm.calls(),
+        2,
+        "a hang is not an overload: no third attempt"
+    );
 }
 
 #[tokio::test]
