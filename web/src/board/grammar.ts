@@ -1,7 +1,9 @@
-// The instant voice grammar for labels: "call that X", "name it X", "label this X",
-// "that's the X", "this is our X". Strict on purpose: it changes the board without a
-// ghost step, so it only fires on a naming phrase with a short noun phrase, and only when
-// there is a focus card to name. Anything looser goes to the Scribe, which shows ghosts.
+// The instant voice grammar for labels.
+// - Commands ("call that X", "name it X", "label this X", "rename it to X") label the focus
+//   card at once: an explicit naming verb, a short noun phrase, and a fresh focus.
+// - Statements ("that's the X", "this is our X", "it's the X") never change the board: they
+//   suggest the label as a ghost on the focus card (pinch to accept, settles in 4 s).
+// Anything looser goes to the Scribe, which shows ghosts too.
 import type { Board } from '../shared/types';
 import { findItem } from './model';
 
@@ -19,8 +21,16 @@ const STATEMENT = new RegExp(String.raw`^${LEAD}(?:that|this|it)(?:'s|’s|\s+is
 
 const DET = /^(?:the|a|an|our|my)\s+/i;
 
-/** A command whose tail is an idiom, not a name: "call it a day", "call that out", "name it later". */
-const IDIOM_TAIL = /^(?:out|up|off|later|done|quits|whatever|one|a day|back|in|on|over|for|it|that|this|again|now)\b/i;
+/** A command whose tail is an idiom, not a name: "call it a day", "call that out", "call it even". */
+const IDIOM_TAIL = new RegExp(
+  String.raw`^(?:(?:out|up|off|later|done|quits|whatever|one|back|in|on|over|for|it|that|this|again|now|even|good|fine|fair|great|bad|ok|okay|square|right|wrong|enough|lucky|close)\b` +
+    String.raw`|(?:a|an)\s+(?:day|night|win|wrap|draw|deal|mistake|loss|tie|few|lot|bit|fail|success|bust|wash|toss[- ]?up|stretch|guess|fluke|miss|break|truce|steal)\b` +
+    String.raw`|(?:fair|good)\s+enough\b|(?:a\s+)?(?:few|couple)\b)`,
+  'i',
+);
+
+/** How long a touched or created card stays the target of an instant voice label. */
+export const VOICE_FOCUS_MS = 8000;
 
 /** Pronouns, verbs and function words never appear in a short card name. */
 const NOT_IN_NAMES = new Set([
@@ -65,36 +75,45 @@ function nounPhrase(raw: string, maxWords: number, statement: boolean): string |
   return /^[a-z]/.test(s) ? s[0]!.toUpperCase() + s.slice(1) : s;
 }
 
-/**
- * A label from one finished speech segment, or null when the segment is not a label
- * command. Use voiceLabel to also require a focus card.
- */
+/** A label from the command form only ("call that X"), or null. */
 export function parseLabelCommand(text: string): { label: string } | null {
   const t = text.trim().replace(/\s+/g, ' ');
   if (!t) return null;
   const cmd = COMMAND.exec(t);
-  if (cmd?.[1]) {
-    if (IDIOM_TAIL.test(cmd[1].trim())) return null;
-    const l = nounPhrase(cmd[1], MAX_COMMAND_WORDS, false);
-    return l ? { label: l } : null;
-  }
+  if (!cmd?.[1] || IDIOM_TAIL.test(cmd[1].trim())) return null;
+  const l = nounPhrase(cmd[1], MAX_COMMAND_WORDS, false);
+  return l ? { label: l } : null;
+}
+
+/** A label from the statement form ("that's the X", "this is our X", "it's the X"), or null. Only ever a suggestion. */
+export function parseLabelStatement(text: string): { label: string } | null {
+  const t = text.trim().replace(/\s+/g, ' ');
+  if (!t || COMMAND.test(t)) return null;
   const st = STATEMENT.exec(t);
-  if (st?.[1]) {
-    const l = nounPhrase(st[1], MAX_STATEMENT_WORDS, true);
-    return l ? { label: l } : null;
-  }
-  return null;
+  if (!st?.[1]) return null;
+  const l = nounPhrase(st[1], MAX_STATEMENT_WORDS, true);
+  return l ? { label: l } : null;
 }
 
 const NAMEABLE = new Set(['component', 'class', 'group', 'metric', 'sticky']);
 
+export interface VoiceLabel {
+  id: string;
+  label: string;
+  /** commit: apply item.label now (command form). suggest: show it as a ghost (statement form). */
+  mode: 'commit' | 'suggest';
+}
+
 /**
- * The label op target for a speech segment: the focus card (fresh focus when the caller
- * passes one) and the label, or null when there is no card to name or no label command.
+ * What a speech segment does to the board: label the focus card now, suggest a label as a
+ * ghost, or nothing. `focus` must be the fresh focus (BoardStore.freshFocus(now,
+ * VOICE_FOCUS_MS)); null means nothing was touched recently, and nothing happens.
  */
-export function voiceLabel(board: Board, text: string, focus: string | null = board.focus): { id: string; label: string } | null {
+export function voiceLabel(board: Board, text: string, focus: string | null): VoiceLabel | null {
   const it = findItem(board, focus);
   if (!it || !NAMEABLE.has(it.kind)) return null;
-  const parsed = parseLabelCommand(text);
-  return parsed ? { id: it.id, label: parsed.label } : null;
+  const cmd = parseLabelCommand(text);
+  if (cmd) return { id: it.id, label: cmd.label, mode: 'commit' };
+  const st = parseLabelStatement(text);
+  return st ? { id: it.id, label: st.label, mode: 'suggest' } : null;
 }

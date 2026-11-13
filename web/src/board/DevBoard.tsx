@@ -3,7 +3,8 @@
 // bin to delete, type a voice line to label the selected card, undo.
 import { useEffect, useRef, useState } from 'preact/hooks';
 import type { BoardOp } from '../shared/types';
-import { parseLabelCommand, voiceLabel } from './grammar';
+import { ghostRect, GhostLayer } from './ghosts';
+import { parseLabelCommand, parseLabelStatement, VOICE_FOCUS_MS, voiceLabel } from './grammar';
 import { BoardInput } from './input';
 import { HLD_KIT } from './kits';
 import { COMPONENT_NAMES, emptyBoard, IdGen } from './model';
@@ -43,6 +44,8 @@ export interface DevBoardHandle {
   toClient(x: number, y: number): [number, number];
   /** Same path as the text box: a voice line labels the selected card. */
   say(text: string): string;
+  /** Where a pending ghost can be clicked (board cm), or null. */
+  ghostRect(opId: string): { x: number; y: number; w: number; h: number } | null;
   /** The board, tray and bin rendered offscreen at `pxPerCm`, as a PNG data URL. */
   snapshot(pxPerCm?: number): string;
 }
@@ -82,12 +85,26 @@ export function DevBoard() {
       if (!r.duplicate) setStatus(describe(op, r.accepted));
     };
     const adapter = new MouseAdapter(canvas, (x, y) => view.toBoard(x, y));
-    const input = new BoardInput(store, adapter, kit, apply, { ids });
+    // Ghosts (Scribe or voice suggestions) take the pinches that land on them.
+    const ghosts = new GhostLayer(adapter, store, kit, {
+      accept: (g) => {
+        const src = store.isLocalGhost(g.op_id) ? 'voice_grammar' : 'scribe';
+        apply({ op_id: g.op_id, src, op: g.op, args: g.args } as BoardOp);
+      },
+      reject: (id) => {
+        store.rejectGhost(id);
+        setStatus('Suggestion dismissed.');
+      },
+    });
+    const input = new BoardInput(store, ghosts, kit, apply, { ids });
 
     let frame = 0;
     const paint = () => {
       frame = 0;
-      view.draw(store.board, { highlight: input.hover, overlays: input.overlays });
+      ghosts.update();
+      view.draw(store.board, { highlight: input.hover, overlays: input.overlays, rings: ghosts.rings() });
+      // Keep ticking while suggestions settle.
+      if (store.board.ghosts.length) schedule();
     };
     const schedule = () => {
       if (!frame) frame = requestAnimationFrame(paint);
@@ -120,21 +137,31 @@ export function DevBoard() {
         return [r.left + px, r.top + py];
       },
       say(line) {
-        const hit = voiceLabel(store.board, line);
+        const hit = voiceLabel(store.board, line, store.freshFocus(performance.now(), VOICE_FOCUS_MS));
         let msg: string;
-        if (hit) {
+        if (hit?.mode === 'commit') {
           apply({ op_id: ids.next('op'), src: 'voice_grammar', op: 'item.label', args: { id: hit.id, text: hit.label } });
           return `Labelled "${hit.label}".`;
         }
-        if (!parseLabelCommand(line)) msg = 'Not a label. Try "call that the order service".';
+        if (hit) {
+          store.suggest({ op_id: ids.next('op'), src: 'scribe', op: 'item.label', args: { id: hit.id, text: hit.label } });
+          msg = `Suggested "${hit.label}". Click it to keep it.`;
+          setStatus(msg);
+          return msg;
+        }
+        if (!parseLabelCommand(line) && !parseLabelStatement(line)) msg = 'Not a label. Try "call that the order service".';
         else msg = 'Select a card first, then say its name.';
         setStatus(msg);
         return msg;
       },
+      ghostRect(opId) {
+        const g = store.board.ghosts.find((x) => x.op_id === opId);
+        return g ? ghostRect(store.board, g) : null;
+      },
       snapshot(px = 20) {
         const c = document.createElement('canvas');
         const v = new BoardView(c, { pxPerCm: px, originCm: { x: kit.view.x, y: kit.view.y }, widthCm: kit.view.w, heightCm: kit.view.h, kit });
-        v.draw(store.board, { highlight: input.hover, overlays: input.overlays });
+        v.draw(store.board, { highlight: input.hover, overlays: input.overlays, rings: ghosts.rings() });
         return c.toDataURL('image/png');
       },
     };
@@ -165,6 +192,7 @@ export function DevBoard() {
       offStore();
       offOverlay();
       input.destroy();
+      ghosts.destroy();
       adapter.destroy();
       if (window.__board === handle) delete window.__board;
     };
