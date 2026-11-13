@@ -22,6 +22,8 @@ export const OVERRIDES_ALLOWED = ["system_prompt", "first_message", "voice_id", 
 // Speech models, picked by the voice latency spike (FISH_ASR_MODEL / FISH_TTS_MODEL override them).
 export const ASR_MODEL = "deepgram:nova-3";
 export const TTS_MODEL = "s2.1-pro";
+// Turn-taking preset (relaxed waits 900 ms after speech, balanced 550, eager 450); FISH_EAGERNESS overrides.
+export const EAGERNESS = "relaxed";
 const ASR_MODELS = ["deepgram:nova-3", "fish_audio:transcribe-stream-1", "elevenlabs:scribe_v2_realtime"];
 const TTS_MODELS = ["s2.1-pro", "drama-3"];
 
@@ -30,7 +32,9 @@ const SYSTEM_PROMPT =
   "for every turn, so keep replies short and spoken, one question at a time.";
 
 /** The draft config sent on create and on every update. */
-export function buildConfig({ appOrigin, llmSecret, asrModel = ASR_MODEL, ttsModel = TTS_MODEL }) {
+export function buildConfig({
+  appOrigin, llmSecret, asrModel = ASR_MODEL, ttsModel = TTS_MODEL, eagerness = EAGERNESS,
+}) {
   const origin = String(appOrigin || "").replace(/\/+$/, "");
   if (!/^https:\/\/[^/]+$/.test(origin)) {
     throw new Error("APP_ORIGIN must be an https origin like https://rounds.dijmo.com");
@@ -38,6 +42,7 @@ export function buildConfig({ appOrigin, llmSecret, asrModel = ASR_MODEL, ttsMod
   if (!llmSecret) throw new Error("FISH_LLM_SECRET is required");
   if (!ASR_MODELS.includes(asrModel)) throw new Error(`ASR model must be one of ${ASR_MODELS.join(", ")}`);
   if (!TTS_MODELS.includes(ttsModel)) throw new Error(`TTS model must be one of ${TTS_MODELS.join(", ")}`);
+  if (!["relaxed", "balanced", "eager"].includes(eagerness)) throw new Error("eagerness must be relaxed, balanced or eager");
   return {
     prompt: {
       system_prompt: SYSTEM_PROMPT,
@@ -50,7 +55,8 @@ export function buildConfig({ appOrigin, llmSecret, asrModel = ASR_MODEL, ttsMod
       tts_model: ttsModel,
       speaking_language: "en",
     },
-    asr: { model: asrModel },
+    // English only: the multilingual mode is not needed and can only slow recognition down.
+    asr: { model: asrModel, multilingual: false },
     llm: {
       custom: {
         base_url: `${origin}/v1`,
@@ -64,7 +70,7 @@ export function buildConfig({ appOrigin, llmSecret, asrModel = ASR_MODEL, ttsMod
     conversation: {
       max_duration_seconds: 1800,
       hangup_after_seconds: HANGUP_AFTER_MAX_SECONDS,
-      eagerness: "relaxed",
+      eagerness,
       interruption_sensitivity: "low",
       // Fish starts our endpoint before the turn is confirmed; the server handles dropped drafts.
       speculative_response: true,
@@ -133,6 +139,7 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
     llmSecret: env.FISH_LLM_SECRET,
     asrModel: env.FISH_ASR_MODEL || ASR_MODEL,
     ttsModel: env.FISH_TTS_MODEL || TTS_MODEL,
+    eagerness: env.FISH_EAGERNESS || EAGERNESS,
   });
   const settings = buildAgentSettings();
 
