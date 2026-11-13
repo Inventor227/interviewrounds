@@ -456,6 +456,51 @@ pub const END_REASONS: [&str; 5] = [
     "headset_removed",
 ];
 
+/// Ends a session that a newer one replaces, only while it has never started: the check runs under the session
+/// lock (a socket hello flips the status there first) and again in the database. A session that started meanwhile
+/// is left alone. Returns whether it was ended.
+pub async fn end_unstarted(app: &AppState, id: Uuid) -> anyhow::Result<bool> {
+    let key = id.to_string();
+    let handle = app.registry.get(&key);
+    let mut guard = match &handle {
+        Some(h) => Some(h.lock().await),
+        None => None,
+    };
+    if guard
+        .as_deref()
+        .is_some_and(|st| st.status != SessionStatus::Created)
+    {
+        return Ok(false);
+    }
+    let ended: Option<Uuid> = sqlx::query_scalar(
+        "update sessions set status = 'abandoned', ended_reason = 'user_ended', ended_at = now() \
+         where id = $1 and status = 'created' and started_at is null returning id",
+    )
+    .bind(id)
+    .fetch_optional(&app.db)
+    .await?;
+    if ended.is_none() {
+        return Ok(false);
+    }
+    if let Some(st) = guard.as_deref_mut() {
+        // A hello that arrives now finds the round over.
+        st.status = SessionStatus::Abandoned;
+    }
+    drop(guard);
+    tracing::info!(session_id = %id, "unstarted session replaced by a newer one");
+    if let Some(hub) = app.hubs.get(&key) {
+        hub.finish(app, "user_ended", false).await;
+    }
+    app.registry.remove(&key);
+    let app = app.clone();
+    tokio::spawn(async move {
+        if let Err(err) = settle_fish(&app, id).await {
+            tracing::warn!(session_id = %id, error = %format!("{err:#}"), "could not settle Fish minutes; the janitor retries");
+        }
+    });
+    Ok(true)
+}
+
 /// Ends a session once: saves the last turns, sets `scoring` (or `abandoned` when the candidate never spoke),
 /// tells the sockets (`round.ended`, then close 4409), drops it from memory and settles its Fish minutes.
 /// Returns false when it had already ended.

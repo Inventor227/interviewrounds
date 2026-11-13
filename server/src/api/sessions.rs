@@ -529,7 +529,7 @@ async fn create_inner(
     let (token, _, _) = persist::issue_token(&mut tx, session_id, false).await?;
     tx.commit().await?;
     for old in replaced {
-        if let Err(err) = persist::end_session(app, old, "user_ended").await {
+        if let Err(err) = persist::end_unstarted(app, old).await {
             tracing::warn!(session_id = %old, error = %format!("{err:#}"), "could not end a session that never started");
         }
     }

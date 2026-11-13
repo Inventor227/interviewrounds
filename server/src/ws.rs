@@ -404,7 +404,10 @@ impl Hub {
                 return;
             }
             h.held = false;
-            (std::mem::take(&mut h.held_logged), h.connections > 0)
+            let connected = h.connections > 0;
+            // Without a socket the clock stays stopped; the resume is logged when the next connect runs it.
+            let logged = connected && std::mem::take(&mut h.held_logged);
+            (logged, connected)
         };
         let at_ms = {
             let mut st = handle.lock().await;
@@ -573,6 +576,15 @@ pub async fn attach(app: &AppState, id: Uuid, handle: Arc<Mutex<SessionState>>) 
     let prewarm = board
         .as_ref()
         .map(|lb| (lb.session.board.clone(), handle.clone()));
+    // A live round loaded after a restart is held until the user is back; the hold is logged as a pause so the
+    // report's round time leaves it out too.
+    let restart_pause: Option<i64> = match started_at {
+        Some(_) => {
+            let st = handle.lock().await;
+            (st.status == SessionStatus::Live).then(|| st.elapsed_ms(Instant::now()) as i64)
+        }
+        None => None,
+    };
     let (tx, _) = broadcast::channel(256);
     let hub = Arc::new(Hub {
         session_id: id,
@@ -593,7 +605,7 @@ pub async fn attach(app: &AppState, id: Uuid, handle: Arc<Mutex<SessionState>>) 
             ending: None,
             // A started round loaded after a restart waits for the user like one whose socket dropped.
             held: started_at.is_some(),
-            held_logged: false,
+            held_logged: restart_pause.is_some(),
         }),
         acks: std::sync::Mutex::new(HashMap::new()),
         whiteboard,
@@ -611,6 +623,12 @@ pub async fn attach(app: &AppState, id: Uuid, handle: Arc<Mutex<SessionState>>) 
             return existing.clone();
         }
         map.insert(key, hub.clone());
+    }
+    if let Some(at_ms) = restart_pause {
+        let d = json!({"kind": "pause", "reason": "restart", "at_ms": at_ms});
+        if let Err(err) = store_event(app, id, "ui.event", &d).await {
+            tracing::warn!(session_id = %id, error = %err, "could not log the restart hold");
+        }
     }
     if let Some((board, handle)) = prewarm {
         let round_type = handle.lock().await.round.round_type.clone();
@@ -1079,11 +1097,12 @@ async fn run_socket(app: AppState, id: String, socket: WebSocket) {
 
 async fn connect(app: &AppState, hub: &Hub, handle: &Mutex<SessionState>, record: TokenRecord) {
     hub.set_ack(record.token_id, record.last_client_seq);
-    let held = {
+    let (held, resume_owed) = {
         let mut h = hub.inner.lock().await;
         h.connections += 1;
         h.disconnected_since = None;
-        h.held
+        let owed = !h.held && std::mem::take(&mut h.held_logged);
+        (h.held, owed)
     };
     let now = Instant::now();
     let started = {
@@ -1108,6 +1127,13 @@ async fn connect(app: &AppState, hub: &Hub, handle: &Mutex<SessionState>, record
     if started {
         hub.inner.lock().await.wall_start = Some(Utc::now());
     }
+    if resume_owed {
+        // The user came back while no socket was connected; the clock runs from now.
+        let d = json!({"kind": "resume", "reason": "back", "at_ms": elapsed_ms(handle).await});
+        if let Err(err) = store_event(app, hub.session_id, "ui.event", &d).await {
+            tracing::warn!(session_id = %hub.session_id, error = %err, "could not log the return");
+        }
+    }
     let res = if started {
         sqlx::query(
             "update sessions set status = 'live', started_at = now(), last_socket_at = now() \
@@ -1122,8 +1148,17 @@ async fn connect(app: &AppState, hub: &Hub, handle: &Mutex<SessionState>, record
             .execute(&app.db)
             .await
     };
-    if let Err(err) = res {
-        tracing::warn!(session_id = %hub.session_id, error = %err, "could not save the socket start");
+    match res {
+        // The database no longer has it waiting to start: a newer session replaced it. It does not go live.
+        Ok(r) if started && r.rows_affected() == 0 => {
+            handle.lock().await.status = SessionStatus::Abandoned;
+            tracing::info!(session_id = %hub.session_id, "hello for a replaced session");
+            hub.close_all(CLOSE_ENDED, "session replaced");
+        }
+        Ok(_) => {}
+        Err(err) => {
+            tracing::warn!(session_id = %hub.session_id, error = %err, "could not save the socket start");
+        }
     }
 }
 

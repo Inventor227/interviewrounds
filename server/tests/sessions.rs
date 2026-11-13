@@ -1510,3 +1510,26 @@ async fn a_failed_resume_mint_keeps_the_old_token_and_does_not_count() {
         "the old voice was not ended"
     );
 }
+
+#[tokio::test]
+async fn a_session_whose_hello_is_landing_is_never_replaced() {
+    let app = live::test_app(Options::default()).await;
+    let cookie = app.guest().await;
+    let first = app.create(&cookie, short_req("fake")).await;
+    assert_eq!(first.status, StatusCode::OK, "{}", first.body);
+    let id = first.body["session_id"].as_str().unwrap().to_string();
+    // The hello has flipped the round live in memory; its database write has not landed yet.
+    app.state
+        .registry
+        .get(&id)
+        .expect("in memory")
+        .lock()
+        .await
+        .status = ir_server::orchestrator::SessionStatus::Live;
+    let second = app.create(&cookie, short_req("fake")).await;
+    assert_eq!(second.status, StatusCode::OK, "{}", second.body);
+    let (status, reason) = status_of(&app, &id).await;
+    assert_eq!(status, "created", "not ended");
+    assert_eq!(reason, None);
+    assert!(app.state.registry.get(&id).is_some(), "still in memory");
+}
