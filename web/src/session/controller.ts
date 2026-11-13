@@ -113,8 +113,15 @@ export const SCORING_SLOW_MS = 60_000;
 export const SPOKEN_MIN_CHARS = 24;
 /** At most this much of the reply is reported. */
 export const SPOKEN_MAX_CHARS = 60;
-/** The mic stays closed this long at most around a typed long-answer marker. */
+/** The mic stays closed this long at most around a typed long-answer marker when the interviewer does not react. */
 export const LONG_ANSWER_MUTE_MS = 2500;
+/**
+ * Once the interviewer reacts to the marker (thinking), the mic stays closed until its cut-in has been audible this
+ * long, and this long at most in all. With a real voice the cut-in came 3.7 s after the marker; a candidate still
+ * talking when the mic reopened at `thinking` cut it off at its first word.
+ */
+export const LONG_ANSWER_CUT_IN_MS = 1500;
+export const LONG_ANSWER_MAX_MUTE_MS = 8000;
 /** After the mute for a long-answer marker took effect, wait this long before sending it. */
 export const LONG_ANSWER_SETTLE_MS = 600;
 /** Longest wait for the mic mute itself before the marker goes out anyway. */
@@ -1405,7 +1412,15 @@ export class RoundController {
     if (m === 'thinking') this.latency.thinking(now);
     if (m === 'thinking' || m === 'speaking') {
       this.sawAgent = true;
-      this.endLongAnswerMute(); // the agent took the turn: the mic opens again
+      if (!this.longAnswerMuted) {
+        // nothing held
+      } else if (m === 'thinking') {
+        // The interviewer is answering the marker: keep the mic closed until the cut-in is heard (bounded).
+        this.holdLongAnswerMute(LONG_ANSWER_MAX_MUTE_MS);
+      } else {
+        // The cut-in is playing: the mic opens once its first words are out.
+        this.holdLongAnswerMute(LONG_ANSWER_CUT_IN_MS);
+      }
     }
     // The reply is over: report a short one that never reached the usual length.
     if (m !== 'speaking' && this.spokenPending?.panelistId === t.panelistId) this.flushSpoken();
@@ -1665,6 +1680,11 @@ export class RoundController {
         this.endLongAnswerMute();
       }
     }
+  }
+
+  private holdLongAnswerMute(ms: number): void {
+    if (this.longAnswerUnmute) clearTimeout(this.longAnswerUnmute);
+    this.longAnswerUnmute = setTimeout(() => this.endLongAnswerMute(), ms);
   }
 
   private endLongAnswerMute(): void {

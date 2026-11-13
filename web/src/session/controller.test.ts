@@ -1477,7 +1477,28 @@ describe('RoundController in the room', () => {
     expect(count(t.sentEvents, LA)).toBe(1);
     expect(t.muted).toBe(true);
     t.hold = false;
-    t.mode('thinking'); // the interviewer takes the turn
+    // The interviewer answers the marker: the mic stays closed through its thinking and its first words, or a
+    // candidate still talking would cut the cut-in off (seen with the real voice).
+    t.mode('thinking');
+    await vi.advanceTimersByTimeAsync(3_500);
+    expect(t.muted).toBe(true);
+    t.mode('speaking');
+    await vi.advanceTimersByTimeAsync(1_499);
+    expect(t.muted).toBe(true);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(t.muted).toBe(false);
+  });
+
+  it('a_long_answer_marker_answered_by_thinking_alone_opens_the_mic_after_8_s', async () => {
+    const h = harness();
+    const t = await live(h);
+    await talkTooLong(t);
+    await vi.advanceTimersByTimeAsync(800);
+    expect(count(t.sentEvents, '[event: long_answer]')).toBe(1);
+    t.mode('thinking');
+    await vi.advanceTimersByTimeAsync(7_999);
+    expect(t.muted).toBe(true);
+    await vi.advanceTimersByTimeAsync(1);
     expect(t.muted).toBe(false);
   });
 
