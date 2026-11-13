@@ -8,6 +8,7 @@ pub mod db;
 pub mod error;
 pub mod fish;
 pub mod orchestrator;
+pub mod scoring;
 
 pub use app::{AppState, router};
 pub use config::Config;
