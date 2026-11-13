@@ -36,6 +36,13 @@ describe('CapNotice', () => {
     expect(root.querySelector('time')).toBeNull();
   });
 
+  it('guest_limit_without_a_reset_says_the_round_is_used', async () => {
+    const root = await renderNode(<CapNotice reason="guest_daily_limit" resetsAt={null} now={now} />);
+    expect(root.querySelector('.cap-title')?.textContent).toBe('You’ve used the guest round on this device');
+    expect(root.querySelector('.cap-body')?.textContent).toBe('Your reports and history stay here.');
+    expect(root.textContent).not.toMatch(/soon|come back/i);
+  });
+
   it('guest_limits_never_promise_sign_in', async () => {
     for (const reason of LIMIT_REASONS) {
       const root = await renderNode(<CapNotice reason={reason} resetsAt={resets} now={now} isGuest signInAvailable={false} />);

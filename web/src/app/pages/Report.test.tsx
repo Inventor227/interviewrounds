@@ -93,6 +93,16 @@ describe('Report', () => {
     expect($$(root, 'drill').map((d) => d.getAttribute('href'))).toEqual([null, '/round/sde.system_design.short']);
   });
 
+  it('report_share_warns_that_a_meeting_names_people', async () => {
+    useFakeServer();
+    const root = await renderApp('/report/meeting');
+    expect($(root, 'share-names-note')).not.toBeNull();
+    cleanup();
+    useFakeServer();
+    const demo = await renderApp('/report/demo');
+    expect($(demo, 'share-names-note')).toBeNull();
+  });
+
   it('report_share_shows_what_the_live_link_shares', async () => {
     const report = { ...fakeReport('demo'), share: { public_slug: 'k7m2q1', include_quotes: true } };
     useFakeServer({ routes: { 'GET /api/sessions/demo/report': () => report } });
