@@ -111,7 +111,7 @@ b = await board();
 const drawn = b.items.filter((i) => i.kind === 'component' && i.label === null).sort((p, q) => p.x - q.x);
 if (drawn.length < 2) await fail('the box pinched after the change did not become a card', b);
 const [c1, c2] = drawn;
-await draw(L.along([[c1.x + c1.w + 1.0, c1.y + c1.h / 2], [c2.x + 1.5, c2.y + c2.h / 2]], 1.5));
+await R.drawSettled(L.along([[c1.x + c1.w + 0.6, c1.y + c1.h / 2], [c2.x + 1.5, c2.y + c2.h / 2]], 1.5));
 await sleep(1200);
 b = await board();
 stage('box and connector by hand', { items: b.items.length, edges: b.edges });

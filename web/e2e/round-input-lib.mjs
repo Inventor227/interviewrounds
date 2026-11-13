@@ -270,3 +270,25 @@ export async function pokeBar(re, holdS = 0.5) {
   await xr('run-sequence', { device: 'hand-right', steps, body: 'fixed', gaze: 'fixed', idleHand: 'keep' });
   await sleep(700);
 }
+
+/**
+ * A pinch stroke through board points (cm) that waits at its first point before pinching. The board takes a
+ * pinch's place from the last frame it saw, and at the emulator's two or three frames a second that frame can
+ * be from the middle of the reach; a second and a half at rest puts the pinch where the hand is.
+ */
+export async function drawSettled(points, segment = 0.1) {
+  const r4 = (p) => ({ x: Math.round(p.x * 1e4) / 1e4, y: Math.round(p.y * 1e4) / 1e4, z: Math.round(p.z * 1e4) / 1e4 });
+  const w = (await toWorld(points, 1)).map(r4);
+  const last = w[w.length - 1];
+  const steps = [
+    { label: 'reach', position: w[0], anchor: 'grasp', duration: 0.6, pinch: 0 },
+    { label: 'settle', duration: 1.5 },
+    { label: 'pinch', pinch: 1, duration: 0.15 },
+    { label: 'hold', duration: 0.5 },
+    ...w.slice(1).map((p, i) => ({ label: `p${i}`, position: p, duration: segment })),
+    { label: 'hold end', duration: 0.8 },
+    { label: 'release', pinch: 0, duration: 0.15 },
+    { label: 'lift', position: { x: last.x, y: last.y + 0.06, z: last.z }, duration: 0.3 },
+  ];
+  return xr('run-sequence', { device: 'hand-right', steps, body: 'auto', gaze: 'fixed', idleHand: 'keep' });
+}
