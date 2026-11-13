@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createSounds, SOUND_NAMES, type SoundName } from './sound';
+import { createSounds, SAMPLED, SOUND_NAMES, type SoundName } from './sound';
 
 // A recording stand-in for the few Web Audio calls the sounds make.
 function fakeContext() {
@@ -70,16 +70,31 @@ describe('createSounds', () => {
     for (const n of SOUND_NAMES) expect(() => s.play(n)).not.toThrow();
   });
 
-  it('preload_fetches_and_decodes_all_six_samples_once', async () => {
+  it('preload_fetches_and_decodes_every_recorded_sample_once', async () => {
     const { s, f, urls, decoded } = sampled();
     await Promise.all([s.preload(), s.preload()]);
     await s.preload();
-    expect(urls.sort()).toEqual(SOUND_NAMES.map((n) => `/sfx/${n}.ogg`).sort());
-    expect(decoded).toHaveLength(6);
-    for (const n of SOUND_NAMES) s.play(n);
-    expect(f.sources.map((x) => (x.buffer as { name: string }).name)).toEqual(SOUND_NAMES.map((n) => `/sfx/${n}.ogg`));
+    expect(urls.sort()).toEqual(SAMPLED.map((n) => `/sfx/${n}.ogg`).sort());
+    expect(decoded).toHaveLength(SAMPLED.length);
+    for (const n of SAMPLED) s.play(n);
+    expect(f.sources.map((x) => (x.buffer as { name: string }).name)).toEqual(SAMPLED.map((n) => `/sfx/${n}.ogg`));
     expect(f.sources.every((x) => x.started)).toBe(true);
     expect(f.oscillators()).toBe(0);
+  });
+
+  it('has_a_method_for_every_name_and_synthesizes_names_without_a_sample', async () => {
+    const { s, f, urls } = sampled();
+    await s.preload();
+    const unsampled = SOUND_NAMES.filter((n) => !SAMPLED.includes(n));
+    expect(unsampled).toEqual(['start', 'tick', 'ghost', 'handover', 'pause', 'resume']);
+    for (const n of unsampled) {
+      expect(typeof s[n]).toBe('function');
+      expect(urls.some((u) => u.endsWith(`/${n}.ogg`))).toBe(false);
+      const before = f.oscillators() + f.sources.length;
+      s[n]();
+      expect(f.oscillators() + f.sources.length).toBeGreaterThan(before);
+    }
+    expect(f.sources.every((x) => !(x.buffer as { name?: string } | null)?.name)).toBe(true);
   });
 
   it('preload_is_safe_before_any_audio_context_exists', async () => {
