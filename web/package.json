@@ -12,6 +12,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@fishaudio/agent-client": "1.0.0",
     "@iwsdk/core": "1.1.0-rc.2",
     "preact": "10.29.8",
     "preact-iso": "2.12.2",
