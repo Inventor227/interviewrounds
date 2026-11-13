@@ -5,7 +5,7 @@
 import type { Board, BoardEdge, BoardItem, ComponentType, GhostOp } from '../shared/types';
 import type { Overlay } from './input';
 import type { Kit } from './kits';
-import { center, COMPONENT_NAMES, edgeMid, findItem, hasTab, itemRect, type Pt, type Rect } from './model';
+import { center, COMPONENT_NAMES, edgeMid, findItem, hasTab, itemRect, tabCenter, type Pt, type Rect } from './model';
 
 export const ACCENT = '#1F4E79';
 const PAPER = '#FAF8F3';
@@ -50,7 +50,19 @@ export interface RenderView {
   paper?: boolean;
   /** An item being dragged: drawn lifted at this offset, its edges following. */
   lift?: { id: string; dx: number; dy: number };
+  /** Leave out this item and its edges (BoardView draws a dragged item on its own layer). */
+  hide?: string;
+  /**
+   * Size of the tab and edge chip: 'hand' (default) draws the research 06 sizes (a 2.4 cm
+   * tab); 'mouse' draws them smaller. Hit areas are hand sized either way.
+   */
+  targets?: 'hand' | 'mouse';
 }
+
+const TARGET_SIZES = {
+  hand: { tab: 1.2, chip: 1.1 },
+  mouse: { tab: 0.55, chip: 0.25 },
+} as const;
 
 type Ctx = CanvasRenderingContext2D;
 
@@ -69,8 +81,20 @@ function roundRect(ctx: Ctx, x: number, y: number, w: number, h: number, r: numb
 
 const font = (px: number, weight = 400, style = '') => `${style ? style + ' ' : ''}${weight} ${Math.max(1, Math.round(px * 10) / 10)}px ${FONT}`;
 
-/** Splits text into at most `maxLines` lines no wider than `maxW`, with an ellipsis if cut. */
+const wrapCache = new Map<string, string[]>();
+
+/** Splits text into at most `maxLines` lines no wider than `maxW`, with an ellipsis if cut. Cached. */
 function wrap(ctx: Ctx, text: string, maxW: number, maxLines: number): string[] {
+  const key = `${ctx.font}|${Math.round(maxW)}|${maxLines}|${text}`;
+  const hit = wrapCache.get(key);
+  if (hit) return hit;
+  const lines = wrapUncached(ctx, text, maxW, maxLines);
+  if (wrapCache.size > 500) wrapCache.clear();
+  wrapCache.set(key, lines);
+  return lines;
+}
+
+function wrapUncached(ctx: Ctx, text: string, maxW: number, maxLines: number): string[] {
   const words = text.split(/\s+/).filter(Boolean);
   const lines: string[] = [];
   let cur = '';
@@ -304,6 +328,7 @@ interface Pen {
   k: number;
   ghost: boolean;
   focus: string | null;
+  targets?: 'hand' | 'mouse';
 }
 
 function cardShadow(p: Pen, lifted = false): void {
@@ -525,19 +550,31 @@ function drawInk(p: Pen, pts: readonly Pt[], color = INK): void {
 
 function drawTab(p: Pen, it: BoardItem): void {
   const { ctx, k } = p;
-  const r = itemRect(it);
+  const [tx, ty] = tabCenter(it);
+  const r = TARGET_SIZES[p.targets ?? 'hand'].tab;
   const active = p.focus === it.id;
   ctx.beginPath();
-  ctx.arc((r.x + r.w) * k, r.y * k, 0.42 * k, 0, Math.PI * 2);
+  ctx.arc(tx * k, ty * k, r * k, 0, Math.PI * 2);
   ctx.fillStyle = CARD;
   ctx.fill();
   ctx.strokeStyle = active ? ACCENT : CARD_EDGE;
   ctx.lineWidth = Math.max(1, 0.06 * k);
   ctx.stroke();
+  // A small arrow: pull from here to connect.
+  ctx.save();
+  ctx.strokeStyle = active ? ACCENT : '#98A2AE';
+  ctx.lineWidth = Math.max(1, r * 0.16 * k);
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  const a = r * 0.42;
   ctx.beginPath();
-  ctx.arc((r.x + r.w) * k, r.y * k, 0.16 * k, 0, Math.PI * 2);
-  ctx.fillStyle = active ? ACCENT : '#AAB2BD';
-  ctx.fill();
+  ctx.moveTo((tx - a) * k, (ty + a) * k);
+  ctx.lineTo((tx + a) * k, (ty - a) * k);
+  ctx.moveTo((tx + a * 0.1) * k, (ty - a) * k);
+  ctx.lineTo((tx + a) * k, (ty - a) * k);
+  ctx.lineTo((tx + a) * k, (ty - a * 0.1) * k);
+  ctx.stroke();
+  ctx.restore();
 }
 
 function drawItem(p: Pen, it: BoardItem, lifted = false): void {
@@ -650,7 +687,7 @@ function drawEdge(p: Pen, board: Board, e: Pick<BoardEdge, 'from' | 'to' | 'dir'
   } else if (!p.ghost) {
     // The chip you tap to change the direction.
     ctx.beginPath();
-    ctx.arc(mid[0] * k, mid[1] * k, 0.2 * k, 0, Math.PI * 2);
+    ctx.arc(mid[0] * k, mid[1] * k, TARGET_SIZES[p.targets ?? 'hand'].chip * k, 0, Math.PI * 2);
     ctx.fillStyle = PAPER;
     ctx.fill();
     ctx.strokeStyle = color;
@@ -719,14 +756,15 @@ function moved(board: Board, lift: RenderView['lift']): { board: Board; item: Bo
 export function renderBoard(ctx: Ctx, board0: Board, view: RenderView): void {
   const k = view.pxPerCm;
   const { board, item: lifted } = moved(board0, view.lift);
-  const pen: Pen = { ctx, k, ghost: false, focus: board.focus };
+  const pen: Pen = { ctx, k, ghost: false, focus: board.focus, targets: view.targets };
+  const skip = lifted?.id ?? view.hide;
   ctx.save();
   if (view.paper !== false) renderPaper(ctx, board, k);
 
-  for (const it of board.items) if (it.kind === 'group' && it.id !== lifted?.id) drawItem(pen, it);
-  for (const e of board.edges) drawEdge(pen, board, e);
-  for (const it of board.items) if (it.kind !== 'group' && it.kind !== 'ink' && it.id !== lifted?.id) drawItem(pen, it);
-  for (const it of board.items) if (it.kind === 'ink' && it.id !== lifted?.id) drawItem(pen, it);
+  for (const it of board.items) if (it.kind === 'group' && it.id !== skip) drawItem(pen, it);
+  for (const e of board.edges) if (e.from !== skip && e.to !== skip) drawEdge(pen, board, e);
+  for (const it of board.items) if (it.kind !== 'group' && it.kind !== 'ink' && it.id !== skip) drawItem(pen, it);
+  for (const it of board.items) if (it.kind === 'ink' && it.id !== skip) drawItem(pen, it);
 
   // Scribe suggestions: faded, dashed, on top of what is committed.
   if (board.ghosts.length) {
@@ -740,18 +778,55 @@ export function renderBoard(ctx: Ctx, board0: Board, view: RenderView): void {
     }
   }
 
-  if (view.highlight) {
+  if (view.highlight && view.highlight !== skip) {
     const h = findItem(board, view.highlight);
     if (h && h.kind !== 'ink') ring(pen, itemRect(h), withAlpha(ACCENT, 0.35), 0.35, 0.3);
   }
   const f = findItem(board, board.focus);
-  if (f && f.kind !== 'ink') ring(pen, itemRect(f), ACCENT, 0.16, 0.3);
+  if (f && f.kind !== 'ink' && f.id !== skip) ring(pen, itemRect(f), ACCENT, 0.16, 0.3);
 
-  if (lifted) drawItem(pen, lifted, true);
+  if (lifted) drawLifted(pen, board, lifted, false);
   ctx.restore();
 }
 
+/** A dragged item and the edges that follow it, lifted with a stronger shadow. */
+function drawLifted(pen: Pen, board: Board, lifted: BoardItem, dim: boolean): void {
+  const { ctx } = pen;
+  ctx.save();
+  if (dim) ctx.globalAlpha = 0.45;
+  for (const e of board.edges) if (e.from === lifted.id || e.to === lifted.id) drawEdge(pen, board, e);
+  drawItem(pen, lifted, true);
+  if (board.focus === lifted.id && lifted.kind !== 'ink') ring(pen, itemRect(lifted), ACCENT, 0.16, 0.3);
+  ctx.restore();
+}
+
+/**
+ * Only the dragged item (at its offset) and its edges, for the live layer while the rest
+ * of the board stays cached. Ink being dragged is dimmed unless it is over the bin, since
+ * ink cannot move and goes back on release.
+ */
+export function renderLift(ctx: Ctx, board0: Board, lift: { id: string; dx: number; dy: number; dim?: boolean }, view: Pick<RenderView, 'pxPerCm' | 'targets'>): void {
+  const { board, item } = moved(board0, lift);
+  if (!item) return;
+  drawLifted({ ctx, k: view.pxPerCm, ghost: false, focus: board.focus, targets: view.targets }, board, item, lift.dim === true);
+}
+
+const verbPill = (p: Pen, text: string, at: Pt) => labelPill(p, text, at, { color: ACCENT, dashed: true });
+
+function dashedOutline(p: Pen, r: Rect, color = ACCENT): void {
+  const { ctx, k } = p;
+  ctx.save();
+  roundRect(ctx, r.x * k, r.y * k, r.w * k, r.h * k, 0.6 * k);
+  ctx.setLineDash([0.4 * k, 0.3 * k]);
+  ctx.strokeStyle = color;
+  ctx.lineWidth = Math.max(1.5, 0.1 * k);
+  ctx.stroke();
+  ctx.restore();
+}
+
+/** A Scribe suggestion drawn where it would land, with a small verb pill for changes. */
 function drawGhost(p: Pen, board: Board, g: GhostOp): void {
+  const below = (r: Rect): Pt => [r.x + r.w / 2, r.y + r.h + 0.9];
   switch (g.op) {
     case 'item.create':
       drawItem(p, g.args);
@@ -759,18 +834,65 @@ function drawGhost(p: Pen, board: Board, g: GhostOp): void {
     case 'edge.create':
       drawEdge(p, board, { from: g.args.from, to: g.args.to, dir: g.args.dir ?? '->', label: g.args.label ?? null, rel: g.args.rel ?? null });
       return;
+    case 'group.create':
+      dashedOutline(p, g.args);
+      if (g.args.label) verbPill(p, g.args.label, [g.args.x + g.args.w / 2, g.args.y + 0.9]);
+      return;
     case 'item.label':
     case 'item.note.add': {
       const it = findItem(board, g.args.id);
       if (!it || !g.args.text) return;
-      const r = itemRect(it);
-      labelPill(p, g.args.text, [r.x + r.w / 2, r.y + r.h + 0.9], { color: ACCENT, dashed: true });
+      verbPill(p, g.args.text, below(itemRect(it)));
       return;
     }
-    case 'edge.label': {
+    case 'item.move': {
+      const it = findItem(board, g.args.id);
+      if (!it) return;
+      const r = itemRect(it);
+      const to = { ...r, x: g.args.x, y: g.args.y };
+      dashedOutline(p, to);
+      verbPill(p, 'Move here', [to.x + to.w / 2, to.y + to.h / 2]);
+      return;
+    }
+    case 'item.delete': {
+      const it = findItem(board, g.args.id);
+      if (!it) return;
+      const r = itemRect(it);
+      dashedOutline(p, { x: r.x - 0.3, y: r.y - 0.3, w: r.w + 0.6, h: r.h + 0.6 }, '#A23B2A');
+      verbPill(p, 'Delete', below(r));
+      return;
+    }
+    case 'item.set_type': {
+      const it = findItem(board, g.args.id);
+      if (!it) return;
+      const t = g.args.type;
+      const name = t in COMPONENT_NAMES ? COMPONENT_NAMES[t as ComponentType] : t.replace('_', ' ');
+      verbPill(p, `Make it ${name}`, below(itemRect(it)));
+      return;
+    }
+    case 'sticky.vote':
+    case 'sticky.set_quad': {
+      const it = findItem(board, g.args.id);
+      if (!it) return;
+      verbPill(p, g.op === 'sticky.vote' ? (g.args.delta > 0 ? 'Vote' : 'Unvote') : `Quadrant ${g.args.quad ?? 'none'}`, below(itemRect(it)));
+      return;
+    }
+    case 'edge.label':
+    case 'edge.set_dir':
+    case 'edge.set_rel':
+    case 'edge.delete': {
       const e = board.edges.find((x) => x.id === g.args.id);
       const m = e && edgeMid(board, e);
-      if (m && g.args.text) labelPill(p, g.args.text, [m[0], m[1] + 1.1], { color: ACCENT, dashed: true });
+      if (!m) return;
+      const text =
+        g.op === 'edge.label'
+          ? g.args.text
+          : g.op === 'edge.set_dir'
+            ? `Arrow ${g.args.dir}`
+            : g.op === 'edge.set_rel'
+              ? `Relation ${(g.args.rel ?? 'none').replace('_', ' ')}`
+              : 'Delete';
+      if (text) verbPill(p, text, [m[0], m[1] + 1.1]);
       return;
     }
     default:
@@ -780,7 +902,7 @@ function drawGhost(p: Pen, board: Board, g: GhostOp): void {
 
 // ---------- around the sheet: tray, bin, live gestures ----------
 
-/** The tray of cards and the bin, in board cm (the tray sits at negative x). */
+/** The tray of cards (and the bin), in board cm (the tray sits at negative x). */
 export function renderKit(ctx: Ctx, kit: Kit, pxPerCm: number, state: { binHot?: boolean } = {}): void {
   const k = pxPerCm;
   const pen: Pen = { ctx, k, ghost: false, focus: null };
@@ -800,34 +922,47 @@ export function renderKit(ctx: Ctx, kit: Kit, pxPerCm: number, state: { binHot?:
     ctx.fillText(ellipsize(ctx, s.name, (s.w - b - 1.1) * k), (s.x + b + 0.75) * k, (s.y + s.h / 2 + 0.04) * k);
     ctx.textBaseline = 'alphabetic';
   }
+  ctx.restore();
+  renderBin(ctx, kit, k, state.binHot === true);
+}
+
+/** The bin; red while something is held over it. */
+export function renderBin(ctx: Ctx, kit: Kit, pxPerCm: number, hot: boolean): void {
+  const k = pxPerCm;
   const bin = kit.bin;
+  ctx.save();
   roundRect(ctx, bin.x * k, bin.y * k, bin.w * k, bin.h * k, 0.8 * k);
-  ctx.fillStyle = state.binHot ? withAlpha('#A23B2A', 0.12) : OFF_SHEET;
+  ctx.fillStyle = hot ? '#F4E3DF' : OFF_SHEET;
   ctx.fill();
   ctx.setLineDash([0.4 * k, 0.3 * k]);
-  ctx.strokeStyle = state.binHot ? '#A23B2A' : '#B9B2A6';
+  ctx.strokeStyle = hot ? '#A23B2A' : '#B9B2A6';
   ctx.lineWidth = Math.max(1, 0.06 * k);
   ctx.stroke();
   ctx.setLineDash([]);
-  drawTrash(ctx, (bin.x + bin.w / 2) * k, (bin.y + bin.h / 2) * k, 2.6 * k, state.binHot ? '#A23B2A' : MUTED);
+  drawTrash(ctx, (bin.x + bin.w / 2) * k, (bin.y + bin.h / 2) * k, 2.6 * k, hot ? '#A23B2A' : MUTED);
   ctx.restore();
 }
 
-/** Live gestures on top of the board: the stroke being drawn, the connector, a card from the tray. */
-export function renderOverlay(ctx: Ctx, board: Board, overlay: Overlay, kit: Kit | null, pxPerCm: number): void {
+/**
+ * Live gestures on top of the board: the stroke being drawn, the connector, a card from
+ * the tray, a dragged item (lifted, with its edges).
+ */
+export function renderOverlay(ctx: Ctx, board: Board, overlay: Overlay, kit: Kit | null, pxPerCm: number, targets?: 'hand' | 'mouse'): void {
   const k = pxPerCm;
-  const pen: Pen = { ctx, k, ghost: false, focus: board.focus };
+  const pen: Pen = { ctx, k, ghost: false, focus: board.focus, targets };
   switch (overlay.kind) {
     case 'ink':
       drawInk(pen, overlay.points);
+      return;
+    case 'drag':
+      renderLift(ctx, board, { id: overlay.id, dx: overlay.dx, dy: overlay.dy, dim: overlay.ink && !overlay.overBin }, { pxPerCm: k, targets });
       return;
     case 'connect': {
       const from = findItem(board, overlay.from);
       if (!from) return;
       const target = findItem(board, overlay.target);
-      const fr = itemRect(from);
-      const end: Pt = target ? exitPoint(itemRect(target), fr.x + fr.w, fr.y, 0.15) : [overlay.x, overlay.y];
-      const start: Pt = [fr.x + fr.w, fr.y];
+      const start = tabCenter(from);
+      const end: Pt = target ? exitPoint(itemRect(target), start[0], start[1], 0.15) : [overlay.x, overlay.y];
       ctx.save();
       ctx.strokeStyle = ACCENT;
       ctx.lineWidth = Math.max(1.5, 0.12 * k);
@@ -857,6 +992,57 @@ export function renderOverlay(ctx: Ctx, board: Board, overlay: Overlay, kit: Kit
   }
 }
 
+/** Board cm bounds a live overlay touches (for dirty rects), or null when it draws nothing. */
+export function overlayBounds(board: Board, o: Overlay, kit: Kit | null): Rect | null {
+  const pad = 1.5;
+  const grow = (r: Rect): Rect => ({ x: r.x - pad, y: r.y - pad, w: r.w + 2 * pad, h: r.h + 2 * pad });
+  const union = (rs: Rect[]): Rect | null => {
+    if (!rs.length) return null;
+    const x0 = Math.min(...rs.map((r) => r.x));
+    const y0 = Math.min(...rs.map((r) => r.y));
+    const x1 = Math.max(...rs.map((r) => r.x + r.w));
+    const y1 = Math.max(...rs.map((r) => r.y + r.h));
+    return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
+  };
+  const pts = (ps: readonly Pt[]): Rect | null => union(ps.map(([x, y]) => ({ x, y, w: 0, h: 0 })));
+  switch (o.kind) {
+    case 'none':
+      return null;
+    case 'ink': {
+      const r = pts(o.points);
+      return r && grow(r);
+    }
+    case 'drag': {
+      const { board: b, item } = moved(board, { id: o.id, dx: o.dx, dy: o.dy });
+      if (!item) return null;
+      const rs = [itemRect(item)];
+      for (const e of b.edges) {
+        if (e.from !== o.id && e.to !== o.id) continue;
+        const a = findItem(b, e.from);
+        const c = findItem(b, e.to);
+        if (a && c) rs.push(itemRect(a), itemRect(c));
+      }
+      if (kit) rs.push(kit.bin);
+      return grow(union(rs)!);
+    }
+    case 'connect': {
+      const from = findItem(board, o.from);
+      if (!from) return null;
+      const target = findItem(board, o.target);
+      const rs = [pts([tabCenter(from), [o.x, o.y]])!];
+      if (target) rs.push(itemRect(target));
+      return grow(union(rs)!);
+    }
+    case 'tray': {
+      const w = kit?.card.w ?? 8;
+      const h = kit?.card.h ?? 5;
+      const rs = [{ x: o.x - w / 2, y: o.y - h / 2, w, h }];
+      if (kit) rs.push(kit.bin);
+      return grow(union(rs)!);
+    }
+  }
+}
+
 // ---------- the cached view ----------
 
 type Layer = HTMLCanvasElement | OffscreenCanvas;
@@ -870,7 +1056,9 @@ export interface BoardViewOptions {
   kit?: Kit | null;
   /** Device pixels per CSS pixel. */
   dpr?: number;
-  /** Makes the offscreen layer for the static paper and tray; null draws them every time. */
+  /** Tab and chip drawing size (hit areas are hand sized either way). */
+  targets?: 'hand' | 'mouse';
+  /** Makes the offscreen layers; null draws everything every time. */
   layerFactory?: (w: number, h: number) => Layer | null;
 }
 
@@ -908,22 +1096,33 @@ function overlayKey(o: Overlay): string {
 }
 
 /**
- * A canvas showing one board (plus the kit around it). draw() returns false and touches
- * nothing when the board, highlight and live gestures are the same as last time, so a
- * headset texture is uploaded only when it changes.
+ * A canvas showing one board (plus the kit around it), in three layers:
+ * - static: paper, grid, tray and bin; painted once per size and framing;
+ * - board: the committed board; painted only when the board, highlight or the dragged
+ *   item changes (the dragged item is left out of it);
+ * - live: the gesture (stroke, dragged item with its edges, connector, tray card), drawn
+ *   on top every time it changes.
+ * draw() returns false and touches nothing when nothing changed, and `dirty` says which
+ * canvas pixels changed, so a headset texture can upload only that part.
  */
 export class BoardView {
   private opts: Required<Omit<BoardViewOptions, 'kit'>> & { kit: Kit | null };
-  private layer: Layer | null = null;
-  private layerKey = '';
+  private staticLayer: Layer | null = null;
+  private staticKey = '';
+  private boardLayer: Layer | null = null;
+  private boardKey = '';
+  private boardOf: Board | null = null;
   private lastBoard: Board | null = null;
   private lastKey = '';
+  private lastLive: Rect | null = null;
+  /** Canvas pixels changed by the last draw() that returned true (whole canvas when unknown). */
+  dirty: { x: number; y: number; w: number; h: number } | null = null;
 
   constructor(
     readonly canvas: HTMLCanvasElement,
     opts: BoardViewOptions,
   ) {
-    this.opts = { dpr: 1, kit: null, layerFactory: defaultLayer, ...opts };
+    this.opts = { dpr: 1, kit: null, targets: 'hand', layerFactory: defaultLayer, ...opts };
     this.size();
   }
 
@@ -932,6 +1131,7 @@ export class BoardView {
     this.opts = { ...this.opts, ...patch };
     this.size();
     this.lastBoard = null;
+    this.boardKey = '';
   }
 
   private size(): void {
@@ -952,9 +1152,8 @@ export class BoardView {
     return [(x - this.opts.originCm.x) * this.opts.pxPerCm, (y - this.opts.originCm.y) * this.opts.pxPerCm];
   }
 
-  private paintStatic(ctx: Ctx | OffscreenCanvasRenderingContext2D, board: Board): void {
+  private paintStatic(c: Ctx, board: Board): void {
     const { pxPerCm: k, originCm, widthCm, heightCm, kit } = this.opts;
-    const c = ctx as Ctx;
     c.fillStyle = OFF_SHEET;
     c.fillRect(0, 0, widthCm * k, heightCm * k);
     c.save();
@@ -964,52 +1163,113 @@ export class BoardView {
     c.restore();
   }
 
+  private paintBoard(c: Ctx, board: Board, highlight: string | null, hide: string | undefined): void {
+    const { pxPerCm: k, originCm, targets } = this.opts;
+    c.save();
+    c.translate(-originCm.x * k, -originCm.y * k);
+    renderBoard(c, board, { pxPerCm: k, paper: false, highlight: highlight ?? undefined, hide, targets });
+    c.restore();
+  }
+
+  private layerCtx(layer: Layer | null): Ctx | null {
+    const c = (layer?.getContext('2d') as Ctx | null | undefined) ?? null;
+    if (c) c.setTransform(this.opts.dpr, 0, 0, this.opts.dpr, 0, 0);
+    return c;
+  }
+
+  private blit(ctx: Ctx, layer: Layer): void {
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.drawImage(layer as CanvasImageSource, 0, 0);
+    ctx.setTransform(this.opts.dpr, 0, 0, this.opts.dpr, 0, 0);
+  }
+
   draw(board: Board, state: DrawState = {}): boolean {
     const overlays = state.overlays ?? [];
-    const key = `${state.highlight ?? ''}|${overlays.map(overlayKey).join('|')}`;
+    const highlight = state.highlight ?? null;
+    const key = `${highlight ?? ''}|${overlays.map(overlayKey).join('|')}`;
     if (board === this.lastBoard && key === this.lastKey) return false;
     this.lastBoard = board;
     this.lastKey = key;
 
     const ctx = this.canvas.getContext('2d');
     if (!ctx) return false;
-    const { pxPerCm: k, originCm, dpr, kit } = this.opts;
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-
-    // Static paper, grid and tray: painted once per size into a layer, then copied.
-    const lk = `${this.canvas.width}x${this.canvas.height}:${k}:${board.size.w}x${board.size.h}`;
-    if (this.layerKey !== lk) {
-      this.layer = this.opts.layerFactory(this.canvas.width, this.canvas.height);
-      if (this.layer) {
-        const lctx = this.layer.getContext('2d') as Ctx | null;
-        if (lctx) {
-          lctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-          this.paintStatic(lctx, board);
-        } else this.layer = null;
-      }
-      this.layerKey = lk;
-    }
-    if (this.layer) {
-      ctx.setTransform(1, 0, 0, 1, 0, 0);
-      ctx.drawImage(this.layer as CanvasImageSource, 0, 0);
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    } else {
-      this.paintStatic(ctx, board);
-    }
-
+    const { pxPerCm: k, originCm, dpr, kit, targets } = this.opts;
     const drag = overlays.find((o): o is Extract<Overlay, { kind: 'drag' }> => o.kind === 'drag');
     const binHot = overlays.some((o) => (o.kind === 'drag' || o.kind === 'tray') && o.overBin);
+
+    // Static layer: once per size and framing.
+    const sk = `${this.canvas.width}x${this.canvas.height}:${k}:${dpr}:${originCm.x},${originCm.y}:${board.size.w}x${board.size.h}:${kit ? `${kit.id}:${kit.tray.length}:${kit.bin.x},${kit.bin.y}` : '-'}`;
+    if (this.staticKey !== sk) {
+      this.staticLayer = this.opts.layerFactory(this.canvas.width, this.canvas.height);
+      this.boardLayer = this.opts.layerFactory(this.canvas.width, this.canvas.height);
+      const sc = this.layerCtx(this.staticLayer);
+      if (sc) this.paintStatic(sc, board);
+      else this.staticLayer = null;
+      this.staticKey = sk;
+      this.boardKey = '';
+    }
+
+    // Board layer: only when the committed board, highlight or dragged item changes.
+    const bk = `${highlight ?? ''}|${drag?.id ?? ''}`;
+    let full = false;
+    if (board !== this.boardOf || bk !== this.boardKey) {
+      const bc = this.staticLayer ? this.layerCtx(this.boardLayer) : null;
+      if (bc && this.staticLayer) {
+        this.blit(bc, this.staticLayer);
+        this.paintBoard(bc, board, highlight, drag?.id);
+        this.boardOf = board;
+        this.boardKey = bk;
+      }
+      full = true;
+    }
+
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    if (this.boardLayer && this.boardOf === board && this.boardKey === bk && this.staticLayer) {
+      this.blit(ctx, this.boardLayer);
+    } else {
+      // No offscreen layers here: paint everything.
+      this.paintStatic(ctx, board);
+      this.paintBoard(ctx, board, highlight, drag?.id);
+      full = true;
+    }
+
+    // Live layer: the gestures.
     ctx.save();
     ctx.translate(-originCm.x * k, -originCm.y * k);
-    if (kit && binHot) renderKit(ctx, kit, k, { binHot });
-    renderBoard(ctx, board, {
-      pxPerCm: k,
-      paper: false,
-      highlight: state.highlight ?? undefined,
-      lift: drag ? { id: drag.id, dx: drag.dx, dy: drag.dy } : undefined,
-    });
-    for (const o of overlays) renderOverlay(ctx, board, o, kit, k);
+    if (kit && binHot) renderBin(ctx, kit, k, true);
+    for (const o of overlays) renderOverlay(ctx, board, o, kit, k, targets);
     ctx.restore();
+
+    // Dirty rect in canvas pixels: the live bounds now and last time, or everything.
+    const live = overlays.map((o) => overlayBounds(board, o, kit)).filter((r): r is Rect => r !== null);
+    const liveNow = live.length
+      ? live.reduce((a, r) => {
+          const x0 = Math.min(a.x, r.x);
+          const y0 = Math.min(a.y, r.y);
+          return { x: x0, y: y0, w: Math.max(a.x + a.w, r.x + r.w) - x0, h: Math.max(a.y + a.h, r.y + r.h) - y0 };
+        })
+      : null;
+    if (full) this.dirty = { x: 0, y: 0, w: this.canvas.width, h: this.canvas.height };
+    else {
+      const rs = [liveNow, this.lastLive].filter((r): r is Rect => r !== null);
+      if (!rs.length) this.dirty = null;
+      else {
+        const x0 = Math.min(...rs.map((r) => r.x));
+        const y0 = Math.min(...rs.map((r) => r.y));
+        const x1 = Math.max(...rs.map((r) => r.x + r.w));
+        const y1 = Math.max(...rs.map((r) => r.y + r.h));
+        const s = k * dpr;
+        const px = Math.max(0, Math.floor((x0 - originCm.x) * s));
+        const py = Math.max(0, Math.floor((y0 - originCm.y) * s));
+        this.dirty = {
+          x: px,
+          y: py,
+          w: Math.min(this.canvas.width, Math.ceil((x1 - originCm.x) * s)) - px,
+          h: Math.min(this.canvas.height, Math.ceil((y1 - originCm.y) * s)) - py,
+        };
+      }
+    }
+    this.lastLive = liveNow;
     return true;
   }
 }

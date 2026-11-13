@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import type { Board, BoardEdge, GhostOp } from '../shared/types';
 import { emptyBoard } from './model';
-import { ACCENT, BoardView, renderBoard } from './render';
+import type { Overlay } from './input';
+import { HLD_KIT } from './kits';
+import { ACCENT, BoardView, renderBoard, renderOverlay } from './render';
 
 interface Call {
   name: string;
@@ -162,5 +164,122 @@ describe('BoardView', () => {
     expect(calls.length).toBe(n);
     expect(view.draw(b, { highlight: 'n2' })).toBe(true);
     expect(view.draw({ ...b, rev: 1 }, { highlight: 'n2' })).toBe(true);
+  });
+
+  function layered() {
+    const main = recorder();
+    const layers: ReturnType<typeof recorder>[] = [];
+    const canvas = { width: 0, height: 0, getContext: () => main.ctx } as unknown as HTMLCanvasElement;
+    const view = new BoardView(canvas, {
+      pxPerCm: 10,
+      originCm: { x: -14, y: 0 },
+      widthCm: 88,
+      heightCm: 40,
+      kit: HLD_KIT,
+      layerFactory: () => {
+        const r = recorder();
+        layers.push(r);
+        return { width: 880, height: 400, getContext: () => r.ctx } as unknown as HTMLCanvasElement;
+      },
+    });
+    const layerCalls = () => layers.reduce((n, l) => n + l.calls.length, 0);
+    const texts = (calls: Call[]) => calls.filter((c) => c.name === 'fillText').map((c) => String(c.args[0]));
+    return { main, layers, view, layerCalls, texts };
+  }
+
+  it('during a stroke only the live layer is drawn: the board layer is reused', () => {
+    const { main, view, layerCalls, texts } = layered();
+    const b = hld();
+    view.draw(b);
+    const l0 = layerCalls();
+    const m0 = main.calls.length;
+    const ink: Overlay = { kind: 'ink', hand: 'mouse', points: [[40, 10], [42, 11], [44, 10]] };
+    expect(view.draw(b, { overlays: [ink] })).toBe(true);
+    const fresh = main.calls.slice(m0);
+    expect(layerCalls()).toBe(l0);
+    expect(fresh.some((c) => c.name === 'drawImage')).toBe(true);
+    expect(texts(fresh)).toEqual([]);
+    expect(fresh.some((c) => c.name === 'stroke' && c.state.lineCap === 'round')).toBe(true);
+    // Only the stroke's area changed.
+    expect(view.dirty!.w).toBeLessThan(880);
+    expect(view.dirty!.h).toBeLessThan(400);
+  });
+
+  it('a drag repaints the board layer once without the dragged card, then only the card moves', () => {
+    const { main, layers, view, layerCalls, texts } = layered();
+    const b = hld([edge('->')]);
+    view.draw(b);
+    const drag = (dx: number): Overlay => ({ kind: 'drag', hand: 'mouse', id: 'n1', dx, dy: 0, overBin: false, ink: false });
+    const l0 = layerCalls();
+    const before = layers[1]!.calls.length;
+    view.draw(b, { overlays: [drag(2)] });
+    expect(layerCalls()).toBeGreaterThan(l0);
+    const repaint = texts(layers[1]!.calls.slice(before));
+    expect(repaint).toContain('Unnamed');
+    expect(repaint).not.toContain('Mobile app');
+    const l1 = layerCalls();
+    const m1 = main.calls.length;
+    view.draw(b, { overlays: [drag(3)] });
+    expect(layerCalls()).toBe(l1);
+    const live = texts(main.calls.slice(m1));
+    expect(live).toContain('Mobile app');
+    expect(live).not.toContain('Unnamed');
+  });
+
+  it('repaints the static layer when the framing changes at the same pixel size', () => {
+    const { layers, view } = layered();
+    const b = hld();
+    view.draw(b);
+    const n = layers.length;
+    view.configure({ originCm: { x: -10, y: 0 } });
+    view.draw(b);
+    expect(layers.length).toBeGreaterThan(n);
+  });
+});
+
+describe('overlays, ghosts and targets', () => {
+  it('dims ink being dragged unless it is over the bin (ink cannot move)', () => {
+    const b = hld();
+    const alphaOfInk = (overBin: boolean) => {
+      const { ctx, calls } = recorder();
+      renderOverlay(ctx, b, { kind: 'drag', hand: 'mouse', id: 'i1', dx: 5, dy: 0, overBin, ink: true }, HLD_KIT, 10);
+      return calls.find((c) => c.name === 'stroke' && c.state.lineCap === 'round')!.state.globalAlpha;
+    };
+    expect(alphaOfInk(false)).toBe(0.45);
+    expect(alphaOfInk(true)).toBe(1);
+  });
+
+  it('shows ghosts of moves, deletes, type and arrow changes with a verb', () => {
+    const ghosts: GhostOp[] = [
+      { op_id: 'g1', src: 'scribe', op: 'item.move', args: { id: 'n1', x: 40, y: 2 } },
+      { op_id: 'g2', src: 'scribe', op: 'item.delete', args: { id: 'n2' } },
+      { op_id: 'g3', src: 'scribe', op: 'item.set_type', args: { id: 'n1', type: 'cache' } },
+      { op_id: 'g4', src: 'scribe', op: 'edge.set_dir', args: { id: 'e1', dir: '<->' } },
+    ];
+    const { ctx, calls } = recorder();
+    renderBoard(ctx, hld([edge('->')], ghosts), { pxPerCm: 10 });
+    const texts = calls.filter((c) => c.name === 'fillText' && c.state.globalAlpha === 0.4).map((c) => String(c.args[0]));
+    expect(texts).toEqual(expect.arrayContaining(['Move here', 'Delete', 'Make it Cache', 'Arrow <->']));
+  });
+
+  it('draws the tab at hand size by default, smaller for the mouse', () => {
+    const tabArc = (targets?: 'hand' | 'mouse') => {
+      const { ctx, calls } = recorder();
+      renderBoard(ctx, hld(), { pxPerCm: 10, targets });
+      // n1 is at 4,18 8x5: its tab sits at (12.5, 17.5).
+      return calls.find((c) => c.name === 'arc' && Math.abs((c.args[0] as number) - 125) < 0.01 && Math.abs((c.args[1] as number) - 175) < 0.01)?.args[2];
+    };
+    expect(tabArc()).toBeCloseTo(12);
+    expect(tabArc('mouse')).toBeCloseTo(5.5);
+  });
+
+  it('caches wrapped labels between frames', () => {
+    const count = () => {
+      const { ctx, calls } = recorder();
+      renderBoard(ctx, hld(), { pxPerCm: 13 });
+      return calls.filter((c) => c.name === 'measureText').length;
+    };
+    const first = count();
+    expect(count()).toBeLessThan(first);
   });
 });
