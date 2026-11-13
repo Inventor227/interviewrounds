@@ -11,26 +11,9 @@
 # with an empty public dir (the server still runs and /healthz works); if content/
 # is missing the content dir is empty. The `src` stage creates both folders so
 # the later COPY steps never fail.
-
-# ---- source: the whole context, with optional folders guaranteed to exist ----
-FROM node:24-bookworm-slim AS src
-COPY . /ctx
-RUN mkdir -p /ctx/web /ctx/content /pkg \
- && if [ -f /ctx/web/package.json ]; then cp /ctx/web/package.json /pkg/; fi \
- && if [ -f /ctx/web/package-lock.json ]; then cp /ctx/web/package-lock.json /pkg/; fi
-
-# ---- web app (Vite) ----
-FROM node:24-bookworm-slim AS web
-WORKDIR /repo/web
-# Only the package files first, so npm ci is cached until they change.
-COPY --from=src /pkg/ ./
-RUN if [ -f package.json ]; then npm ci --no-audit --no-fund; \
-    else echo "web/package.json not found: skipping npm ci"; fi
-COPY --from=src /ctx/web/ ./
-COPY --from=src /ctx/content/ /repo/content/
-RUN mkdir -p /out \
- && if [ -f package.json ]; then npm run build && cp -R dist/. /out/; \
-    else echo "no web app in this checkout: the public dir stays empty"; fi
+#
+# The Rust stages come first: the classic builder runs every stage before the
+# target, so `--target deps` (the cached dependency layer) skips the web build.
 
 # ---- Rust: cargo-chef ----
 FROM rust:1.99.1-slim-bookworm AS chef
@@ -53,6 +36,26 @@ COPY server/ ./
 ENV SQLX_OFFLINE=true
 RUN cargo build --release --locked --bin ir-server \
  && mkdir -p /app/empty-data
+
+# ---- source: the whole context, with optional folders guaranteed to exist ----
+FROM node:24-bookworm-slim AS src
+COPY . /ctx
+RUN mkdir -p /ctx/web /ctx/content /pkg \
+ && if [ -f /ctx/web/package.json ]; then cp /ctx/web/package.json /pkg/; fi \
+ && if [ -f /ctx/web/package-lock.json ]; then cp /ctx/web/package-lock.json /pkg/; fi
+
+# ---- web app (Vite) ----
+FROM node:24-bookworm-slim AS web
+WORKDIR /repo/web
+# Only the package files first, so npm ci is cached until they change.
+COPY --from=src /pkg/ ./
+RUN if [ -f package.json ]; then npm ci --no-audit --no-fund; \
+    else echo "web/package.json not found: skipping npm ci"; fi
+COPY --from=src /ctx/web/ ./
+COPY --from=src /ctx/content/ /repo/content/
+RUN mkdir -p /out \
+ && if [ -f package.json ]; then npm run build && cp -R dist/. /out/; \
+    else echo "no web app in this checkout: the public dir stays empty"; fi
 
 # ---- runtime: glibc + CA certs, no shell ----
 FROM gcr.io/distroless/cc-debian12:nonroot
