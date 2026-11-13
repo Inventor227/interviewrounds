@@ -84,8 +84,13 @@ await sleep(800);
 await shot('06-room-with-board');
 
 const endAt = Date.now();
+await scrollTo('[data-test="session-stage"]');
 await page(() => globalThis.__round.controller.end());
 await waitState(['scoring', 'summary'], 60000);
+// Captures are quick on a flat page: this one catches the status card with its progress bar while the scorecard
+// is being written.
+await shot('06b-scoring');
+stage('scoring shot', { state: (await roundState()).state, status: await page(() => globalThis.__xrApp.ui.status.group.visible), summary: await page(() => globalThis.__xrApp.ui.summary.group.visible) });
 await until('the card or the summary', () => (globalThis.__xrApp?.ui.summary.group.visible ? true : null), null, 240000, 2000);
 stage('card shown', { ms: Date.now() - endAt, state: (await roundState()).state });
 await sleep(800);
