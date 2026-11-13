@@ -185,16 +185,24 @@ const CODE = [
   ['l5', 3, 'return [seen[target - x], i]'],
   ['l7', 1, 'return []'],
 ];
+await step(
+  'coding-seed',
+  `await nav('coding');
+  await frame.evaluate((code) => {
+    const b = window.__board;
+    b.scribe({ op: 'code.approach', args: { lines: ['Hash map from value to index', 'One pass: look for target minus x before storing x'] } });
+    let after = null;
+    for (const [id, indent, text] of code) {
+      b.scribe({ op: 'code.insert', args: { line: { id, indent, text, src: 'scribe' }, after } });
+      after = id;
+    }
+  }, ${JSON.stringify(CODE)});
+  return (await board()).code.lines.length;`,
+  { shot: false },
+);
 r = await step(
   'coding',
-  `await nav('coding');
-  await scribe('code.approach', { lines: ['Hash map from value to index', 'One pass: look for target minus x before storing x'] });
-  let after = null;
-  for (const [id, indent, text] of ${JSON.stringify(CODE)}) {
-    await scribe('code.insert', { line: { id, indent, text, src: 'scribe' }, after });
-    after = id;
-  }
-  const P = await frame.evaluate(() => window.__board.panel);
+  `const P = await frame.evaluate(() => window.__board.panel);
   const row = (i) => P.y + 2.6 + i * 1.5 + 0.75;
   // seen[x] = i belongs after the if block, one level in: drag it down two rows and nudge it right.
   await stroke([[P.x + 10, row(3)], [P.x + 11, row(4)], [P.x + 10 + 2.6, row(5) + 0.5]], 8);
