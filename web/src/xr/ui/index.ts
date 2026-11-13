@@ -1,6 +1,7 @@
 // The round UI the controller drives: setRoundState, setStatus, showSummary, setCaption, onAction.
 // Panels are plain groups; the world places them in the desk frame (headset) or on the camera (preview).
 
+import { UIKitDocument } from '@iwsdk/core';
 import type { Object3D } from 'three';
 import type { Report } from '../../shared/types';
 import type { HeadPose } from '../placement';
@@ -109,6 +110,15 @@ export class RoundUI {
 
   get chromeVisible(): boolean {
     return this.chrome;
+  }
+
+  /** Draws these panels over everything (preview HUD): no depth test, last in the transparent pass. */
+  setOverlay(names: PanelName[]): void {
+    const g = this.groups;
+    for (const n of names) {
+      const doc = g[n].children.find((c): c is UIKitDocument => c instanceof UIKitDocument);
+      if (doc) (doc.rootElement as unknown as { setProperties(p: object): void }).setProperties({ renderOrder: 100, depthTest: false });
+    }
   }
 
   layoutDesk(desk: DeskFrame, except: PanelName[] = []): void {

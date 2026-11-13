@@ -26,9 +26,9 @@ import { SLAB_COLOR } from './room';
 /** The desk in preview: a 0.74 m table, the user facing -Z. */
 export const PREVIEW_DESK: DeskPose = { origin: { x: 0, y: 0.74, z: -0.3 }, yaw: 0, deskY: 0.74, source: 'preview' };
 /** Seated eye height above the desk, and how far behind the user point the camera sits to see the sheet. */
-const EYE_ABOVE_DESK = 0.47;
-const CAMERA_BACK = 0.12;
-export const PREVIEW_FOV = 55;
+const EYE_ABOVE_DESK = 0.5;
+const CAMERA_BACK = 0.32;
+export const PREVIEW_FOV = 60;
 
 const WALL = 0xe9e4db;
 const FLOOR = 0x6e6862;
@@ -56,7 +56,7 @@ export function buildPreviewRoom(desk: DeskPose, n: 1 | 2 | 3, seats: SeatPose[]
   const f = forwardOf(desk.yaw);
   const board = wallboardPose(desk);
   const backZ = board.pos.z - 0.06;
-  const W = 5.2;
+  const W = 4.4;
   const H = 2.75;
   const frontZ = user.z + 1.8;
   const D = frontZ - backZ;
@@ -76,7 +76,7 @@ export function buildPreviewRoom(desk: DeskPose, n: 1 | 2 | 3, seats: SeatPose[]
   floor.name = 'preview-floor';
 
   // Window on the left wall: bright glass, frame and sill in the trim colour, plus baseboards.
-  const winZ = seats[0]!.pos.z + 0.3;
+  const winZ = seats[0]!.pos.z - 0.45;
   const winW = 2.0;
   const winH = 1.45;
   const winY = 1.45;
@@ -143,9 +143,9 @@ export function buildPreviewRoom(desk: DeskPose, n: 1 | 2 | 3, seats: SeatPose[]
 
   const camPos = addScaled(v3(user.x, desk.deskY + EYE_ABOVE_DESK, user.z), f, -CAMERA_BACK);
   const lead = seats[0]!;
-  const dir = v3(lead.eye.x - camPos.x, lead.eye.y - 0.12 - camPos.y, lead.eye.z - camPos.z);
+  const dir = v3(lead.eye.x - camPos.x, lead.eye.y - 0.3 - camPos.y, lead.eye.z - camPos.z);
   const yaw = Math.atan2(-dir.x, -dir.z);
-  const pitch = Math.atan2(dir.y, Math.hypot(dir.x, dir.z)) - 9 * DEG;
+  const pitch = Math.atan2(dir.y, Math.hypot(dir.x, dir.z));
   return { group, rest: { pos: camPos, yaw, pitch } };
 }
 

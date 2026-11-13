@@ -1,9 +1,9 @@
 // Brief card: the current question and its requirements, at the sheet's top-left corner. Poke the header to
 // collapse it to a small tab and back.
 
-import { UIKitDocument } from '@iwsdk/core';
+import { UIKit, UIKitDocument } from '@iwsdk/core';
 import { Group } from 'three';
-import { button, col, INK_MUTED, panel, row, set, show, text, TEXT_BODY, TEXT_SECONDARY, type Button } from './style';
+import { button, col, INK_MUTED, panel, row, set, show, text, TEXT_SECONDARY, type Button } from './style';
 
 export const BRIEF_WIDTH_CM = 30;
 const MAX_LINES = 4;
@@ -12,7 +12,7 @@ export class BriefCard {
   readonly group = new Group();
   private readonly doc: UIKitDocument;
   private readonly question;
-  private readonly lines;
+  private readonly lines: { row: UIKit.Container; text: UIKit.Text }[] = [];
   private readonly body;
   private readonly heading;
   private readonly toggle: Button;
@@ -28,8 +28,15 @@ export class BriefCard {
     head.add(this.heading, this.toggle.root);
     this.body = col({ gap: 0.7, width: '100%' });
     this.question = text('', { fontSize: 1.5, fontWeight: 'medium', lineHeight: '125%' });
-    this.lines = text('', { fontSize: TEXT_SECONDARY + 0.1, color: INK_MUTED, lineHeight: '130%' });
-    this.body.add(this.question, this.lines);
+    this.body.add(this.question);
+    for (let i = 0; i < MAX_LINES; i++) {
+      const r = row({ gap: 0.8, alignItems: 'flex-start', width: '100%' });
+      const dot = new UIKit.Container({ width: 0.55, height: 0.55, borderRadius: 0.275, backgroundColor: INK_MUTED, marginTop: 0.55, flexShrink: 0 } as never);
+      const t = text('', { fontSize: TEXT_SECONDARY + 0.1, color: INK_MUTED, lineHeight: '125%', flexShrink: 1 });
+      r.add(dot, t);
+      this.body.add(r);
+      this.lines.push({ row: r, text: t });
+    }
     root.add(head, this.body);
     this.doc = new UIKitDocument(root);
     this.group.add(this.doc);
@@ -46,9 +53,11 @@ export class BriefCard {
     const changed = this.brief?.question !== brief.question;
     this.brief = { question: brief.question, lines: [...brief.lines] };
     set(this.question, { text: brief.question });
-    const shown = brief.lines.slice(0, MAX_LINES).map((l) => `• ${l}`);
-    set(this.lines, { text: shown.join('\n') });
-    show(this.lines, shown.length > 0);
+    this.lines.forEach((l, i) => {
+      const s = brief.lines[i];
+      show(l.row, !!s);
+      if (s) set(l.text, { text: s });
+    });
     this.group.visible = true;
     // A new question opens the card again.
     if (changed) this.setCollapsed(false);

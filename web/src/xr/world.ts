@@ -233,6 +233,7 @@ export async function createXRApp(root: HTMLElement, opts: XRAppOptions): Promis
     const g = ui.groups;
     if (mode === 'preview') {
       for (const k of ['roundBar', 'brief', 'captions'] as const) camera.add(g[k]);
+      ui.setOverlay(['roundBar', 'brief', 'captions']);
       room.root.add(g.status, g.summary);
       layoutPreviewHud();
     } else {
