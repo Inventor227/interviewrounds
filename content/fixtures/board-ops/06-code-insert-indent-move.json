@@ -1,0 +1,219 @@
+{
+  "name": "code lines: insert after, indent with clamping, move",
+  "start": {
+    "schema": "ir.board.v1",
+    "round": {
+      "id": "s_fixture",
+      "type": "coding",
+      "question_id": null,
+      "language": "python"
+    },
+    "rev": 0,
+    "size": {
+      "w": 64,
+      "h": 40
+    },
+    "brief": {
+      "question": "Fixture board",
+      "lines": []
+    },
+    "items": [],
+    "edges": [],
+    "code": {
+      "language": "python",
+      "lines": [],
+      "approach": [],
+      "complexity": {
+        "time": null,
+        "space": null
+      },
+      "trace": []
+    },
+    "meeting": null,
+    "focus": null,
+    "ghosts": [],
+    "op_ids": []
+  },
+  "ops": [
+    {
+      "op_id": "c1",
+      "src": "scribe",
+      "op": "code.insert",
+      "args": {
+        "line": {
+          "id": "l1",
+          "indent": 0,
+          "text": "def two_sum(nums, target):",
+          "src": "scribe"
+        },
+        "after": null
+      }
+    },
+    {
+      "op_id": "c2",
+      "src": "scribe",
+      "op": "code.insert",
+      "args": {
+        "line": {
+          "id": "l2",
+          "indent": 0,
+          "text": "for i, x in enumerate(nums):",
+          "src": "scribe"
+        },
+        "after": "l1"
+      }
+    },
+    {
+      "op_id": "c3",
+      "src": "scribe",
+      "op": "code.insert",
+      "args": {
+        "line": {
+          "id": "l3",
+          "indent": 1,
+          "text": "seen = {}",
+          "src": "scribe"
+        },
+        "after": "l2"
+      }
+    },
+    {
+      "op_id": "c4",
+      "src": "hand",
+      "op": "code.indent",
+      "args": {
+        "id": "l2",
+        "delta": 1
+      }
+    },
+    {
+      "op_id": "c5",
+      "src": "hand",
+      "op": "code.move",
+      "args": {
+        "id": "l3",
+        "after": "l1"
+      }
+    },
+    {
+      "op_id": "c6",
+      "src": "hand",
+      "op": "code.indent",
+      "args": {
+        "id": "l1",
+        "delta": -1
+      }
+    },
+    {
+      "op_id": "c7",
+      "src": "scribe",
+      "op": "code.insert",
+      "args": {
+        "line": {
+          "id": "l4",
+          "indent": 2,
+          "text": "if target - x in seen:",
+          "src": "scribe"
+        },
+        "after": "l2"
+      }
+    },
+    {
+      "op_id": "c8",
+      "src": "hand",
+      "op": "code.indent",
+      "args": {
+        "id": "l4",
+        "delta": 9
+      }
+    },
+    {
+      "op_id": "c9",
+      "src": "scribe",
+      "op": "code.edit",
+      "args": {
+        "id": "l4",
+        "text": "if target - x in seen: return [seen[target - x], i]"
+      }
+    },
+    {
+      "op_id": "c10",
+      "src": "hand",
+      "op": "code.complexity",
+      "args": {
+        "slot": "time",
+        "value": "O(n)"
+      }
+    }
+  ],
+  "expected": {
+    "schema": "ir.board.v1",
+    "round": {
+      "id": "s_fixture",
+      "type": "coding",
+      "question_id": null,
+      "language": "python"
+    },
+    "rev": 10,
+    "size": {
+      "w": 64,
+      "h": 40
+    },
+    "brief": {
+      "question": "Fixture board",
+      "lines": []
+    },
+    "items": [],
+    "edges": [],
+    "code": {
+      "language": "python",
+      "lines": [
+        {
+          "id": "l1",
+          "indent": 0,
+          "text": "def two_sum(nums, target):",
+          "src": "scribe"
+        },
+        {
+          "id": "l3",
+          "indent": 1,
+          "text": "seen = {}",
+          "src": "scribe"
+        },
+        {
+          "id": "l2",
+          "indent": 1,
+          "text": "for i, x in enumerate(nums):",
+          "src": "scribe"
+        },
+        {
+          "id": "l4",
+          "indent": 6,
+          "text": "if target - x in seen: return [seen[target - x], i]",
+          "src": "scribe"
+        }
+      ],
+      "approach": [],
+      "complexity": {
+        "time": "O(n)",
+        "space": null
+      },
+      "trace": []
+    },
+    "meeting": null,
+    "focus": null,
+    "ghosts": [],
+    "op_ids": [
+      "c1",
+      "c2",
+      "c3",
+      "c4",
+      "c5",
+      "c6",
+      "c7",
+      "c8",
+      "c9",
+      "c10"
+    ]
+  }
+}
