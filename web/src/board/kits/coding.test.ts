@@ -6,7 +6,7 @@ import { applyOp, BoardStore } from '../ops';
 import { checkParsons, parsons, parsonsAnswer } from '../parsons';
 import { FakeAdapter } from '../testkit';
 import { kitFor } from '../tray';
-import { AXIS_LOCK_CM, CHIPS, codeLineRect, createCodingKit, INDENT_CM, LINE_H, SLOTS, TRACE_DWELL_MS, traceMarkerRect, visibleLines } from './coding';
+import { AXIS_LOCK_CM, CHIPS, FOLLOW_PAUSE_MS, codeLineRect, createCodingKit, INDENT_CM, LINE_H, SLOTS, TRACE_DWELL_MS, traceMarkerRect, visibleLines } from './coding';
 
 const LINES: BoardCode['lines'] = [
   { id: 'l1', indent: 0, text: 'def two_sum(nums, target):', src: 'scribe' },
@@ -202,9 +202,9 @@ describe('coding kit', () => {
     const rows = visibleLines(p);
     expect(rows).toBeGreaterThanOrEqual(15);
     const footerY = codeLineRect(p, rows - 1).y + LINE_H + 0.8;
-    expect(kit.panelKey!()).toBe('0');
+    expect(kit.panelKey!(store.board)).toBe('0');
     adapter.stroke([[p.x + 20, footerY]]);
-    const top = Number(kit.panelKey!());
+    const top = Number(kit.panelKey!(store.board));
     expect(top).toBe(rows - 2);
     // The first row shown is now line top + 1: drag it sideways to indent that line.
     const r0 = codeLineRect(p, 0);
@@ -212,10 +212,101 @@ describe('coding kit', () => {
     expect(emitted).toEqual([expect.objectContaining({ op: 'code.indent', args: { id: `l${top + 1}`, delta: 1 } })]);
     // Never past the end.
     adapter.stroke([[p.x + 20, codeLineRect(p, rows - 1).y + LINE_H + 0.8]]);
-    expect(Number(kit.panelKey!())).toBe(30 - rows);
+    expect(Number(kit.panelKey!(store.board))).toBe(30 - rows);
     // Pull the header down to scroll back by lines.
     adapter.stroke([[p.x + 20, p.y + 1], [p.x + 20, p.y + 3], [p.x + 20, p.y + 1 + 3 * LINE_H]]);
-    expect(Number(kit.panelKey!())).toBe(30 - rows - 3);
+    expect(Number(kit.panelKey!(store.board))).toBe(30 - rows - 3);
+  });
+
+  describe('the panel follows the Scribe', () => {
+    const many = (n: number) => Array.from({ length: n }, (_, i) => ({ id: `l${i + 1}`, indent: 1, text: `x${i + 1} = ${i}`, src: 'scribe' as const }));
+    const ins = (store: BoardStore, id: string, after: string) =>
+      store.apply({ op_id: `o-${id}`, src: 'scribe', op: 'code.insert', args: { line: { id, indent: 1, text: `new ${id}`, src: 'scribe' }, after } });
+    function follow(n = 20) {
+      let t = 100_000;
+      const kit = createCodingKit({ now: () => t });
+      const store = new BoardStore(codingBoard(many(n)));
+      const adapter = new FakeAdapter();
+      new BoardInput(store, adapter, kit, (op) => store.apply(op, { local: true }), { now_s: () => 1 });
+      const key = () => kit.panelKey!(store.board);
+      key();
+      return { kit, store, adapter, key, rows: visibleLines(kit.panel!), tick: (ms: number) => (t += ms) };
+    }
+
+    it('a line the Scribe adds past the last row scrolls the panel to show it', () => {
+      const { store, key, rows } = follow(20);
+      expect(rows).toBe(16);
+      expect(key()).toBe('0');
+      ins(store, 'l21', 'l20');
+      expect(key()).toBe('5');
+      // An edit to a line above the view brings that line back into view.
+      store.apply({ op_id: 'e1', src: 'scribe', op: 'code.edit', args: { id: 'l2', text: 'seen = set()' } });
+      expect(key()).toBe('1');
+    });
+
+    it('edits above the view do not shift the lines shown (the view is anchored to its first line)', () => {
+      const { store, adapter, kit, key } = follow(30);
+      // Page down by hand, then wait out the pause.
+      const p = kit.panel!;
+      adapter.stroke([[p.x + 20, codeLineRect(p, 15).y + LINE_H + 0.8]]);
+      const top = Number(key());
+      expect(top).toBe(14);
+      store.apply({ op_id: 'd1', src: 'scribe', op: 'code.delete', args: { id: 'l1' } });
+      // l15 is still the first line shown, now at index 13.
+      expect(key()).toBe('13');
+      expect(store.board.code!.lines[13]!.id).toBe('l15');
+    });
+
+    it('after a manual scroll it does not jump for 5 s: it shows a "new line below" cue, and a tap on it shows the line', () => {
+      const { store, adapter, kit, key, tick } = follow(40);
+      const p = kit.panel!;
+      const footer: [number, number] = [p.x + 20, codeLineRect(p, 15).y + LINE_H + 0.8];
+      // Page down once by hand (top 14), then the Scribe adds a line at the end.
+      adapter.stroke([footer]);
+      expect(key()).toBe('14');
+      tick(1000);
+      ins(store, 'l41', 'l40');
+      expect(key()).toBe('14:below');
+      // A tap on the cue shows that line on the last row.
+      adapter.stroke([footer]);
+      expect(key()).toBe(String(41 - 16));
+      // Past the pause it follows again.
+      tick(FOLLOW_PAUSE_MS + 1);
+      adapter.stroke([[p.x + 20, p.y + 1]]);
+      expect(Number(key())).toBeLessThan(25);
+      tick(FOLLOW_PAUSE_MS + 1);
+      ins(store, 'l42', 'l41');
+      expect(key()).toBe(String(42 - 16));
+    });
+
+    it('never scrolls while a line is held; the cue shows instead, and a cancelled press lets it follow again', () => {
+      const { store, adapter, kit, key } = follow(20);
+      const r = codeLineRect(kit.panel!, 3);
+      adapter.down(r.x + 6, r.y + r.h / 2);
+      ins(store, 'l21', 'l20');
+      expect(key()).toBe('0:below');
+      adapter.cancel(r.x + 6, r.y + r.h / 2);
+      ins(store, 'l22', 'l21');
+      expect(key()).toBe(String(22 - 16));
+    });
+  });
+
+  it('the trace marker, when its line is scrolled away, does not log the row it is drawn on', () => {
+    const lines = Array.from({ length: 30 }, (_, i) => ({ id: `l${i + 1}`, indent: 1, text: `x${i + 1}`, src: 'scribe' as const }));
+    const kit = createCodingKit();
+    const store = new BoardStore({ ...codingBoard(lines), code: { ...codingBoard(lines).code!, trace: [{ line: 'l2', t: 1 }] } });
+    const adapter = new FakeAdapter();
+    const emitted: BoardOp[] = [];
+    new BoardInput(store, adapter, kit, (op) => {
+      emitted.push(op);
+      store.apply(op, { local: true });
+    }, { now_s: () => 5 });
+    const p = kit.panel!;
+    adapter.stroke([[p.x + 20, codeLineRect(p, 15).y + LINE_H + 0.8]]);
+    expect(Number(kit.panelKey!(store.board))).toBeGreaterThan(2);
+    const m = traceMarkerRect(p, store.board, Number(kit.panelKey!(store.board)));
+    adapter.stroke([[m.x + m.w / 2, m.y + m.h / 2]]);
+    expect(emitted).toEqual([]);
   });
 
   it('puts the panel on the dominant side', () => {
@@ -282,6 +373,22 @@ describe('Parsons puzzle', () => {
     expect(dealt.board.code!.lines.find((l) => l.id === 'l2')!.indent).toBe(1);
     const res = checkParsons(parsonsAnswer(dealt.board.code!.lines), parsonsAnswer(LINES));
     expect(res.correct).toBe(false);
+  });
+
+  it('lines that read the same are interchangeable, and the shuffle never swaps two identical lines', () => {
+    const sol = [
+      { id: 'a', indent: 0, text: 'def f(xs):' },
+      { id: 'b', indent: 1, text: 'i += 1' },
+      { id: 'c', indent: 1, text: 'i += 1' },
+      { id: 'd', indent: 1, text: 'return i' },
+    ];
+    const swapped = [sol[0]!, sol[2]!, sol[1]!, sol[3]!];
+    expect(checkParsons(parsonsAnswer(swapped), parsonsAnswer(sol))).toEqual({ correct: true, firstWrongIndex: null });
+    const lines = [sol[0]!, sol[1]!, sol[2]!, { id: 'e', indent: 1, text: 'j += 1' }, sol[3]!];
+    for (let seed = 1; seed <= 300; seed++) {
+      const texts = parsons(lines, [], seed).map((b) => b.text);
+      expect(texts).not.toEqual(lines.map((l) => l.text));
+    }
   });
 
   it('a parsons kit will not move a locked line, nor drop a line above the first or below the last', () => {

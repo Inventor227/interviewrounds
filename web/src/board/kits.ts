@@ -88,6 +88,8 @@ export interface KitHandler {
   move?(press: KitPress, ctx: KitContext): KitOp[];
   /** The pointer let go: the ops to send, and the item to focus (undefined leaves focus). */
   up(press: KitPress, ctx: KitContext): { ops: KitOp[]; focus?: string | null };
+  /** The press ended without a release (the pointer was cancelled or the hand lost). */
+  cancel?(press: KitPress, ctx: KitContext): void;
   /** How the live press looks (kit: the kit as placed, mirrored for left-handed users). */
   overlay?(press: KitPress, board: Board, kit: Kit): KitDraw | null;
 }
@@ -120,8 +122,11 @@ export interface Kit {
   panel?: Rect;
   /** Draws the code panel at `panel` (board cm; the 2D view, and the XR panel's own canvas). */
   renderPanel?(ctx: CanvasRenderingContext2D, board: Board, pxPerCm: number): void;
-  /** Changes when the panel shows something else for the same board (it was scrolled). */
-  panelKey?(): string;
+  /**
+   * What the panel shows for this board, as a key: changes when it scrolls (by hand, or to
+   * follow a new line). Surfaces call it before deciding whether to repaint.
+   */
+  panelKey?(board: Board): string;
   /** What a drawn box or circle becomes (default: a service card, a client card); null keeps it ink. */
   drawn?: { rect?: TrayMake | null; circle?: TrayMake | null };
 }

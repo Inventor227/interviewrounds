@@ -52,7 +52,7 @@ export class CodePanel {
 
   /** Call every frame: redraws the screen when the code changed, the gesture strip when it moved. */
   update(board: Board, overlays: Overlay[]): void {
-    const key = `${this.kit.panelKey?.() ?? ''}|${fontsEpoch()}`;
+    const key = `${this.kit.panelKey?.(board) ?? ''}|${fontsEpoch()}`;
     if (board.code !== this.lastCode || key !== this.lastKey) {
       this.lastCode = board.code;
       this.lastKey = key;

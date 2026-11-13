@@ -169,6 +169,7 @@ export class BoardInput {
   destroy(): void {
     this.offs.forEach((off) => off());
     this.offs = [];
+    for (const g of this.gestures.values()) if (g.kind === 'kit') this.kit.handler?.cancel?.(g.press, this.ctx());
     this.gestures.clear();
   }
 
@@ -362,6 +363,7 @@ export class BoardInput {
     const g = this.gestures.get(p.hand);
     if (!g) return;
     this.gestures.delete(p.hand);
+    if (g.kind === 'kit') this.kit.handler?.cancel?.(g.press, this.ctx());
     if (reason === 'lost') {
       // Keep the user's work where they put it, but never delete or create off the sheet on a loss.
       const safe = onSheet(this.board, p.x_cm, p.y_cm) && !inRect(this.kit.bin, p.x_cm, p.y_cm);

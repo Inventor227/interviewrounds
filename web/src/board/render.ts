@@ -1435,7 +1435,7 @@ export class BoardView {
     const highlight = state.highlight ?? null;
     const rings = state.rings ?? [];
     const drawLive = state.drawLive !== false;
-    const key = `${highlight ?? ''}|${drawLive ? overlays.map(overlayKey).join('|') : overlays.flatMap((o) => (o.kind === 'drag' ? [o.id] : [])).sort().join('|')}|${drawLive ? ringKey(rings) : ''}|${fontEpoch}|${this.opts.kit?.panelKey?.() ?? ''}`;
+    const key = `${highlight ?? ''}|${drawLive ? overlays.map(overlayKey).join('|') : overlays.flatMap((o) => (o.kind === 'drag' ? [o.id] : [])).sort().join('|')}|${drawLive ? ringKey(rings) : ''}|${fontEpoch}|${this.opts.kit?.panelKey?.(board) ?? ''}`;
     if (board === this.lastBoard && key === this.lastKey) return false;
     this.lastBoard = board;
     this.lastKey = key;
@@ -1460,7 +1460,7 @@ export class BoardView {
     }
 
     // Board layer: only when the committed board, highlight or dragged item changes.
-    const bk = `${highlight ?? ''}|${dragIds.join(',')}|${fontEpoch}|${this.opts.kit?.panelKey?.() ?? ''}`;
+    const bk = `${highlight ?? ''}|${dragIds.join(',')}|${fontEpoch}|${this.opts.kit?.panelKey?.(board) ?? ''}`;
     let full = false;
     if (board !== this.boardOf || bk !== this.boardKey) {
       const bc = this.staticLayer ? this.layerCtx(this.boardLayer) : null;

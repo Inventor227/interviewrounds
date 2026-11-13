@@ -5,6 +5,8 @@
 //   result clamped to 0..6; one code.indent). The first centimetre picks the axis and the
 //   gesture keeps it. Drop it on the bin, or well off the panel toward the sheet, to delete it.
 //   Longer code scrolls: pinch the "n more" strip (or the header) and pull, or tap it to page.
+//   The panel follows the Scribe: a new or edited line out of view scrolls it into view, unless
+//   the user scrolled by hand in the last 5 s (then the strip says "New line below").
 // - The trace marker in the gutter walks the lines while you explain a test: each line it
 //   stops on is logged (code.trace, with the round time), once the hand is clearly inside it.
 // - On the sheet: the Approach card (the Scribe's bullets) and the Time and Space slots;
@@ -58,11 +60,74 @@ export function visibleLines(panel: Rect): number {
 const headerRect = (panel: Rect): Rect => ({ x: panel.x, y: panel.y, w: panel.w, h: HEADER });
 const footerRect = (panel: Rect): Rect => ({ x: panel.x, y: panel.y + HEADER + visibleLines(panel) * LINE_H, w: panel.w, h: panel.h - HEADER - visibleLines(panel) * LINE_H });
 
-/** The first line shown, kept in range (the panel scrolls when the code is longer than it). */
-function topLine(scroll: { top: number }, board: Board, panel: Rect): number {
-  const n = board.code?.lines.length ?? 0;
-  scroll.top = Math.max(0, Math.min(scroll.top, n - visibleLines(panel)));
-  return scroll.top;
+/** After a manual scroll, the panel waits this long before following new lines again (ms). */
+export const FOLLOW_PAUSE_MS = 5000;
+
+/**
+ * What this user's panel shows: local view state, never board data. `top` is the first line
+ * shown, anchored to that line's id so edits above the view do not shift it. New or edited
+ * lines outside the view scroll it to them, unless the user scrolled by hand in the last
+ * FOLLOW_PAUSE_MS or is holding a line: then `cue` names the line and the panel says so.
+ */
+interface PanelView {
+  top: number;
+  anchor: string | null;
+  /** When the user last scrolled by hand (view clock, ms). */
+  manualAt: number;
+  /** Presses on the panel now (no following while a line is held). */
+  live: Set<unknown>;
+  code: Board['code'] | null;
+  seen: Map<string, string> | null;
+  cue: string | null;
+  now(): number;
+}
+
+/** The first line shown, kept in range, following new lines (see PanelView). */
+function topLine(view: PanelView, board: Board, panel: Rect): number {
+  const code = board.code ?? null;
+  const lines = code?.lines ?? [];
+  const rows = visibleLines(panel);
+  if (code !== view.code) {
+    if (view.anchor) {
+      const i = lines.findIndex((l) => l.id === view.anchor);
+      if (i >= 0) view.top = i;
+    }
+    // The newest change: the last line that is new or reads differently.
+    let changed = -1;
+    const seen = view.seen;
+    if (seen) for (let i = 0; i < lines.length; i++) if (seen.get(lines[i]!.id) !== `${lines[i]!.indent}|${lines[i]!.text}`) changed = i;
+    view.seen = code ? new Map(lines.map((l) => [l.id, `${l.indent}|${l.text}`])) : null;
+    view.code = code;
+    if (changed >= 0 && (changed < view.top || changed >= view.top + rows)) {
+      const held = view.live.size > 0 || view.now() - view.manualAt < FOLLOW_PAUSE_MS;
+      if (held) view.cue = lines[changed]!.id;
+      else view.top = changed < view.top ? changed : changed - rows + 1;
+    }
+  }
+  view.top = Math.max(0, Math.min(view.top, lines.length - rows));
+  view.anchor = lines[view.top]?.id ?? null;
+  if (view.cue) {
+    const i = lines.findIndex((l) => l.id === view.cue);
+    if (i < 0 || (i >= view.top && i < view.top + rows)) view.cue = null;
+  }
+  return view.top;
+}
+
+/** Shows the cued line (a tap on the cue), or pages by `page`. */
+function pageOrCue(view: PanelView, board: Board, panel: Rect, top0: number, page: 1 | -1): void {
+  const rows = visibleLines(panel);
+  const i = view.cue ? (board.code?.lines.findIndex((l) => l.id === view.cue) ?? -1) : -1;
+  if (i >= 0 && Math.sign(i - top0) === page) view.top = page > 0 ? i - rows + 1 : i;
+  else view.top = top0 + page * Math.max(1, rows - 2);
+  view.cue = null;
+  view.manualAt = view.now();
+  topLine(view, board, panel);
+}
+
+/** Where the cued line is: below or above the view, or null. */
+function cueSide(view: PanelView, board: Board): 'below' | 'above' | null {
+  const i = view.cue ? (board.code?.lines.findIndex((l) => l.id === view.cue) ?? -1) : -1;
+  return i < 0 ? null : i < view.top ? 'above' : 'below';
 }
 
 /** The screen row (0 based) at y, clamped to the rows shown. */
@@ -112,7 +177,7 @@ function lockAxis(press: KitPress, s: Extract<CodePress, { kind: 'line' }>): voi
 
 const indentLevels = (press: KitPress) => Math.trunc((press.x - press.start[0]) / INDENT_CM);
 
-function handler(locked: ReadonlySet<string>, scroll: { top: number }): KitHandler {
+function handler(locked: ReadonlySet<string>, scroll: PanelView): KitHandler {
   /** The trace marker's next step, if the hand is clearly in another line and stayed (or let go). */
   const traceStep = (press: KitPress, s: Extract<CodePress, { kind: 'trace' }>, board: Board, panel: Rect, release: boolean, now_s: () => number): KitOp[] => {
     const lines = board.code?.lines;
@@ -128,9 +193,11 @@ function handler(locked: ReadonlySet<string>, scroll: { top: number }): KitHandl
       s.since = press.t_ms;
     }
     let row: number | null = null;
-    if (s.cand != null && (release || press.t_ms - s.since >= TRACE_DWELL_MS)) row = s.cand;
-    // A pinch on the marker without moving it logs the line it is on (so the first line counts).
-    else if (release && !s.moved && s.steps === 0) row = s.row;
+    // Steps need the hand to have moved off where it pinched (the marker may stand in for a line scrolled away).
+    if (s.cand != null && s.moved && (release || press.t_ms - s.since >= TRACE_DWELL_MS)) row = s.cand;
+    // A pinch on the marker without moving it logs the line it is on (so the first line counts),
+    // when that line is on screen.
+    else if (release && !s.moved && s.steps === 0 && s.row >= top && s.row < top + rows) row = s.row;
     if (row == null) return [];
     s.row = row;
     s.cand = null;
@@ -149,19 +216,23 @@ function handler(locked: ReadonlySet<string>, scroll: { top: number }): KitHandl
       if (!panel || !lines || !inRect(panel, x, y)) return null;
       const top = topLine(scroll, board, panel);
       const rows = Math.min(lines.length - top, visibleLines(panel));
-      if (top > 0 && inRect(headerRect(panel), x, y)) return { kind: 'scroll', top0: top, page: -1, moved: false } satisfies CodePress;
-      if (lines.length > top + rows && inRect(footerRect(panel), x, y)) return { kind: 'scroll', top0: top, page: 1, moved: false } satisfies CodePress;
-      if (rows > 0 && inRect(traceMarkerRect(panel, board, top), x, y)) {
-        const row = Math.max(top, Math.min(top + rows - 1, traceIndex(board)));
-        return { kind: 'trace', row, cand: null, since: 0, steps: 0, moved: false } satisfies CodePress;
-      }
-      for (let i = 0; i < rows; i++) {
-        if (inRect(codeLineRect(panel, i), x, y)) {
-          const l = lines[top + i]!;
-          return { kind: 'line', id: l.id, index: top + i, indent: l.indent, locked: locked.has(l.id), axis: null } satisfies CodePress;
+      const press = ((): CodePress | null => {
+        if (top > 0 && inRect(headerRect(panel), x, y)) return { kind: 'scroll', top0: top, page: -1, moved: false };
+        if (lines.length > top + rows && inRect(footerRect(panel), x, y)) return { kind: 'scroll', top0: top, page: 1, moved: false };
+        if (rows > 0 && inRect(traceMarkerRect(panel, board, top), x, y)) {
+          // From the line really traced last, even when it is scrolled away.
+          return { kind: 'trace', row: traceIndex(board), cand: null, since: 0, steps: 0, moved: false };
         }
-      }
-      return null;
+        for (let i = 0; i < rows; i++) {
+          if (inRect(codeLineRect(panel, i), x, y)) {
+            const l = lines[top + i]!;
+            return { kind: 'line', id: l.id, index: top + i, indent: l.indent, locked: locked.has(l.id), axis: null };
+          }
+        }
+        return null;
+      })();
+      if (press) scroll.live.add(press);
+      return press;
     },
     move(press, { board, kit, now_s }) {
       const s = press.state as CodePress;
@@ -173,23 +244,25 @@ function handler(locked: ReadonlySet<string>, scroll: { top: number }): KitHandl
         // The lines follow the hand: pull up to see further down.
         if (s.moved) {
           scroll.top = s.top0 - Math.round(dy / LINE_H);
+          scroll.manualAt = scroll.now();
           topLine(scroll, board, kit.panel);
         }
       }
       if (s.kind === 'trace') return traceStep(press, s, board, kit.panel, false, now_s);
       return [];
     },
+    cancel(press) {
+      scroll.live.delete(press.state);
+    },
     up(press, { board, kit, now_s }) {
       const s = press.state as CodePress;
+      scroll.live.delete(s);
       const lines = board.code?.lines;
       const panel = kit.panel;
       if (!lines || !panel) return { ops: [] };
       if (s.kind === 'trace') return { ops: traceStep(press, s, board, panel, true, now_s) };
       if (s.kind === 'scroll') {
-        if (!s.moved) {
-          scroll.top = s.top0 + s.page * Math.max(1, visibleLines(panel) - 2);
-          topLine(scroll, board, panel);
-        }
+        if (!s.moved) pageOrCue(scroll, board, panel, s.top0, s.page);
         return { ops: [] };
       }
       lockAxis(press, s);
@@ -316,7 +389,7 @@ function renderSheet(ctx: CanvasRenderingContext2D, board: Board, k: number): vo
 }
 
 /** The code panel at kit.panel: a dark screen with the lines, the gutter and the trace marker. */
-export function renderCodePanel(ctx: CanvasRenderingContext2D, board: Board, k: number, panel: Rect, locked: ReadonlySet<string> = new Set(), top = 0): void {
+export function renderCodePanel(ctx: CanvasRenderingContext2D, board: Board, k: number, panel: Rect, locked: ReadonlySet<string> = new Set(), top = 0, cue: 'below' | 'above' | null = null): void {
   const code = board.code;
   ctx.save();
   roundRect(ctx, panel.x * k, panel.y * k, panel.w * k, panel.h * k, 0.8 * k);
@@ -333,7 +406,8 @@ export function renderCodePanel(ctx: CanvasRenderingContext2D, board: Board, k: 
   const n = Math.max(0, Math.min(code.lines.length - top, visibleLines(panel)));
   if (top > 0) {
     ctx.textAlign = 'right';
-    ctx.fillText(`▲ ${top} above`, (panel.x + panel.w - 0.8) * k, (panel.y + 1.7) * k);
+    if (cue === 'above') ctx.fillStyle = '#6EA8FE';
+    ctx.fillText(cue === 'above' ? '▲ New line above' : `▲ ${top} above`, (panel.x + panel.w - 0.8) * k, (panel.y + 1.7) * k);
     ctx.textAlign = 'left';
   }
   if (!code.lines.length) {
@@ -375,12 +449,12 @@ export function renderCodePanel(ctx: CanvasRenderingContext2D, board: Board, k: 
   if (below > 0) {
     const f = footerRect(panel);
     roundRect(ctx, (f.x + 0.6) * k, (f.y + 0.3) * k, (f.w - 1.2) * k, (f.h - 0.6) * k, 0.4 * k);
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.07)';
+    ctx.fillStyle = cue === 'below' ? 'rgba(110, 168, 254, 0.25)' : 'rgba(255, 255, 255, 0.07)';
     ctx.fill();
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.7)';
+    ctx.fillStyle = cue === 'below' ? '#FFFFFF' : 'rgba(255, 255, 255, 0.7)';
     ctx.font = font(0.8 * k, 600);
     ctx.textAlign = 'center';
-    ctx.fillText(`▼ ${below} more: pinch here to scroll`, (f.x + f.w / 2) * k, (f.y + f.h / 2 + 0.3) * k);
+    ctx.fillText(cue === 'below' ? '▼ New line below: pinch to see it' : `▼ ${below} more: pinch here to scroll`, (f.x + f.w / 2) * k, (f.y + f.h / 2 + 0.3) * k);
     ctx.textAlign = 'left';
   }
   if (n) {
@@ -394,10 +468,11 @@ export function renderCodePanel(ctx: CanvasRenderingContext2D, board: Board, k: 
  * The coding kit. `locked` line ids (the Parsons puzzle's first and last lines) cannot be
  * moved, and nothing can be moved above the first or below the last of them.
  */
-export function createCodingKit(opts: { locked?: readonly string[] } = {}): Kit {
+export function createCodingKit(opts: { locked?: readonly string[]; now?: () => number } = {}): Kit {
   const locked = new Set(opts.locked ?? []);
-  // Which line the panel shows first: local to this user's view, never board data.
-  const scroll = { top: 0 };
+  const now = opts.now ?? (() => (typeof performance !== 'undefined' ? performance.now() : Date.now()));
+  // Which lines the panel shows: local to this user's view, never board data.
+  const scroll: PanelView = { top: 0, anchor: null, manualAt: -Infinity, live: new Set(), code: null, seen: null, cue: null, now };
   const kit: Kit = {
     id: 'coding',
     tray: traySlots(CHIPS.map((value) => ({ name: value, make: { kind: 'chip', value } }))),
@@ -417,9 +492,12 @@ export function createCodingKit(opts: { locked?: readonly string[] } = {}): Kit 
     handler: handler(locked, scroll),
     renderSheet,
     renderPanel(ctx, board, k) {
-      if (this.panel) renderCodePanel(ctx, board, k, this.panel, locked, topLine(scroll, board, this.panel));
+      if (this.panel) renderCodePanel(ctx, board, k, this.panel, locked, topLine(scroll, board, this.panel), cueSide(scroll, board));
     },
-    panelKey: () => String(scroll.top),
+    panelKey(board) {
+      const top = this.panel ? topLine(scroll, board, this.panel) : scroll.top;
+      return `${top}${scroll.cue ? `:${cueSide(scroll, board)}` : ''}`;
+    },
   };
   return kit;
 }
