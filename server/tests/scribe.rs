@@ -569,3 +569,86 @@ async fn scribe_keeps_multiplicity_labels_and_uses_the_given_focus() {
         "a focus on a missing item is dropped"
     );
 }
+
+#[tokio::test]
+async fn scribe_numbers_must_be_said_even_in_long_texts() {
+    let b = hld();
+    let note = |t: &str| json!({"confidence": 0.9, "ops": [{"op": "item.note.add", "args": {"id": "n2", "text": t}}]});
+    let text = "Cache user sessions with TTL 5 minutes";
+    assert!(
+        one_call(
+            &b,
+            "cache user sessions with a TTL of a few minutes",
+            note(text)
+        )
+        .await
+        .is_empty()
+    );
+    assert_eq!(
+        one_call(
+            &b,
+            "cache user sessions with a TTL of five minutes",
+            note(text)
+        )
+        .await
+        .len(),
+        1
+    );
+    // Complexity cue words are not numbers elsewhere.
+    assert!(
+        one_call(
+            &b,
+            "constant time lookup with a TTL of an hour",
+            note("TTL 1 hour")
+        )
+        .await
+        .is_empty()
+    );
+    // A bare number label is only notation on a class diagram.
+    let edge = json!({"confidence": 0.9, "ops": [{"op": "edge.create",
+        "args": {"id": "x7_1", "from": "n1", "to": "n2", "dir": "->", "label": "100"}}]});
+    assert!(one_call(&b, "the gateway calls it", edge).await.is_empty());
+
+    let code = coding_board();
+    let line = json!({"confidence": 0.9, "ops": [{"op": "code.insert",
+        "args": {"line": {"id": "x7_1", "indent": 1, "text": "for i in range(5, len(nums)):", "src": "scribe"}, "after": "l1"}}]});
+    assert!(
+        one_call(&code, "for i in range len nums", line)
+            .await
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn scribe_quadrants_and_cleared_slots_need_to_be_asked_for() {
+    let mut b = hld();
+    b.round.kit = ir_server::board::BoardKit::Pm;
+    b.items.push(
+        serde_json::from_value(
+            json!({"id": "s1", "kind": "sticky", "lane": "idea", "text": "Verified listings",
+            "votes": 0, "quad": null, "x": 30, "y": 20}),
+        )
+        .unwrap(),
+    );
+    let quad = json!({"confidence": 0.9, "ops": [{"op": "sticky.set_quad", "args": {"id": "s1", "quad": "tl"}}]});
+    assert!(
+        one_call(&b, "verified listings would help", quad.clone())
+            .await
+            .is_empty()
+    );
+    assert_eq!(
+        one_call(&b, "verified listings is high impact and low effort", quad)
+            .await
+            .len(),
+        1
+    );
+
+    let code = coding_board();
+    let clear = json!({"confidence": 0.9, "ops": [{"op": "code.complexity", "args": {"slot": "time", "value": null}}]});
+    assert!(
+        one_call(&code, "let me think about time", clear.clone())
+            .await
+            .is_empty()
+    );
+    assert_eq!(one_call(&code, "clear the time slot", clear).await.len(), 1);
+}

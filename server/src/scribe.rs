@@ -183,7 +183,7 @@ impl Scribe {
             ("kit", b.round.kit.as_str().to_string()),
             ("round_type", input.round_type.to_string()),
             ("question", b.brief.question.clone()),
-            ("board_text", board::summary(b, None)),
+            ("board_text", board::summary(&with_focus(b, focus), None)),
             ("focus", focus.unwrap_or("none").to_string()),
             ("language", language),
             ("new_id_prefix", format!("x{}_", input.call_no)),
@@ -284,12 +284,15 @@ impl Scribe {
             } else {
                 &heard_last
             };
-            let said_it = if raw.op == "code.complexity" {
-                args.get("value")
-                    .and_then(Value::as_str)
-                    .is_none_or(|v| complexity_said(v, heard))
-            } else {
-                texts(&raw.op, &args).iter().all(|t| said(t, heard))
+            let said_it = match raw.op.as_str() {
+                "code.complexity" => match args.get("value").and_then(Value::as_str) {
+                    Some(v) => complexity_said(v, heard),
+                    None => clear_said(heard),
+                },
+                "sticky.set_quad" => quadrant_said(heard),
+                _ => texts(&raw.op, &args, input.board.round.kit)
+                    .iter()
+                    .all(|t| said(t, heard)),
             };
             if !said_it {
                 tracing::debug!(op = %raw.op, args = %args, "scribe op dropped: text not said");
@@ -405,7 +408,8 @@ fn allowed(raw: &RawOp, kit: BoardKit, call_no: u64) -> Option<Value> {
 }
 
 /// The free-text args of an op: what must have been said.
-fn texts(op: &str, args: &Value) -> Vec<String> {
+fn texts(op: &str, args: &Value, kit: BoardKit) -> Vec<String> {
+    let notation = |l: &String| kit == BoardKit::Lld && is_multiplicity(l);
     let s = |v: Option<&Value>| v.and_then(Value::as_str).map(str::to_string);
     let mut out = Vec::new();
     let member = |m: &Value, out: &mut Vec<String>| {
@@ -437,11 +441,11 @@ fn texts(op: &str, args: &Value) -> Vec<String> {
                 }
             }
         }
-        "edge.label" => out.extend(s(args.get("text")).filter(|l| !is_multiplicity(l))),
+        "edge.label" => out.extend(s(args.get("text")).filter(|l| !notation(l))),
         "item.label" | "item.note.add" | "code.edit" | "park.add" => {
             out.extend(s(args.get("text")))
         }
-        "edge.create" => out.extend(s(args.get("label")).filter(|l| !is_multiplicity(l))),
+        "edge.create" => out.extend(s(args.get("label")).filter(|l| !notation(l))),
         "member.add" => {
             if let Some(m) = args.get("member") {
                 member(m, &mut out);
@@ -683,29 +687,6 @@ fn heard(utterances: &[String]) -> HashSet<String> {
             out.insert(w.clone());
             match w.as_str() {
                 "cash" => _ = out.insert("cache".into()),
-                // Complexity cues, as the terms they stand for in O(...).
-                "linear" => _ = out.insert("n".into()),
-                "constant" => _ = out.insert("1".into()),
-                "logarithmic" | "logn" => {
-                    out.insert("log".into());
-                    out.insert("n".into());
-                }
-                "linearithmic" => {
-                    out.insert("n".into());
-                    out.insert("log".into());
-                }
-                "quadratic" | "squared" => {
-                    out.insert("n".into());
-                    out.insert("2".into());
-                }
-                "cubic" | "cubed" => {
-                    out.insert("n".into());
-                    out.insert("3".into());
-                }
-                "exponential" => {
-                    out.insert("2".into());
-                    out.insert("n".into());
-                }
                 "q" | "cue" | "queues" => _ = out.insert("queue".into()),
                 "sequel" => {
                     out.insert("sql".into());
@@ -778,13 +759,19 @@ fn close(w: &str, h: &str) -> bool {
         || (lw >= 5 && lh >= 5 && within_one_edit(w, h))
 }
 
-/// Whether the candidate said `text`: every content word of a short text (up to three), three quarters of a
-/// longer one, matches a word they said.
+/// Whether the candidate said `text`: every number in it was said (exactly), and every other content word of a
+/// short text (up to three), three quarters of a longer one, matches a word they said.
 fn said(text: &str, heard: &HashSet<String>) -> bool {
     let content: Vec<String> = words(text)
         .into_iter()
         .filter(|w| (w.chars().count() >= 2 || is_number(w)) && !EXEMPT.contains(&w.as_str()))
         .collect();
+    // Numbers are a hard rule: every one must have been said, however long the text.
+    let (numbers, content): (Vec<String>, Vec<String>) =
+        content.into_iter().partition(|w| is_number(w));
+    if numbers.iter().any(|n| !heard.contains(n)) {
+        return false;
+    }
     if content.is_empty() {
         return true;
     }
@@ -799,12 +786,12 @@ fn said(text: &str, heard: &HashSet<String>) -> bool {
     }
 }
 
-/// UML multiplicity such as `1..*`, `0..1` or `*`: relationship notation, not content.
+/// UML multiplicity on a class diagram (`1..*`, `0..1`, `*`, `1`, `n`): relationship notation, not content.
 fn is_multiplicity(label: &str) -> bool {
     let l = label.trim();
     !l.is_empty()
         && l.split("..").count() <= 2
-        && l.split("..").all(|p| p == "*" || p == "n" || is_number(p))
+        && l.split("..").all(|p| matches!(p, "*" | "n" | "0" | "1"))
 }
 
 fn is_number(w: &str) -> bool {
@@ -814,8 +801,64 @@ fn is_number(w: &str) -> bool {
 /// Whether a complexity value such as `O(n log n)` was said: each of its terms (`n`, `log`, `2` ...; the `o` aside)
 /// must be heard, where cue words count as their terms ("linear" is `n`, "squared" is `2`, "constant" is `1`).
 fn complexity_said(value: &str, heard: &HashSet<String>) -> bool {
+    let mut terms_heard: HashSet<&str> = heard.iter().map(String::as_str).collect();
+    for w in heard {
+        let cue: &[&str] = match w.as_str() {
+            "linear" => &["n"],
+            "constant" => &["1"],
+            "logarithmic" | "logn" => &["log", "n"],
+            "linearithmic" => &["n", "log"],
+            "quadratic" | "squared" => &["n", "2"],
+            "cubic" | "cubed" => &["n", "3"],
+            "exponential" => &["2", "n"],
+            _ => &[],
+        };
+        terms_heard.extend(cue);
+    }
     let terms: Vec<String> = words(value).into_iter().filter(|w| w != "o").collect();
-    !terms.is_empty() && terms.iter().all(|t| heard.contains(t))
+    !terms.is_empty() && terms.iter().all(|t| terms_heard.contains(t.as_str()))
+}
+
+/// The board as the Scribe should see it: with the caller's fresh focus (which the summary lists first on big
+/// boards) instead of the stored one.
+fn with_focus(b: &Board, focus: Option<&str>) -> Board {
+    let mut view = b.clone();
+    view.focus = focus.map(str::to_string);
+    view
+}
+
+/// Clearing a filled slot needs the candidate to ask for it.
+fn clear_said(heard: &HashSet<String>) -> bool {
+    [
+        "clear", "remove", "reset", "unset", "erase", "delete", "empty",
+    ]
+    .iter()
+    .any(|w| heard.contains(*w))
+}
+
+/// Placing a sticky in the 2x2 needs a quadrant cue in what was said.
+fn quadrant_said(heard: &HashSet<String>) -> bool {
+    const CUES: &[&str] = &[
+        "impact",
+        "effort",
+        "quick",
+        "quadrant",
+        "high",
+        "low",
+        "easy",
+        "hard",
+        "top",
+        "bottom",
+        "left",
+        "right",
+        "urgent",
+        "priorit",
+        "cheap",
+        "expensive",
+        "costly",
+        "win",
+    ];
+    heard.iter().any(|w| CUES.iter().any(|c| w.starts_with(c)))
 }
 
 /// Free board positions for a new card of this kit's usual size, best first (nearest the focus item when there
