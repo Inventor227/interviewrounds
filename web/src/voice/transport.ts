@@ -29,6 +29,7 @@ export interface AgentText {
 
 export type VoiceErrorCode =
   | 'mic_denied'
+  | 'no_mic'
   | 'connect_failed'
   | 'session_expired'
   | 'no_credit'
@@ -42,7 +43,7 @@ export class VoiceError extends Error {
   constructor(
     readonly code: VoiceErrorCode,
     message: string,
-    readonly cause?: unknown,
+    override readonly cause?: unknown,
   ) {
     super(message);
   }
