@@ -32,6 +32,7 @@ import { LipSync, type LipSyncEngine } from './lipsync';
 import { configureAvatarLoader, loadAvatarGltf, loadClips } from './loader';
 import { FACE_KEYS, faceFor } from './moods';
 import { Rig } from './rig';
+import { BodyDetail, bodyMesh, slimAvatar, type SlimStats } from './slim';
 import { approach, between, seededRng, type Rng } from './rng';
 import { CLIPS, type AvatarManifestEntry, type AvatarMode, type Mood, type SeatPose } from './types';
 
@@ -57,6 +58,11 @@ export interface AvatarOptions {
   seed?: number;
   /** Extra height for the root on top of deskY - CLIP_DESK_Y (metres). */
   yOffset?: number;
+  /**
+   * Seated at a table (default): drops the legs (hidden under the table) and the morph targets that never move.
+   * False keeps the model as converted (a full-body view).
+   */
+  seated?: boolean;
 }
 
 export interface AvatarStats {
@@ -138,6 +144,9 @@ export class Avatar {
   private readonly model: Object3D;
   private readonly rig: Rig;
   private readonly morphs: Morphs;
+  /** What slimming removed (null when the model was kept whole). */
+  readonly slim: SlimStats | null;
+  private readonly detail: BodyDetail;
   private readonly mixer: AnimationMixer;
   private readonly clips = new Map<string, AnimationClip>();
   private readonly actions = new Map<string, AnimationAction>();
@@ -191,6 +200,9 @@ export class Avatar {
       o.frustumCulled = false;
     });
     this.rig = new Rig(this.root, model, entry);
+    // Before the morph weights are shared: the body keeps none once its still shapes are gone.
+    this.slim = opts.seated === false ? null : slimAvatar(model);
+    this.detail = new BodyDetail(bodyMesh(model));
     this.morphs = new Morphs(model);
     this.mixer = new AnimationMixer(model);
     for (const c of clips) this.clips.set(c.name, c);
@@ -235,6 +247,14 @@ export class Avatar {
 
   get lipSyncEngine(): LipSyncEngine {
     return this.lip.engine;
+  }
+
+  /**
+   * Level of detail of the body: 0 full, 1 simplified (for the seats after the first). The head and face are never
+   * simplified. Resolves once applied.
+   */
+  setDetail(level: 0 | 1): Promise<void> {
+    return this.detail.set(level);
   }
 
   /** Seats the avatar: root at the seat, turned by yaw, raised so its hands rest on a table at deskY. */

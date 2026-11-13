@@ -18,7 +18,8 @@ function fakeAvatar() {
     pointAt: (w: Vec3 | null) => void a.points.push(w),
     attachVoice: vi.fn(async () => undefined),
     setUserSpeaking: (b: boolean) => void calls.push(`user:${b}`),
-    update: vi.fn(),
+    update: vi.fn<(dt: number) => void>(),
+    setDetail: vi.fn<(level: 0 | 1) => void>(),
     dispose: vi.fn(),
   };
   return a satisfies AvatarLike;
@@ -73,7 +74,68 @@ describe('people in the room', () => {
     people.update(0.016, HEAD);
     expect(fades.map((f) => f[1])).toEqual([0, 0.5, 1]); // stops once fully in
     expect(onAppear).toHaveBeenCalledTimes(1);
+    // Every frame while fading in; once in and not speaking, every other frame with the time it skipped.
+    expect(a.update).toHaveBeenCalledTimes(3);
+    people.update(0.016, HEAD);
     expect(a.update).toHaveBeenCalledTimes(4);
+    expect(a.update.mock.calls.at(-1)![0]).toBeCloseTo(0.032, 6); // the skipped frame's time comes with it
+  });
+
+  it('listeners_animate_at_half_rate_staggered_the_speaker_every_frame', async () => {
+    const { people, avatars, gates } = setup(2);
+    const loading = people.load();
+    gates.get('p1')!();
+    gates.get('p2')!();
+    await loading;
+    people.place([seat(0, 0), seat(1, -0.75)]);
+    people.update(FADE_IN_S, HEAD);
+    people.update(FADE_IN_S, HEAD);
+    // Both in; let each take the time it skipped meanwhile.
+    people.update(0.01, HEAD);
+    people.update(0.01, HEAD);
+    const a1 = avatars.get('p1')!;
+    const a2 = avatars.get('p2')!;
+    a1.update.mockClear();
+    a2.update.mockClear();
+    const frames: string[][] = [];
+    a1.update.mockImplementation(() => void frames.at(-1)!.push('p1'));
+    a2.update.mockImplementation(() => void frames.at(-1)!.push('p2'));
+    for (let i = 0; i < 10; i++) {
+      frames.push([]);
+      people.update(0.01, HEAD);
+    }
+    expect(a1.update).toHaveBeenCalledTimes(5);
+    expect(a2.update).toHaveBeenCalledTimes(5);
+    expect(frames.every((f) => f.length === 1)).toBe(true); // never both in one frame
+    const total = (m: typeof a1.update) => m.mock.calls.reduce((t, c) => t + c[0], 0);
+    for (const a of [a1, a2]) {
+      expect(total(a.update)).toBeGreaterThanOrEqual(0.09 - 1e-9); // no time is lost, at most one frame owed
+      expect(total(a.update)).toBeLessThanOrEqual(0.1 + 1e-9);
+    }
+    // The speaker animates every frame (lip sync, beats).
+    people.port('p1')!.setMode('speaking');
+    a1.update.mockClear();
+    a2.update.mockClear();
+    for (let i = 0; i < 4; i++) {
+      frames.push([]);
+      people.update(0.01, HEAD);
+    }
+    expect(a1.update).toHaveBeenCalledTimes(4);
+    expect(a2.update).toHaveBeenCalledTimes(2);
+  });
+
+  it('the_lead_seat_keeps_full_detail_and_the_others_are_simplified', async () => {
+    const { people, avatars, gates } = setup(2);
+    const loading = people.load();
+    gates.get('p1')!();
+    gates.get('p2')!();
+    await loading;
+    people.place([seat(0, 0), seat(1, -0.75)]);
+    expect(avatars.get('p1')!.setDetail).toHaveBeenLastCalledWith(0);
+    expect(avatars.get('p2')!.setDetail).toHaveBeenLastCalledWith(1);
+    // Only one seat in the room: whoever sits in it is the lead.
+    people.place([seat(0, 0)]);
+    expect(avatars.get('p1')!.setDetail).toHaveBeenLastCalledWith(0);
   });
 
   it('loaded_before_placement_stays_hidden_until_the_desk_is_down', async () => {

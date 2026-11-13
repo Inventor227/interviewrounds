@@ -21,6 +21,8 @@ export interface AvatarLike {
   attachVoice(stream: MediaStream): Promise<unknown>;
   setUserSpeaking(active: boolean): void;
   update(dt: number): void;
+  /** Body detail: 0 full (the first seat), 1 simplified (the others). */
+  setDetail?(level: 0 | 1): unknown;
   dispose(): void;
 }
 
@@ -38,6 +40,8 @@ export interface RoomSeat {
 export const SEAT_DESK_ABOVE_ROOT = 0.74;
 /** Seconds an avatar takes to fade in once it is loaded and seated. */
 export const FADE_IN_S = 0.5;
+/** A panelist who is not speaking animates every this many frames (half rate); the one speaking, every frame. */
+export const IDLE_FRAME_STRIDE = 2;
 
 export interface PeopleOptions {
   panel: Panelist[];
@@ -59,16 +63,19 @@ interface Person {
   voice: MediaStream | null;
   /** Fade progress 0..1; null until the avatar first shows. */
   fade: number | null;
+  /** Time not yet given to the avatar's animation (it skips frames while not speaking). */
+  owed: number;
 }
 
 export class People {
   private readonly people: Person[];
   private userSpeaking = false;
   private disposed = false;
+  private frame = 0;
   private loading: Promise<void> | null = null;
 
   constructor(private readonly opts: PeopleOptions) {
-    this.people = opts.panel.map((panelist) => ({ panelist, avatar: null, seat: null, mode: 'idle', voice: null, fade: null }));
+    this.people = opts.panel.map((panelist) => ({ panelist, avatar: null, seat: null, mode: 'idle', voice: null, fade: null, owed: 0 }));
   }
 
   /** Loads every panelist's avatar. One that fails to load leaves its seat empty; the voice still works. */
@@ -108,13 +115,16 @@ export class People {
   private seat(p: Person): void {
     const s = p.seat!;
     p.avatar!.place({ position: s.pos, yaw: s.yaw, deskY: s.pos.y + SEAT_DESK_ABOVE_ROOT });
+    // The lead seat, straight across, keeps the full body; the side seats are further away.
+    void Promise.resolve(p.avatar!.setDetail?.(s.seat === 0 ? 0 : 1)).catch(() => undefined);
   }
 
   /** Every frame: gaze, fade and the avatars' own animation. `head` is the user's head. */
   update(dt: number, head: Vec3): void {
     const speaker = this.people.find((p) => p.mode === 'speaking' && p.seat) ?? null;
     let appeared = false;
-    for (const p of this.people) {
+    this.frame++;
+    for (const [i, p] of this.people.entries()) {
       const a = p.avatar;
       if (!a || !p.seat) continue;
       if (p.fade === null) {
@@ -128,7 +138,13 @@ export class People {
       }
       // A panelist who is not talking looks at the one who is; everyone else looks at the user.
       a.lookAt(speaker && speaker !== p ? speaker.seat!.eye : head);
-      a.update(dt);
+      // Lip sync and beats need every frame; a listener's breathing and gaze do not. Staggered by seat, so two
+      // listeners never animate on the same frame.
+      p.owed += dt;
+      const everyFrame = p.mode === 'speaking' || p.fade < 1;
+      if (!everyFrame && (this.frame + i) % IDLE_FRAME_STRIDE !== 0) continue;
+      a.update(p.owed);
+      p.owed = 0;
     }
     if (appeared) this.opts.onAppear?.();
   }
