@@ -271,7 +271,7 @@ export async function createXRApp(root: HTMLElement, opts: XRAppOptions): Promis
     else for (const s of standins) s.object.visible = false;
   };
 
-  let placing: { p: DeskPlacement; resolve: (d: DeskPose) => void; laidOut: boolean } | null = null;
+  let placing: { p: DeskPlacement; resolve: (d: DeskPose) => void; laidOut: HeadPose | null } | null = null;
   const placeDesk = (): Promise<DeskPose> => {
     if (mode === 'preview') {
       desk$.value = PREVIEW_DESK;
@@ -279,7 +279,7 @@ export async function createXRApp(root: HTMLElement, opts: XRAppOptions): Promis
       return Promise.resolve(PREVIEW_DESK);
     }
     return new Promise<DeskPose>((resolve) => {
-      placing = { p: new DeskPlacement(performance.now(), opts.placementFallbackMs), resolve, laidOut: false };
+      placing = { p: new DeskPlacement(performance.now(), opts.placementFallbackMs), resolve, laidOut: null };
       placementView.reset();
       placementView.group.visible = true;
       ui.setStatus('placing');
@@ -370,10 +370,14 @@ export async function createXRApp(root: HTMLElement, opts: XRAppOptions): Promis
     if (mode === 'preview' && mouse && previewRest) mouse.apply(camera, previewRest, dt);
     if (placing) {
       const head = headPose();
-      if (!placing.laidOut && head.pos.y > 0.4) {
+      // The prompt follows the head lazily: re-placed only after a real move or turn.
+      const last = placing.laidOut;
+      const moved = !last || Math.hypot(head.pos.x - last.pos.x, head.pos.y - last.pos.y, head.pos.z - last.pos.z) > 0.25;
+      const turned = !!last && Math.abs(Math.atan2(Math.sin(head.yaw - last.yaw), Math.cos(head.yaw - last.yaw))) > 0.6;
+      if (head.pos.y > 0.4 && (moved || turned)) {
         ui.layoutHeadStatus(head);
-        scene.add(ui.status.group);
-        placing.laidOut = true;
+        if (ui.status.group.parent !== scene) scene.add(ui.status.group);
+        placing.laidOut = head;
       }
       const st = placing.p.update(now, head, handStates);
       placementView.update(head, st, now);

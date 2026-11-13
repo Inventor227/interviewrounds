@@ -1,7 +1,7 @@
 // What the user sees while placing the desk: a ghost sheet floating where it would land, a ring filling around the
 // resting fingertip, then the sheet unrolling from the touch point.
 
-import { Euler, Group, Mesh, MeshBasicMaterial, PlaneGeometry, type Object3D } from 'three';
+import { CanvasTexture, Euler, Group, Mesh, MeshBasicMaterial, PlaneGeometry, SRGBColorSpace, type Object3D, type Texture } from 'three';
 import { fallbackDesk, type DeskPose, type HeadPose, type PlacementStatus } from './placement';
 import { SHEET_D, SHEET_TILT, SHEET_W, sheetPoint } from './seats';
 import { holdRing } from './ui/style';
@@ -18,7 +18,7 @@ export class PlacementView {
   constructor() {
     this.group.name = 'placement';
     const g = new PlaneGeometry(SHEET_W, SHEET_D).rotateX(-Math.PI / 2).translate(0, 0, -SHEET_D / 2);
-    this.ghost = new Mesh(g, new MeshBasicMaterial({ color: 0xf4f2ee, transparent: true, opacity: 0.22, depthWrite: false, toneMapped: false }));
+    this.ghost = new Mesh(g, new MeshBasicMaterial({ map: ghostTexture(), color: 0xffffff, transparent: true, opacity: 0.8, depthWrite: false, toneMapped: false }));
     this.ghost.name = 'ghost-sheet';
     this.ring.mesh.rotation.x = -Math.PI / 2;
     this.group.add(this.ghost, this.ring.mesh);
@@ -29,7 +29,7 @@ export class PlacementView {
     const desk: DeskPose =
       st.tip && st.progress > 0 ? { origin: { x: st.tip.x, y: st.tip.y - 0.008, z: st.tip.z }, yaw: head.yaw, deskY: st.tip.y - 0.008, source: 'touch' } : fallbackDesk(head);
     this.poseGhost(desk);
-    this.ghost.material.opacity = 0.16 + 0.08 * Math.sin(nowMs / 400) + 0.3 * st.progress;
+    this.ghost.material.opacity = 0.7 + 0.2 * Math.sin(nowMs / 400) + 0.1 * st.progress;
     if (st.tip && st.progress > 0) {
       this.ring.mesh.position.set(st.tip.x, st.tip.y - 0.004, st.tip.z);
       this.ring.set(st.progress);
@@ -72,4 +72,23 @@ export class PlacementView {
     this.ghost.position.set(p.x, p.y, p.z);
     this.ghost.rotation.copy(new Euler(SHEET_TILT, desk.yaw, 0, 'YXZ'));
   }
+}
+
+/** A faint paper fill with a clear dashed outline, so the ghost reads over any desk. */
+function ghostTexture(): Texture | null {
+  if (typeof document === 'undefined') return null;
+  const c = document.createElement('canvas');
+  c.width = 256;
+  c.height = 160;
+  const x = c.getContext('2d');
+  if (!x) return null;
+  x.fillStyle = 'rgba(244,242,238,0.22)';
+  x.fillRect(0, 0, c.width, c.height);
+  x.strokeStyle = 'rgba(244,242,238,0.95)';
+  x.lineWidth = 4;
+  x.setLineDash([14, 10]);
+  x.strokeRect(3, 3, c.width - 6, c.height - 6);
+  const t = new CanvasTexture(c);
+  t.colorSpace = SRGBColorSpace;
+  return t;
 }
