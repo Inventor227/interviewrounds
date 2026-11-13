@@ -52,7 +52,7 @@ export interface RenderView {
   /** An item being dragged: drawn lifted at this offset, its edges following. */
   lift?: { id: string; dx: number; dy: number };
   /** Leave out this item and its edges (BoardView draws a dragged item on its own layer). */
-  hide?: string;
+  hide?: string | readonly string[];
   /**
    * Size of the tab and edge chip: 'hand' (default) draws the research 06 sizes (a 2.4 cm
    * tab); 'mouse' draws them smaller. Hit areas are hand sized either way.
@@ -83,6 +83,18 @@ function roundRect(ctx: Ctx, x: number, y: number, w: number, h: number, r: numb
 const font = (px: number, weight = 400, style = '') => `${style ? style + ' ' : ''}${weight} ${Math.max(1, Math.round(px * 10) / 10)}px ${FONT}`;
 
 const wrapCache = new Map<string, string[]>();
+/** Bumped when web fonts finish loading: text measured with a fallback font is stale. */
+let fontEpoch = 0;
+
+/** Forget text measured so far and make BoardViews repaint (fonts changed). */
+export function onFontsChanged(): void {
+  wrapCache.clear();
+  fontEpoch += 1;
+}
+
+if (typeof document !== 'undefined' && document.fonts && typeof document.fonts.addEventListener === 'function') {
+  document.fonts.addEventListener('loadingdone', onFontsChanged);
+}
 
 /** Splits text into at most `maxLines` lines no wider than `maxW`, with an ellipsis if cut. Cached. */
 function wrap(ctx: Ctx, text: string, maxW: number, maxLines: number): string[] {
@@ -788,14 +800,16 @@ export function renderBoard(ctx: Ctx, board0: Board, view: RenderView): void {
   const k = view.pxPerCm;
   const { board, item: lifted } = moved(board0, view.lift);
   const pen: Pen = { ctx, k, ghost: false, focus: board.focus, targets: view.targets };
-  const skip = lifted?.id ?? view.hide;
+  const skipIds = new Set<string>(typeof view.hide === 'string' ? [view.hide] : (view.hide ?? []));
+  if (lifted) skipIds.add(lifted.id);
+  const skipped = (id: string) => skipIds.has(id);
   ctx.save();
   if (view.paper !== false) renderPaper(ctx, board, k);
 
-  for (const it of board.items) if (it.kind === 'group' && it.id !== skip) drawItem(pen, it);
-  for (const e of board.edges) if (e.from !== skip && e.to !== skip) drawEdge(pen, board, e);
-  for (const it of board.items) if (it.kind !== 'group' && it.kind !== 'ink' && it.id !== skip) drawItem(pen, it);
-  for (const it of board.items) if (it.kind === 'ink' && it.id !== skip) drawItem(pen, it);
+  for (const it of board.items) if (it.kind === 'group' && !skipped(it.id)) drawItem(pen, it);
+  for (const e of board.edges) if (!skipped(e.from) && !skipped(e.to)) drawEdge(pen, board, e);
+  for (const it of board.items) if (it.kind !== 'group' && it.kind !== 'ink' && !skipped(it.id)) drawItem(pen, it);
+  for (const it of board.items) if (it.kind === 'ink' && !skipped(it.id)) drawItem(pen, it);
 
   // Scribe suggestions: faded, dashed, on top of what is committed.
   if (board.ghosts.length) {
@@ -809,12 +823,12 @@ export function renderBoard(ctx: Ctx, board0: Board, view: RenderView): void {
     }
   }
 
-  if (view.highlight && view.highlight !== skip) {
+  if (view.highlight && !skipped(view.highlight)) {
     const h = findItem(board, view.highlight);
     if (h && h.kind !== 'ink') ring(pen, itemRect(h), withAlpha(ACCENT, 0.35), 0.35, 0.3);
   }
   const f = findItem(board, board.focus);
-  if (f && f.kind !== 'ink' && f.id !== skip) ring(pen, itemRect(f), ACCENT, 0.16, 0.3);
+  if (f && f.kind !== 'ink' && !skipped(f.id)) ring(pen, itemRect(f), ACCENT, 0.16, 0.3);
 
   if (lifted) drawLifted(pen, board, lifted, false);
   ctx.restore();
@@ -1220,7 +1234,7 @@ export class BoardView {
     c.restore();
   }
 
-  private paintBoard(c: Ctx, board: Board, highlight: string | null, hide: string | undefined): void {
+  private paintBoard(c: Ctx, board: Board, highlight: string | null, hide: readonly string[]): void {
     const { pxPerCm: k, originCm, targets } = this.opts;
     c.save();
     c.translate(-originCm.x * k, -originCm.y * k);
@@ -1245,7 +1259,7 @@ export class BoardView {
     const highlight = state.highlight ?? null;
     const rings = state.rings ?? [];
     const drawLive = state.drawLive !== false;
-    const key = `${highlight ?? ''}|${drawLive ? overlays.map(overlayKey).join('|') : overlays.flatMap((o) => (o.kind === 'drag' ? [o.id] : [])).sort().join('|')}|${drawLive ? ringKey(rings) : ''}`;
+    const key = `${highlight ?? ''}|${drawLive ? overlays.map(overlayKey).join('|') : overlays.flatMap((o) => (o.kind === 'drag' ? [o.id] : [])).sort().join('|')}|${drawLive ? ringKey(rings) : ''}|${fontEpoch}`;
     if (board === this.lastBoard && key === this.lastKey) return false;
     this.lastBoard = board;
     this.lastKey = key;
@@ -1253,7 +1267,8 @@ export class BoardView {
     const ctx = this.canvas.getContext('2d');
     if (!ctx) return false;
     const { pxPerCm: k, originCm, dpr, kit, targets } = this.opts;
-    const drag = overlays.find((o): o is Extract<Overlay, { kind: 'drag' }> => o.kind === 'drag');
+    // Every dragged item (one per hand) is left out of the board layer and drawn live.
+    const dragIds = overlays.flatMap((o) => (o.kind === 'drag' ? [o.id] : [])).sort();
     const binHot = overlays.some((o) => (o.kind === 'drag' || o.kind === 'tray') && o.overBin);
 
     // Static layer: once per size and framing.
@@ -1269,13 +1284,13 @@ export class BoardView {
     }
 
     // Board layer: only when the committed board, highlight or dragged item changes.
-    const bk = `${highlight ?? ''}|${drag?.id ?? ''}`;
+    const bk = `${highlight ?? ''}|${dragIds.join(',')}|${fontEpoch}`;
     let full = false;
     if (board !== this.boardOf || bk !== this.boardKey) {
       const bc = this.staticLayer ? this.layerCtx(this.boardLayer) : null;
       if (bc && this.staticLayer) {
         this.blit(bc, this.staticLayer);
-        this.paintBoard(bc, board, highlight, drag?.id);
+        this.paintBoard(bc, board, highlight, dragIds);
         this.boardOf = board;
         this.boardKey = bk;
       }
@@ -1288,7 +1303,7 @@ export class BoardView {
     } else {
       // No offscreen layers here: paint everything.
       this.paintStatic(ctx, board);
-      this.paintBoard(ctx, board, highlight, drag?.id);
+      this.paintBoard(ctx, board, highlight, dragIds);
       full = true;
     }
 

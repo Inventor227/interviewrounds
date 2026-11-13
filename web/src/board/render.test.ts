@@ -3,7 +3,7 @@ import type { Board, BoardEdge, GhostOp } from '../shared/types';
 import { emptyBoard } from './model';
 import type { Overlay } from './input';
 import { HLD_KIT } from './kits';
-import { ACCENT, BoardView, renderBoard, renderOverlay } from './render';
+import { ACCENT, BoardView, onFontsChanged, renderBoard, renderOverlay } from './render';
 
 interface Call {
   name: string;
@@ -224,6 +224,33 @@ describe('BoardView', () => {
     const live = texts(main.calls.slice(m1));
     expect(live).toContain('Mobile app');
     expect(live).not.toContain('Unnamed');
+  });
+
+  it('two hands dragging two cards: both leave the board layer and are drawn live once each', () => {
+    const { main, layers, view, texts } = layered();
+    const b: Board = { ...hld(), items: [...hld().items, { id: 'n3', kind: 'component', type: 'cache', label: 'Redis', x: 40, y: 4, w: 8, h: 5 }] };
+    view.draw(b);
+    const before = layers[1]!.calls.length;
+    const m0 = main.calls.length;
+    const drag = (id: string, hand: 'left' | 'right'): Overlay => ({ kind: 'drag', hand, id, dx: 2, dy: 0, overBin: false, ink: false });
+    view.draw(b, { overlays: [drag('n1', 'left'), drag('n3', 'right')] });
+    const repaint = texts(layers[1]!.calls.slice(before));
+    expect(repaint).not.toContain('Mobile app');
+    expect(repaint).not.toContain('Redis');
+    const live = texts(main.calls.slice(m0));
+    expect(live.filter((t) => t === 'Mobile app')).toHaveLength(1);
+    expect(live.filter((t) => t === 'Redis')).toHaveLength(1);
+  });
+
+  it('when web fonts finish loading, cached text is dropped and the board repaints', () => {
+    const { view, layerCalls } = layered();
+    const b = hld();
+    view.draw(b);
+    expect(view.draw(b)).toBe(false);
+    const l0 = layerCalls();
+    onFontsChanged();
+    expect(view.draw(b)).toBe(true);
+    expect(layerCalls()).toBeGreaterThan(l0);
   });
 
   it('repaints the static layer when the framing changes at the same pixel size', () => {
