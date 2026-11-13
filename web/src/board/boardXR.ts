@@ -142,10 +142,12 @@ export function createBoardXR(port: BoardXRPort, opts: BoardXROptions): BoardXR 
   let actor: 'left' | 'right' | null = null;
   let actorAt = -Infinity;
   const pressing = new Set<'left' | 'right'>();
+  /** True while the frame's ghost pass accepts a suggestion nobody touched: that is not the user's doing. */
+  let settling = false;
   const play = (n: SfxName) => {
     opts.sfx?.play(n);
     const h = hapticForSfx(n);
-    if (h && actor && (pressing.has(actor) || clock - actorAt <= ACTOR_FRESH_MS)) port.haptic?.(actor, h);
+    if (h && actor && !settling && (pressing.has(actor) || clock - actorAt <= ACTOR_FRESH_MS)) port.haptic?.(actor, h);
   };
 
   // One clock for focus, ghosts and voice: the XR frame time. Registered first so it is
@@ -171,14 +173,17 @@ export function createBoardXR(port: BoardXRPort, opts: BoardXROptions): BoardXR 
     return true;
   };
 
+  let inGhostPass = false;
   const ghosts = new GhostLayer(pointer, store, kit, {
     now,
     ...(opts.ghostSettleMs ? { settleMs: opts.ghostSettleMs } : {}),
     accept: (g) => {
       const local = store.isLocalGhost(g.op_id);
+      settling = inGhostPass;
       const ok = commit({ op_id: g.op_id, src: local ? 'voice_grammar' : 'scribe', op: g.op, args: g.args } as BoardOp);
       // A Scribe ghost that no longer applies (its card was deleted, say): tell the server, so
       // it is not offered again.
+      settling = false;
       if (!ok && !local) opts.sendGhostReject(g.op_id);
     },
     reject: (id) => {
@@ -272,7 +277,9 @@ export function createBoardXR(port: BoardXRPort, opts: BoardXROptions): BoardXR 
     }
     sheet.group.visible = placed;
     if (panel) panel.frame.visible = placed;
+    inGhostPass = true;
     ghosts.update(t);
+    inGhostPass = false;
     if (placed) scrollByStick(t);
     const overlays = input.overlays;
     sheet.update(store.board, { hovers: input.hovers(), overlays, rings: ghosts.rings(t), pointers: hands?.pointers() ?? [] });

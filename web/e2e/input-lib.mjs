@@ -70,13 +70,13 @@ export const below = (tip, d = 0.2) => ({ x: tip.x, y: tip.y - d, z: tip.z - d *
 export async function stroke(hand, { from = null, points }, segment = 0.12) {
   const pose = (p) => (from ? [from, p] : [p, below(p)]);
   await hold(hand, ...pose(points[0]));
-  await sleep(700);
+  await sleep(600);
   await trigger(hand, 1);
-  await sleep(350);
-  for (const p of points.slice(1)) await glide(hand, ...pose(p), segment);
-  await sleep(400);
-  await trigger(hand, 0);
   await sleep(300);
+  for (const p of points.slice(1)) await glide(hand, ...pose(p), segment);
+  await sleep(350);
+  await trigger(hand, 0);
+  await sleep(250);
 }
 
 /** Aims the ray at a world point from `from`, waits for the hover, and pulls the trigger for `seconds`. */

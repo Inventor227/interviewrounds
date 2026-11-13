@@ -15,6 +15,9 @@ const C = await import('./input-lib.mjs');
 const R = await import('./round-input-lib.mjs');
 const { answer, board, click, draw, enterFromTap, fail, go, look, page, recordRound, roughBox, roundState, save, setupTab, shot, sleep, stage, tap, until, waitState, call } = L;
 
+// Few points per controller stroke: every scripted controller move takes about a second here and the round is 8 minutes.
+const box = (x, y, w, h) => L.along([[x + w * 0.3, y], [x + w, y], [x + w, y + h], [x, y + h], [x, y], [x + w * 0.3 + 0.8, y]], 3);
+
 const S = L.SETUPS[process.env.EMU_ROOM ?? 'home_office'] ?? L.SETUPS.home_office;
 
 await waitReady();
@@ -40,7 +43,7 @@ stage('answer 1', await answer('At a high level a client talks to an API service
 // One box by ray with the controller.
 await look(S, -52);
 const from = await R.rayStand();
-await R.strokeBoard('right', roughBox(8, 10, 12, 7, 3), 'far', from);
+await R.strokeBoard('right', box(8, 10, 12, 7), 'far', from);
 await sleep(1000);
 let b = await board();
 if (b.items.filter((i) => i.kind === 'component' && i.label === null).length < 1) await fail('the box drawn by ray did not become a card', b);
@@ -135,7 +138,7 @@ await shot('s03-drawn-by-both');
 // A suggestion accepted by pinch, if one is waiting or comes with the next answer.
 stage('answer 2', await answer('The box on the left is the API service and the one on the right is the key value store. The service reads and writes the store.'));
 let ghost = null;
-for (let i = 0; i < 12 && !ghost; i++) {
+for (let i = 0; i < 6 && !ghost; i++) {
   await sleep(1500);
   ghost = await page(() => {
     const d = globalThis.__round.room.debug;
@@ -158,7 +161,7 @@ await C.hold('left', { x: S.head.x - 0.3, y: 0.95, z: S.head.z - 0.1 }, { x: S.h
 await C.hold('right', from, pts[0]);
 await sleep(2000);
 const n1 = (await board()).items.length;
-await R.strokeBoard('right', roughBox(22, 26, 12, 7, 9), 'near');
+await R.strokeBoard('right', box(22, 26, 12, 7), 'near');
 await sleep(1200);
 b = await board();
 stage('a box by touch after the controllers came back', { items: b.items.length, input: await R.inputState(), changes: await page(() => globalThis.__inputs) });

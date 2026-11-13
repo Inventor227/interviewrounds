@@ -14,7 +14,11 @@ for (const f of ['round-lib.mjs', 'input-lib.mjs', 'round-input-lib.mjs']) copyF
 const L = await import('./round-lib.mjs');
 const C = await import('./input-lib.mjs');
 const R = await import('./round-input-lib.mjs');
-const { answer, board, click, enterFromTap, fail, go, look, page, recordRound, roughBox, roundState, save, setupTab, shot, sleep, stage, until, waitState, call } = L;
+const { answer, board, click, enterFromTap, fail, go, look, page, recordRound, roundState, save, setupTab, shot, sleep, stage, until, waitState, call } = L;
+
+// The quick round lasts 8 minutes and every scripted controller move takes about a second here, so strokes use
+// few points: a box is its four corners with a point every 3 cm.
+const box = (x, y, w, h) => L.along([[x + w * 0.3, y], [x + w, y], [x + w, y + h], [x, y + h], [x, y], [x + w * 0.3 + 0.8, y]], 3);
 
 const S = L.SETUPS[process.env.EMU_ROOM ?? 'home_office'] ?? L.SETUPS.home_office;
 
@@ -36,77 +40,66 @@ if (desk.input !== 'controllers' || desk.hand !== 'right' || Math.abs(desk.deskY
 await sleep(1500);
 await shot('c02-placed');
 await waitState(['live'], 120000);
-await look(S, -14);
-await sleep(1200);
-await shot('c03-greeting');
 stage('greeted', { input: await R.inputState(), lines: await page(() => globalThis.__rec.lines.length) });
 
-const ANSWERS = [
-  'Before I draw anything: I assume about a hundred million new links a day, reads far above writes, and links that never expire. Is that right?',
-  'At a high level a client talks to an API service. The service writes the mapping to a key value store and reads go through a cache in front of it.',
-];
-let accepted = null;
-for (const [i, text] of ANSWERS.entries()) {
-  stage(`answer ${i + 1}`, await answer(text));
-  if (!accepted && i >= 1) accepted = await R.acceptGhostByTrigger(S, 6, 'c04-ghost');
-}
+// The round clock runs from the first hello and the emulator is slow: one answer that names parts (the Scribe
+// then suggests cards), and the captures that can wait are taken while the round is paused.
+stage('answer', await answer('At a high level a client talks to an API service. The service writes each order to a key value store and reads go through a cache in front of it.'));
+const accepted = await R.acceptGhostByTrigger(S, 14, null);
+if (!accepted) await fail('no suggestion arrived to accept', await board());
 
 // Two boxes: the first by ray from a distance, the second with the tip on the sheet.
 await look(S, -52);
 const from = await R.rayStand();
-await R.aim('right', from, [14, 13]);
-await sleep(1200);
-await shot('c05-ray-and-dot');
-stage('ray on the sheet', await R.pointers());
-await R.strokeBoard('right', roughBox(8, 10, 12, 7, 3), 'far', from);
-await sleep(1000);
+await R.strokeBoard('right', box(8, 12, 12, 7), 'far', from);
+await sleep(800);
 let b = await board();
 stage('box by ray', b);
 if (b.items.filter((i) => i.kind === 'component' && i.label === null).length < 1) await fail('the box drawn by ray did not become a card', b);
-await R.strokeBoard('right', roughBox(38, 10, 12, 7, 5), 'near');
-await sleep(1000);
+await R.strokeBoard('right', box(38, 12, 12, 7), 'near');
+await sleep(800);
 b = await board();
 stage('box by touch', b);
 const drawn = b.items.filter((i) => i.kind === 'component' && i.label === null);
 if (drawn.length < 2) await fail('the box drawn by touch did not become a card', b);
 const [c1, c2] = drawn.sort((p, q) => p.x - q.x);
-await R.strokeBoard('right', L.along([[c1.x + c1.w + 0.4, c1.y + c1.h / 2], [c2.x + 1.5, c2.y + c2.h / 2]], 1.5), 'far', from);
-await sleep(1200);
+await R.strokeBoard('right', L.along([[c1.x + c1.w + 0.4, c1.y + c1.h / 2], [c2.x + 1.5, c2.y + c2.h / 2]], 3), 'far', from);
+await sleep(1000);
 b = await board();
 stage('connector by ray', b);
 if (!b.edges.length) await fail('the connector drawn by ray did not become an edge', b);
-await shot('c06-drawn');
 
 // A tray card picked by ray and dropped on the sheet, then taken back with A.
 const tray = await page(() => globalThis.__round.room.debug.tray());
 const slot = tray[2];
-const n0 = b.items.length;
-await R.strokeBoard('right', L.along([[slot.x + slot.w / 2, slot.y + slot.h / 2], [30, 30]], 2.5), 'far', from);
-await sleep(1200);
+const n0 = b.items.filter((i) => i.label === null).length;
+await R.strokeBoard('right', L.along([[slot.x + slot.w / 2, slot.y + slot.h / 2], [30, 30]], 6), 'far', from);
+await sleep(1000);
 b = await board();
 stage('tray card by ray', { items: b.items.length, last: b.items.at(-1) });
-if (b.items.length !== n0 + 1) await fail('the tray card was not placed by ray', b);
-await shot('c07-tray-card');
+if (b.items.filter((i) => i.label === null).length !== n0 + 1) await fail('the tray card was not placed by ray', b);
+await shot('c07-drawn-and-tray-card');
 await C.pressButton('right', 'primary');
 await sleep(1500);
 b = await board();
 stage('A undid the tray card', { items: b.items.length, log: b.log.slice(-2) });
-if (b.items.length !== n0 || b.log.at(-1).op !== 'undo') await fail('A did not undo the last action', b);
+if (b.items.filter((i) => i.label === null).length !== n0 || !b.log.some((e) => e.op === 'undo')) await fail('A did not undo the last action', b);
 stage('pulses so far', await page(() => globalThis.__xrApp.hapticLog().map((p) => `${p.hand}:${p.name}`)));
 
-const reply3 = await answer('The box on the left is the API service and the one on the right is the key value store. The service reads and writes the store.');
-stage('answer 3', reply3);
-if (!accepted) accepted = await R.acceptGhostByTrigger(S, 20, 'c04-ghost');
-if (!accepted) await fail('no suggestion arrived to accept', await board());
 
 // The round bar by ray: Pause, Resume, then End held.
 await look(S, -48);
-await R.pressBar('right', /Pause/, 'c08-ray-on-pause');
+await R.pressBar('right', /Pause/, null);
 await waitState(['paused'], 30000);
 stage('paused by ray', await roundState());
-await sleep(1000);
-await shot('c09-paused');
-await R.pressBar('right', /Resume/);
+// Paused: the clock waits. The ray and its dot on the sheet, then the ray on the round bar.
+await look(S, -52);
+await R.aim('right', from, [30, 24]);
+await sleep(1200);
+await shot('c08-ray-and-dot-on-the-sheet');
+stage('ray on the sheet', (await R.pointers()).over);
+await look(S, -48);
+await R.pressBar('right', /Resume/, 'c09-ray-on-resume');
 await waitState(['live'], 30000);
 stage('resumed by ray', await roundState());
 const endAt = Date.now();

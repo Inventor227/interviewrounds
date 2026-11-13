@@ -265,6 +265,15 @@ describe('controllers on the board', () => {
     for (let i = 0; i < 60; i++) port.frame(100);
     expect(store.board.items).toHaveLength(3);
     expect(port.pulses).toEqual([]);
+    // Not even while the controller is in the middle of a stroke of its own.
+    store.setGhosts([{ ...G, op_id: 'g5', args: { ...G.args, id: 'n11', x: 50, y: 30 } } as GhostOp]);
+    port.controllerAt('right', 10, 30);
+    for (let i = 0; i < 12; i++) port.frame();
+    port.select('right', 'start', 'controller');
+    for (let i = 0; i < 60; i++) port.frame(100);
+    expect(store.board.items).toHaveLength(4);
+    expect(port.pulses).toEqual([]);
+    port.select('right', 'end', 'controller');
   });
 
   it('one pointer model: each side is a hand or a controller, with a tip, a ray and a pressed state', () => {
