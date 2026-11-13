@@ -7,6 +7,17 @@
 
 const URL_PREFIXES: [&str; 3] = ["https://", "http://", "www."];
 
+/// The interviewer's tools. Written out as identifiers (`show_question: ...`, `next_phase`), they are a call the model
+/// put in its text by mistake: that word and everything after it is dropped.
+const TOOL_NAMES: [&str; 6] = [
+    "show_question",
+    "next_phase",
+    "point_at",
+    "give_hint",
+    "hand_over",
+    "end_round",
+];
+
 /// Bracketed text longer than this is not a stage direction: it is released as speech.
 const MAX_BRACKET_CHARS: usize = 80;
 
@@ -28,6 +39,8 @@ pub struct SpeechFilter {
     word_released: bool,
     /// Inside a URL: drop until whitespace.
     in_url: bool,
+    /// A tool name was written as text: the rest of the reply is not speech.
+    dropping: bool,
     pending_space: bool,
     emitted_any: bool,
     out: String,
@@ -50,6 +63,7 @@ impl SpeechFilter {
             word: String::new(),
             word_released: false,
             in_url: false,
+            dropping: false,
             pending_space: false,
             emitted_any: false,
             out: String::new(),
@@ -225,8 +239,25 @@ impl SpeechFilter {
     }
 
     fn normal(&mut self, c: char) {
-        if matches!(c, '*' | '#' | '`' | '~' | '|') || is_emoji(c) {
+        if self.dropping || matches!(c, '*' | '#' | '`' | '~' | '|') || is_emoji(c) {
             return;
+        }
+        // A held word that may be a tool name keeps its underscore; a complete one ends the speech.
+        if !self.word_released && !self.word.is_empty() {
+            let lower = self.word.to_ascii_lowercase();
+            if c == '_'
+                && TOOL_NAMES
+                    .iter()
+                    .any(|t| t.starts_with(&format!("{lower}_")))
+            {
+                self.word.push('_');
+                return;
+            }
+            if !(c.is_alphanumeric() || c == '_') && TOOL_NAMES.contains(&lower.as_str()) {
+                self.word.clear();
+                self.dropping = true;
+                return;
+            }
         }
         // Snake case and arrows: a word break, never a spoken symbol.
         let c = if c == '_' || ('\u{2190}'..='\u{21FF}').contains(&c) {
@@ -251,20 +282,27 @@ impl SpeechFilter {
         if URL_PREFIXES.iter().any(|p| lower.starts_with(p)) {
             self.in_url = true;
             self.word.clear();
-        } else if !URL_PREFIXES.iter().any(|p| p.starts_with(&lower)) {
+        } else if !URL_PREFIXES.iter().any(|p| p.starts_with(&lower))
+            && !TOOL_NAMES.iter().any(|t| t.starts_with(&lower))
+        {
             let word = std::mem::take(&mut self.word);
             self.word_released = true;
             for w in word.chars() {
-                self.emit_char(w);
+                // An underscore kept while the word looked like a tool name is a word break after all.
+                self.emit_char(if w == '_' { ' ' } else { w });
             }
         }
     }
 
     fn end_word(&mut self) {
+        if !self.word_released && TOOL_NAMES.contains(&self.word.to_ascii_lowercase().as_str()) {
+            self.word.clear();
+            self.dropping = true;
+        }
         if !self.word.is_empty() {
             let word = std::mem::take(&mut self.word);
             for w in word.chars() {
-                self.emit_char(w);
+                self.emit_char(if w == '_' { ' ' } else { w });
             }
         }
         self.word_released = false;
@@ -311,6 +349,33 @@ mod tests {
         let mut out: String = chunks.iter().map(|c| f.push(c)).collect();
         out.push_str(&f.finish());
         out
+    }
+
+    #[test]
+    fn a_tool_written_as_text_ends_the_speech() {
+        assert_eq!(
+            run(&[
+                "Where would you start?",
+                "\nshow_",
+                "question: 60,000 seats; About 3 million"
+            ]),
+            "Where would you start?"
+        );
+        assert_eq!(run(&["Let's move on. next_phase"]), "Let's move on.");
+        assert_eq!(
+            run(&["That's our time. end_round(\"That's our time.\")"]),
+            "That's our time."
+        );
+        assert_eq!(run(&["Thanks. ", "End_Round"]), "Thanks.");
+        // Ordinary words that start like a tool name are spoken.
+        assert_eq!(
+            run(&["Show me the hand", " over plan, then point at the end."]),
+            "Show me the hand over plan, then point at the end."
+        );
+        assert_eq!(
+            run(&["Use show_more_rows here."]),
+            "Use show more rows here."
+        );
     }
 
     #[test]
