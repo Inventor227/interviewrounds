@@ -44,6 +44,7 @@ export const ROUTES = {
   notSupported: '/not-supported',
   resume: '/resume/:id',
   devAvatar: '/dev/avatar',
+  diag: '/diag',
 } as const;
 
 // Dev only: the board with a mouse (web/src/board), for development and screenshots.
@@ -52,6 +53,8 @@ const DevSheet = import.meta.env.DEV ? lazy(() => import('../board/DevSheet')) :
 // Developer page for the avatar runtime: dev server only. In production builds the condition is false at build time,
 // so the page, its chunk and its test voices are left out of dist entirely.
 const AvatarDev = import.meta.env.DEV ? lazy(() => import('../xr/avatar/dev/AvatarDev')) : null;
+// Device check for a real headset test: not linked from the app's flows, loaded only when opened.
+const Diag = lazy(() => import('./pages/Diag'));
 
 function Page(props: { test: string; title: string; lede: string; children?: ComponentChildren }) {
   return (
@@ -209,6 +212,7 @@ export function App() {
             <Route path={ROUTES.pricing} component={Pricing} />
             <Route path={ROUTES.notSupported} component={NotSupported} />
             <Route path={ROUTES.resume} component={Resume} />
+            <Route path={ROUTES.diag} component={Diag} />
             {DevBoard ? [<Route key="dev-board" path="/dev/board" component={DevBoard} />] : []}
             {DevSheet ? [<Route key="dev-sheet" path="/dev/sheet" component={DevSheet} />] : []}
             {AvatarDev ? [<Route key="dev-avatar" path={ROUTES.devAvatar} component={AvatarDev} />] : []}
