@@ -67,6 +67,8 @@ describe('applyOp', () => {
       { op_id: 'o7', src: 'hand', op: 'item.explode', args: { id: 'n1' } },
       { op_id: 'o8', src: 'hand', op: 'sticky.vote', args: { id: 'n1', delta: 2 } },
       { op_id: '', src: 'hand', op: 'item.delete', args: { id: 'n1' } },
+      // board_op has additionalProperties: false.
+      { op_id: 'o9', src: 'hand', op: 'item.delete', args: { id: 'n1' }, extra: 1 },
     ];
     for (const op of bad) {
       const r = tryApplyOp(b, op as BoardOp);
@@ -107,10 +109,11 @@ describe('BoardStore undo', () => {
     const store = new BoardStore(emptyBoard());
     const seen: number[] = [];
     const off = store.onChange((b) => seen.push(b.rev));
-    store.apply({ op_id: 'o1', src: 'hand', op: 'item.create', args: { id: 'n1', kind: 'component', type: 'db', label: null, x: 1, y: 1, w: 8, h: 5 } });
-    store.apply({ op_id: 'o2', src: 'hand', op: 'item.move', args: { id: 'n1', x: 9, y: 9 } });
+    const local = { local: true };
+    store.apply({ op_id: 'o1', src: 'hand', op: 'item.create', args: { id: 'n1', kind: 'component', type: 'db', label: null, x: 1, y: 1, w: 8, h: 5 } }, local);
+    store.apply({ op_id: 'o2', src: 'hand', op: 'item.move', args: { id: 'n1', x: 9, y: 9 } }, local);
     expect(store.undoTarget()).toBe('o2');
-    store.apply({ op_id: 'u1', src: 'hand', op: 'undo', args: { target_op_id: 'o2' } });
+    store.apply({ op_id: 'u1', src: 'hand', op: 'undo', args: { target_op_id: 'o2' } }, local);
     expect(store.undoTarget()).toBe('o1');
     expect(store.board.items[0]).toMatchObject({ x: 1, y: 1 });
     off();
@@ -126,5 +129,82 @@ describe('BoardStore undo', () => {
     store.rejectGhost('g1');
     expect(store.board.ghosts).toEqual([]);
     expect(store.log.at(-1)).toMatchObject({ accepted: false });
+  });
+
+  it('undoTarget skips ops from others and ops an undo already emptied', () => {
+    const store = new BoardStore(emptyBoard());
+    const local = { local: true };
+    store.apply({ op_id: 'o1', src: 'hand', op: 'item.create', args: { id: 'n1', kind: 'component', type: 'db', label: null, x: 1, y: 1, w: 8, h: 5 } }, local);
+    store.apply({ op_id: 'o2', src: 'hand', op: 'item.label', args: { id: 'n1', text: 'Orders' } }, local);
+    // A Scribe op and another client's op: not this client's to undo.
+    store.apply({ op_id: 's1', src: 'scribe', op: 'item.note.add', args: { id: 'n1', text: 'sharded' } });
+    store.apply({ op_id: 'r1', src: 'hand', op: 'item.move', args: { id: 'n1', x: 5, y: 5 } });
+    expect(store.undoTarget()).toBe('o2');
+    // Undo the create: the label op (o2) loses its effect, so the next target is none.
+    store.apply({ op_id: 'u1', src: 'hand', op: 'undo', args: { target_op_id: 'o1' } }, local);
+    expect(store.undoTarget()).toBeNull();
+  });
+
+  it('does not log an op without a usable op_id', () => {
+    const store = new BoardStore(emptyBoard());
+    store.apply(null as unknown as BoardOp);
+    store.apply({ op_id: '', src: 'hand', op: 'item.delete', args: { id: 'n1' } } as BoardOp);
+    expect(store.log).toEqual([]);
+    expect(store.undoTarget()).toBeNull();
+  });
+});
+
+describe('BoardStore rollback of rejected optimistic ops', () => {
+  const create = (op_id: string, id: string, x = 1): BoardOp => ({
+    op_id,
+    src: 'hand',
+    op: 'item.create',
+    args: { id, kind: 'component', type: 'db', label: null, x, y: 1, w: 8, h: 5 },
+  });
+
+  it('apply locally then rollback gives the board before the op', () => {
+    const store = new BoardStore(emptyBoard());
+    store.apply(create('o1', 'n1'), { local: true });
+    store.confirm('o1');
+    store.setFocus('n1');
+    const before = store.board;
+    store.apply({ op_id: 'o2', src: 'hand', op: 'item.move', args: { id: 'n1', x: 20, y: 20 } }, { local: true });
+    expect(store.rollback('o2')).toBe(true);
+    expect(wire(store.board)).toEqual(wire(before));
+    expect(store.undoTarget()).toBe('o1');
+  });
+
+  it('keeps later pending ops and re-derives from confirmed plus pending', () => {
+    const store = new BoardStore(emptyBoard());
+    store.apply(create('o1', 'n1'), { local: true });
+    store.apply(create('o2', 'n2', 20), { local: true });
+    // A server op lands while both are pending.
+    store.apply(create('r1', 'n3', 40));
+    store.rollback('o1');
+    let expected = applyOp(emptyBoard(), create('r1', 'n3', 40));
+    expected = applyOp(expected, create('o2', 'n2', 20));
+    expect(wire(store.board)).toEqual(wire({ ...expected, op_ids: ['o2', 'r1'] }));
+    expect(store.board.rev).toBe(2);
+  });
+
+  it('a rejection of a local op through logRejected rolls it back; dependents follow when they are rejected too', () => {
+    const store = new BoardStore(emptyBoard());
+    store.apply(create('o1', 'n1'), { local: true });
+    store.apply(create('o2', 'n2', 20), { local: true });
+    store.apply({ op_id: 'o3', src: 'hand', op: 'edge.create', args: { id: 'e1', from: 'n1', to: 'n2' } }, { local: true });
+    store.logRejected(create('o1', 'n1'));
+    expect(store.board.items.map((i) => i.id)).toEqual(['n2']);
+    expect(store.board.edges).toEqual([]);
+    expect(store.board.op_ids).toEqual(['o2', 'o3']);
+    store.logRejected({ op_id: 'o3', src: 'hand', op: 'edge.create', args: { id: 'e1', from: 'n1', to: 'n2' } });
+    expect(wire(store.board)).toEqual(wire(applyOp(emptyBoard(), create('o2', 'n2', 20))));
+  });
+
+  it('rolling back an unknown op changes nothing', () => {
+    const store = new BoardStore(emptyBoard());
+    store.apply(create('o1', 'n1'), { local: true });
+    const b = store.board;
+    expect(store.rollback('nope')).toBe(false);
+    expect(store.board).toBe(b);
   });
 });

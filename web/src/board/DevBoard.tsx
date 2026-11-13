@@ -75,8 +75,10 @@ export function DevBoard() {
       kit,
       dpr: window.devicePixelRatio || 1,
     });
+    // Local ops, confirmed at once: there is no server on this page.
     const apply = (op: BoardOp) => {
-      const r = store.apply(op);
+      const r = store.apply(op, { local: true });
+      if (r.accepted) store.confirm(op.op_id);
       if (!r.duplicate) setStatus(describe(op, r.accepted));
     };
     const adapter = new MouseAdapter(canvas, (x, y) => view.toBoard(x, y));

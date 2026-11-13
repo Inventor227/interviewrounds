@@ -375,11 +375,21 @@ export function applyOp(board: Board, op: BoardOp): Board {
 export interface LogEntry {
   op: BoardOp;
   accepted: boolean;
+  /** Made on this client (optimistic) rather than received from the server. */
+  local?: boolean;
+  /** For local ops: the server acknowledged it (board.ack). */
+  confirmed?: boolean;
 }
+
+const usableId = (op: unknown): op is BoardOp => typeof (op as { op_id?: unknown } | null)?.op_id === 'string' && (op as { op_id: string }).op_id.length > 0;
 
 /**
  * Owns the board on the client: applies ops, keeps the op log (the undo stack), and
  * holds client state (focus, ghosts). Undo follows the replay rule in docs/protocol.md.
+ *
+ * Local ops are applied optimistically (`apply(op, {local: true})`) and stay pending
+ * until `confirm(op_id)` (board.ack). When the server rejects one, `rollback(op_id)`
+ * re-derives the board from the confirmed ops plus the still-pending ones.
  */
 export class BoardStore {
   readonly start: Board;
@@ -387,6 +397,8 @@ export class BoardStore {
   readonly log: LogEntry[] = [];
   /** When focus was last set (ms, performance clock), for the 20 s "that" window. */
   focusAt = 0;
+  /** Accepted ops whose effect fell away in the last rebuild (undo or rollback). */
+  private dropped = new Set<string>();
   private listeners = new Set<(b: Board) => void>();
 
   constructor(start: Board) {
@@ -405,25 +417,71 @@ export class BoardStore {
     for (const cb of [...this.listeners]) cb(next);
   }
 
-  apply(op: BoardOp): ApplyResult {
-    if (op?.op === 'undo') return this.undo(op);
+  /**
+   * Applies an op. `local` marks an optimistic op made here (pending until confirmed);
+   * ops from the server (board.apply, replays) are confirmed as they come.
+   */
+  apply(op: BoardOp, opts: { local?: boolean } = {}): ApplyResult {
+    if (op?.op === 'undo') return this.undo(op, opts.local === true);
     const r = tryApplyOp(this.board, op);
-    if (!r.duplicate) this.log.push({ op, accepted: r.accepted });
+    // Ops without a usable op_id are answered but never logged (protocol rule 2).
+    if (!r.duplicate && usableId(op)) this.log.push(this.entry(op, r.accepted, opts.local === true));
     this.set(r.board);
     return r;
   }
 
-  /** Records an op the server rejected (or a dismissed ghost): drops its ghost, logs it. */
+  private entry(op: BoardOp, accepted: boolean, local: boolean): LogEntry {
+    return local ? { op, accepted, local: true, confirmed: false } : { op, accepted };
+  }
+
+  /** The server acknowledged a local op (board.ack). */
+  confirm(opId: string): void {
+    const e = this.log.find((x) => x.accepted && x.op.op_id === opId);
+    if (e?.local) e.confirmed = true;
+  }
+
+  /**
+   * Records an op the server rejected, or a dismissed ghost. If it was applied here
+   * optimistically it is rolled back; otherwise it is logged as rejected and its ghost dropped.
+   */
   logRejected(op: BoardOp): void {
+    if (!usableId(op)) return;
+    if (this.log.some((e) => e.accepted && e.op.op_id === op.op_id)) {
+      this.rollback(op.op_id);
+      return;
+    }
     this.log.push({ op, accepted: false });
     this.set(dropGhost(this.board, op.op_id));
+  }
+
+  /**
+   * Takes back an op that was applied here but rejected by the server: the board becomes
+   * the confirmed ops plus the still-pending ones, without it. Its op_id leaves op_ids and
+   * rev goes back by one (the server never counted it); ghosts and focus follow the undo rules.
+   */
+  rollback(opId: string): boolean {
+    const e = this.log.find((x) => x.accepted && x.op.op_id === opId);
+    if (!e) return false;
+    e.accepted = false;
+    const cur = this.board;
+    const b = this.rebuild();
+    const opIds = cur.op_ids.filter((id) => id !== opId);
+    this.set({
+      ...b,
+      ghosts: cur.ghosts.filter((g) => g.op_id !== opId && !opIds.includes(g.op_id)),
+      focus: cur.focus && b.items.some((i) => i.id === cur.focus) ? cur.focus : null,
+      rev: opIds.length < cur.op_ids.length ? cur.rev - 1 : cur.rev,
+      op_ids: opIds,
+    });
+    return true;
   }
 
   /** Dismisses a pending ghost locally (the caller sends board.ghost_reject). */
   rejectGhost(opId: string): void {
     const g = this.board.ghosts.find((x) => x.op_id === opId);
     if (!g) return;
-    this.logRejected(g as BoardOp);
+    this.log.push({ op: g as BoardOp, accepted: false });
+    this.set(dropGhost(this.board, opId));
   }
 
   /** Replaces the pending ghost list (board.ghosts), minus any already committed. */
@@ -450,21 +508,46 @@ export class BoardStore {
     return s;
   }
 
-  /** The op the Undo button would undo: the last accepted op that is not an undo and not undone. */
+  /**
+   * The board effects from `start`: every accepted op except undos and their targets,
+   * confirmed ops first (server order), then pending local ones. Ops that now fail are
+   * dropped and remembered in `dropped`.
+   */
+  private rebuild(undone = this.undone()): Board {
+    const live = this.log.filter((e) => e.accepted && e.op.op !== 'undo' && !undone.has(e.op.op_id));
+    const ordered = [...live.filter((e) => !e.local || e.confirmed), ...live.filter((e) => e.local && !e.confirmed)];
+    this.dropped = new Set();
+    let b = this.start;
+    for (const e of ordered) {
+      const r = tryApplyOp(b, e.op);
+      if (r.accepted) b = r.board;
+      else this.dropped.add(e.op.op_id);
+    }
+    return b;
+  }
+
+  /**
+   * The op the Undo button would undo: the last op this client made by hand or voice
+   * that is accepted, not an undo, not undone, and still has an effect on the board.
+   */
   undoTarget(): string | null {
     const undone = this.undone();
     for (let i = this.log.length - 1; i >= 0; i--) {
       const e = this.log[i]!;
-      if (e.accepted && e.op.op !== 'undo' && !undone.has(e.op.op_id)) return e.op.op_id;
+      if (!e.accepted || !e.local || e.op.op === 'undo' || undone.has(e.op.op_id) || this.dropped.has(e.op.op_id)) continue;
+      if (e.op.src === 'hand' || e.op.src === 'voice_grammar') return e.op.op_id;
     }
     return null;
   }
 
-  private undo(op: Extract<BoardOp, { op: 'undo' }>): ApplyResult {
+  private undo(op: Extract<BoardOp, { op: 'undo' }>, local: boolean): ApplyResult {
     const cur = this.board;
     if (typeof op.op_id === 'string' && cur.op_ids.includes(op.op_id)) return { board: cur, accepted: false, duplicate: true };
     const fail = (error: string): ApplyResult => {
-      this.logRejected(op);
+      if (usableId(op)) {
+        this.log.push({ op, accepted: false });
+        this.set(dropGhost(this.board, op.op_id));
+      }
       return { board: this.board, accepted: false, error };
     };
     const invalid = validateOp(op);
@@ -477,12 +560,7 @@ export class BoardStore {
     if (undone.has(target)) return fail(`${target} is already undone`);
     undone.add(target);
 
-    let b = this.start;
-    for (const e of this.log) {
-      if (!e.accepted || e.op.op === 'undo' || undone.has(e.op.op_id)) continue;
-      const r = tryApplyOp(b, e.op);
-      if (r.accepted) b = r.board;
-    }
+    const b = this.rebuild(undone);
     const opIds = [...cur.op_ids, op.op_id];
     const next: Board = {
       ...b,
@@ -491,7 +569,7 @@ export class BoardStore {
       rev: cur.rev + 1,
       op_ids: opIds,
     };
-    this.log.push({ op, accepted: true });
+    this.log.push(this.entry(op, true, local));
     this.set(next);
     return { board: next, accepted: true };
   }

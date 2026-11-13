@@ -22,6 +22,8 @@ const SRC = BOARD_SRCS;
 const COMPONENT_TYPES = SHARED_COMPONENT_TYPES;
 const LANES = SHARED_LANES;
 export const OP_NAMES: readonly string[] = BOARD_OP_NAMES;
+/** board_op has additionalProperties: false. */
+const ENVELOPE = ['op_id', 'src', 'op', 'args', 'rev_base', 'at_ms'];
 
 class Invalid extends Error {}
 
@@ -342,6 +344,7 @@ export function validateOp(op: unknown): string | null {
   try {
     if (!isObj(op)) fail('op must be an object');
     const o = op as Obj;
+    for (const k of Object.keys(o)) if (!ENVELOPE.includes(k)) fail(`${k} is not allowed on an op`);
     if (typeof o.op_id !== 'string' || o.op_id.length < 1) fail('op_id is required');
     oneOf(o.src, SRC, 'src');
     oneOf(o.op, OP_NAMES, 'op');
