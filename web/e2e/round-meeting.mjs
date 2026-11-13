@@ -66,7 +66,9 @@ const ASKS = [
 let floor1 = floor0;
 let reply = null;
 let asks = 0;
+const live = async () => (await roundState()).state === 'live';
 for (const ask of ASKS) {
+  if (!(await live())) break; // a short meeting can run out of time by itself in the slow emulator
   asks++;
   reply = await answer(ask, 120000);
   for (let i = 0; i < 6 && floor1 === floor0; i++) {
@@ -77,7 +79,7 @@ for (const ask of ASKS) {
 }
 stage('hand-over', { asked: name, asks, from: floor0, to: floor1, handedOver: floor1 !== floor0, reply });
 if (floor1 === floor0) console.error('WARNING: the floor did not move');
-else {
+else if (await live()) {
   await sleep(6000); // the new attendee's opening line
   stage('after hand-over', { lines: await page(() => globalThis.__rec.lines.slice(-3)) });
   stage('answer to the new floor', await answer('That is fair. Our pipeline covers the next two quarters, and I can share the signed letters of intent.'));
@@ -87,7 +89,8 @@ await sleep(800);
 await shot('06-after-hand-over');
 
 const endAt = Date.now();
-await page(() => globalThis.__round.controller.end());
+if (await live()) await page(() => globalThis.__round.controller.end());
+else stage('the round had already ended by itself', await roundState());
 await waitState(['scoring', 'summary'], 60000);
 stage('round ended', { ms: Date.now() - endAt });
 await look(S, -20);
