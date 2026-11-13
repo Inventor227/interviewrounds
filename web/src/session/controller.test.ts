@@ -120,6 +120,7 @@ function harness(
   const log: string[] = [];
   const transports: ScriptedTransport[] = [];
   const socket = new FakeSocket(log);
+  const sockets: FakeSocket[] = [];
   const visibility = new FakeVisibility();
   let uiAction: ((a: UiAction) => void) | null = null;
   let gesture: (() => void) | null = null;
@@ -194,7 +195,12 @@ function harness(
   };
   const deps: RoundControllerDeps = {
     api,
-    makeSocket: () => socket,
+    // One socket per session: the first is `socket`, a remade session gets its own.
+    makeSocket: () => {
+      const so = sockets.length === 0 ? socket : new FakeSocket(log);
+      sockets.push(so);
+      return so;
+    },
     makeTransport: (p: Panelist, o?: TransportOptions) => {
       const T = opts.slowMute?.includes(p.panelist_id) ? SlowMuteTransport : opts.slow?.includes(p.panelist_id) ? SlowTransport : ScriptedTransport;
       const t = new T(p.panelist_id, log, o, p);
@@ -237,6 +243,7 @@ function harness(
     avatars,
     micTrack,
     deps,
+    sockets,
     board: () => boardCbs.forEach((cb) => cb()),
     ui: (a: UiAction) => uiAction?.(a),
     gesture: () => gesture?.(),
@@ -1064,7 +1071,7 @@ describe('RoundController in the room', () => {
     expect(h.api.endSession).not.toHaveBeenCalled();
   });
 
-  it('hello_goes_out_only_once_the_desk_is_placed_and_the_chime_ends_before_the_start', async () => {
+  it('hello_goes_out_at_the_desk_and_the_opening_is_asked_for_while_the_chime_plays_with_the_mic_closed', async () => {
     const h = harness();
     let placed!: () => void;
     vi.mocked(h.xr.place).mockImplementationOnce(() => new Promise<void>((r) => (placed = r)));
@@ -1073,17 +1080,124 @@ describe('RoundController in the room', () => {
     const starting = h.ctl.start(h.req);
     await vi.waitFor(() => expect(h.transports[0]?.started).toBe(true));
     expect(h.socket.connects).toBe(0);
+    expect(h.ctl.started).toBe(false);
     placed();
     await vi.waitFor(() => expect(h.socket.connects).toBe(1));
+    expect(h.ctl.started).toBe(true);
     const t = h.transports[0]!;
     await vi.advanceTimersByTimeAsync(0);
-    // The chime is still playing: every mic is closed and nobody has been asked to speak.
+    // The chime is still playing: the opening has been asked for (it needs no mic), and every mic is closed.
+    expect(t.sentEvents).toEqual(['[event: start]']);
     expect(t.muted).toBe(true);
-    expect(t.sentEvents).toEqual([]);
     chimeOver();
     await starting;
     expect(t.muted).toBe(false);
     expect(t.sentEvents).toEqual(['[event: start]']);
+  });
+
+  it('a_pause_or_an_end_during_the_chime_keeps_the_mic_closed', async () => {
+    const h = harness();
+    let chimeOver!: () => void;
+    vi.mocked(h.xr.startCue!).mockImplementationOnce(() => new Promise<void>((r) => (chimeOver = r)));
+    const starting = h.ctl.start(h.req);
+    await vi.waitFor(() => expect(h.transports[0]?.sentEvents).toEqual(['[event: start]']));
+    h.ui('pause');
+    chimeOver();
+    await starting;
+    expect(h.transports[0]!.muted).toBe(true);
+    h.ui('resume');
+    expect(h.transports[0]!.muted).toBe(false);
+  });
+
+  it('a_voice_that_fails_at_the_desk_never_says_hello_and_says_so_in_the_headset', async () => {
+    const h = harness({ voice: 'fish', slow: ['p1'] });
+    const errors = errorsOf(h);
+    let placed!: () => void;
+    vi.mocked(h.xr.place).mockImplementationOnce(() => new Promise<void>((r) => (placed = r)));
+    const starting = h.ctl.start(h.req);
+    await vi.waitFor(() => expect(h.transports[0]?.started).toBe(true));
+    (h.transports[0] as SlowTransport).fail(new VoiceError('connect_failed', 'join failed'));
+    await vi.advanceTimersByTimeAsync(0);
+    placed(); // the user touches the desk; the voice had already failed
+    await expect(starting).rejects.toMatchObject({ code: 'connect_failed' });
+    expect(h.ctl.state).toBe('failed');
+    expect(h.socket.connects).toBe(0); // nothing started or counted on the server
+    expect(h.ctl.started).toBe(false);
+    expect(h.log).toContain('socket.close');
+    expect(errors.map((e) => (e as VoiceError).code)).toEqual(['connect_failed']);
+    expect(h.xr.ui.setStatus).toHaveBeenLastCalledWith(expect.stringMatching(/could not start the round/i));
+  });
+
+  it('voices_that_join_after_the_desk_is_down_stay_muted_through_the_chime', async () => {
+    const h = harness({ slow: ['p1'] });
+    let chimeOver!: () => void;
+    vi.mocked(h.xr.startCue!).mockImplementationOnce(() => new Promise<void>((r) => (chimeOver = r)));
+    const starting = h.ctl.start(h.req);
+    await vi.waitFor(() => expect(h.ctl.state).toBe('greeting')); // the desk is down, the chime plays
+    const t = h.transports[0] as SlowTransport;
+    expect(h.socket.connects).toBe(0); // no hello before the voice is up
+    t.release(); // the join finishes only now
+    await vi.waitFor(() => expect(t.sentEvents).toEqual(['[event: start]']));
+    expect(h.socket.connects).toBe(1);
+    expect(t.muted).toBe(true);
+    chimeOver();
+    await starting;
+    expect(t.muted).toBe(false);
+  });
+
+  it('a_voice_that_ended_while_the_user_was_away_from_the_desk_prompt_is_connected_again', async () => {
+    const h = harness();
+    vi.mocked(h.xr.place).mockImplementationOnce(async () => {
+      h.setInSession(false);
+      throw new Error('session ended');
+    });
+    await expect(h.ctl.start(h.req)).rejects.toMatchObject({ code: 'placement_failed' });
+    const first = h.transports[0]!;
+    // Minutes later the voice service has hung up the idle, muted session.
+    first.events.emit('ended', { reason: 'idle' });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(first.stopped).toBe(true);
+    h.setInSession(true);
+    await h.ctl.returnToRoom();
+    expect(h.transports).toHaveLength(2);
+    expect(first.sentEvents).toEqual([]);
+    expect(h.transports[1]!.sentEvents).toEqual(['[event: start]']);
+    expect(h.ctl.state).toBe('greeting');
+  });
+
+  it('a_session_that_waited_too_long_to_start_is_made_again_before_the_server_drops_it', async () => {
+    const h = harness();
+    await h.ctl.prepare({ kind: 'new', req: h.req });
+    vi.setSystemTime(new Date('2026-11-13T10:09:30Z')); // nine and a half minutes on the start page
+    h.api.createSession.mockImplementationOnce(async () => sessionRes({ session_id: 'sess2' }));
+    await h.ctl.enter();
+    expect(h.ctl.session!.session_id).toBe('sess2');
+    expect(h.sockets).toHaveLength(2);
+    expect(h.sockets[0]!.connects).toBe(0);
+    expect(h.sockets[1]!.connects).toBe(1);
+  });
+
+  it('a_resumed_round_says_hello_at_the_mic_tap_and_is_never_remade_for_waiting', async () => {
+    const h = harness();
+    await h.ctl.prepare({ kind: 'resume', sessionId: 'sess1', voice: 'fake' });
+    expect(h.socket.connects).toBe(1); // already running and counted on the server: its offline clock is ticking
+    vi.setSystemTime(new Date('2026-11-13T10:09:30Z'));
+    await h.ctl.enter();
+    expect(h.api.resumeSession).toHaveBeenCalledTimes(1);
+    expect(h.sockets).toHaveLength(1);
+  });
+
+  it('renewal_uses_the_same_kind_of_request_as_the_prepare', async () => {
+    const fish = (expires_at: string) => ({ transport: 'fish' as const, fish: { session_id: 'f', token: 't', livekit_url: 'wss://x', expires_at } });
+    const h = harness({ voice: 'fish' });
+    h.api.retry.mockImplementationOnce(async () => sessionRes({ session_id: 'retry1', panel: [panelist('p1', 0, fish('2026-11-13T10:00:30Z'))] }));
+    await h.ctl.prepare({ kind: 'retry', parentSessionId: 'parent', voice: 'fish' });
+    vi.setSystemTime(new Date('2026-11-13T10:05:00Z'));
+    h.api.retry.mockImplementationOnce(async () => sessionRes({ session_id: 'retry2', panel: [panelist('p1', 0, fish('2026-11-13T10:10:00Z'))] }));
+    await h.ctl.enter();
+    expect(h.api.retry).toHaveBeenCalledTimes(2);
+    expect(h.api.createSession).not.toHaveBeenCalled();
+    expect(h.ctl.session!.session_id).toBe('retry2');
   });
 
   it('a_resumed_round_asks_for_a_welcome_back_not_a_new_opening', async () => {
@@ -1115,6 +1229,33 @@ describe('RoundController in the room', () => {
     expect((h.transports[0]!.panelist!.voice as ReturnType<typeof fish>).fish.expires_at).toBe('2026-11-13T10:10:00Z');
     expect(h.ctl.state).toBe('greeting');
     expect(errors).toEqual([]);
+    // Only the new session's room said hello; the old socket was closed with its listeners and never connected.
+    expect(h.sockets).toHaveLength(2);
+    expect(h.sockets[0]!.connects).toBe(0);
+    expect(h.sockets[1]!.connects).toBe(1);
+    h.sockets[0]!.terminal(4409); // the server drops the old session: nobody is listening any more
+    expect(errors).toEqual([]);
+  });
+
+  it('the_old_socket_never_says_hello_when_the_desk_is_placed_during_a_renewal', async () => {
+    const fish = (expires_at: string) => ({ transport: 'fish' as const, fish: { session_id: 'f', token: 't', livekit_url: 'wss://x', expires_at } });
+    const h = harness({ voice: 'fish', res: { panel: [panelist('p1', 0, fish('2026-11-13T10:00:30Z'))] } });
+    const errors = errorsOf(h);
+    await h.ctl.prepare({ kind: 'new', req: h.req });
+    vi.setSystemTime(new Date('2026-11-13T10:05:00Z'));
+    let remade!: (r: CreateSessionRes) => void;
+    h.api.createSession.mockImplementationOnce(() => new Promise<CreateSessionRes>((r) => (remade = r)));
+    const entering = h.ctl.enter(); // placement resolves at once: the desk is down while the session is being remade
+    await vi.waitFor(() => expect(h.ctl.state).toBe('greeting'));
+    await vi.advanceTimersByTimeAsync(50);
+    expect(h.sockets[0]!.connects).toBe(0);
+    remade(sessionRes({ session_id: 'sess2', panel: [panelist('p1', 0, fish('2026-11-13T10:10:00Z'))] }));
+    await entering;
+    expect(h.sockets[0]!.connects).toBe(0);
+    expect(h.sockets[1]!.connects).toBe(1);
+    h.sockets[0]!.terminal(4409);
+    expect(errors).toEqual([]);
+    expect(h.floor().sentEvents).toEqual(['[event: start]']);
   });
 
   it('a_voice_that_reports_an_expired_session_on_join_is_retried_once_with_a_new_session', async () => {

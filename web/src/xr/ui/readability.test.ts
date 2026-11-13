@@ -3,7 +3,7 @@ import { DEG, dist, v3 } from '../math';
 import { seatLayout, SHEET_D, sheetPoint, userPoint } from '../seats';
 import { BRIEF_MIN_FONT_CM } from './briefCard';
 import { CAPTION_MAX_CHARS, CAPTIONS_MIN_FONT_CM, captionLines } from './captions';
-import { layoutBriefBeyondSheet, layoutDesk } from './layout';
+import { BRIEF_H, BRIEF_W, layoutBriefBeyondSheet, layoutDesk } from './layout';
 import { ROUND_BAR_GAP_CM, ROUND_BAR_MIN_FONT_CM } from './roundBar';
 import { STATUS_MIN_FONT_CM } from './statusCard';
 import { SUMMARY_BUTTON_GAP_CM, SUMMARY_MIN_FONT_CM } from './summaryCard';
@@ -40,20 +40,20 @@ describe('readability and reach', () => {
     expect(deg).toBeGreaterThanOrEqual(MIN_DEG);
     expect(p.tilt).toBeLessThan(0); // leans back
     // Its lower edge (toward the user) is still past the sheet's far edge: nothing on the sheet is covered.
-    const lowerEdgeZ = p.pos.z + 0.06 * Math.sin(-p.tilt);
+    const lowerEdgeZ = p.pos.z + (BRIEF_H / 2) * Math.sin(-p.tilt);
     expect(lowerEdgeZ).toBeLessThan(sheetPoint(desk, 0, SHEET_D, 0).z);
   });
 
   it('the_brief_card_beyond_the_sheet_stays_low_and_clear_of_every_seat', () => {
     const p = layoutBriefBeyondSheet(desk);
     // Low: its top edge stays well under a seated chest (about 0.3 m above the table).
-    const top = p.pos.y + 0.06 * Math.cos(-p.tilt);
+    const top = p.pos.y + (BRIEF_H / 2) * Math.cos(-p.tilt);
     expect(top).toBeLessThan(desk.deskY + 0.23);
     // Seen from the user's eyes, the card's sides stay clear of every panelist's hands (about 0.12 m to each side
     // of the seat's centre line, resting on the table in front of them).
     const side = (x: number, z: number) => Math.atan2(x - eye.x, eye.z - z) / DEG;
-    const cardLeft = side(p.pos.x - 0.15, p.pos.z);
-    const cardRight = side(p.pos.x + 0.15, p.pos.z);
+    const cardLeft = side(p.pos.x - BRIEF_W / 2, p.pos.z);
+    const cardRight = side(p.pos.x + BRIEF_W / 2, p.pos.z);
     for (const n of [1, 2, 3] as const) {
       for (const seat of seatLayout(n, desk)) {
         const handsZ = seat.pos.z + 0.25; // the hands rest about 0.25 m in front of the seat

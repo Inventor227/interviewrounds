@@ -23,6 +23,7 @@ function fakeController(state: ControllerState) {
   const events = new Emitter<ControllerEvents>();
   const c = {
     state,
+    started: false,
     session: sessionRes(),
     latencyHistory: [],
     on: events.on.bind(events),
@@ -98,6 +99,16 @@ describe('session page', () => {
     expect(box).not.toBeNull();
     expect(box.querySelector('[data-test="try-again"]')!.getAttribute('href')).toBe('/round/beh_short');
     expect(box.textContent).not.toMatch(/report/i);
+    expect(box.textContent).toMatch(/Nothing was used up/);
+  });
+
+  it('nothing_was_used_up_is_only_said_when_the_round_never_started_on_the_server', async () => {
+    const { root, controller } = await mount('greeting');
+    controller.started = true; // the room had said hello before it failed
+    controller.go('failed');
+    controller.emit('error', { code: 'connect_failed' } as never);
+    await settle();
+    expect($(root, 'session-not-started')!.textContent).not.toMatch(/Nothing was used up/);
   });
 
   it('a_round_lost_after_it_began_keeps_the_report', async () => {

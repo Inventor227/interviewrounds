@@ -18,8 +18,8 @@ export interface PanelPose {
 export type PanelName = 'roundBar' | 'brief' | 'status' | 'summary' | 'captions';
 
 /** Panel sizes in metres (for layout margins). */
-const BRIEF_W = 0.3;
-const BRIEF_H = 0.12;
+export const BRIEF_W = 0.3;
+export const BRIEF_H = 0.12;
 
 export function layoutDesk(desk: DeskFrame): Record<PanelName, PanelPose> {
   const f = forwardOf(desk.yaw);

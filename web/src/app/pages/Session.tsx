@@ -208,7 +208,9 @@ function LiveSession(props: { launch: Taken }) {
       {neverBegan && (
         <div class="state state-error" role="alert" data-test="session-not-started" data-code={error?.code}>
           <h2>Couldn't start the round</h2>
-          <p>Your interviewer did not make it into the room. Nothing was used up. Try it again.</p>
+          <p>
+            Your interviewer did not make it into the room. {controller.started ? 'Try it again.' : 'Nothing was used up. Try it again.'}
+          </p>
           <div class="row">
             <a class="btn btn-primary" href={startHref({ input: props.launch.input, session })} data-test="try-again">
               Try again

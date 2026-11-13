@@ -31,6 +31,8 @@ export type VoiceErrorCode =
   | 'mic_denied'
   | 'no_mic'
   | 'mic_busy'
+  /** The mic could not be muted or unmuted; the voice connection itself is fine. */
+  | 'mic_toggle_failed'
   | 'audio_blocked'
   | 'connect_failed'
   | 'session_expired'

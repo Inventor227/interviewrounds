@@ -105,6 +105,8 @@ export const REPORT_RETRIES = 3;
 export const REPORT_RETRY_MS = 2000;
 /** Longest wait for the server's first frame after hello before the start marker goes out. */
 const HELLO_WAIT_MS = 2000;
+/** The server drops a session that has not said hello for 10 minutes; past this it is made again. */
+export const UNSTARTED_SESSION_MS = 9 * 60 * 1000;
 /** Pinches retry blocked audio at most this often. */
 const GESTURE_UNLOCK_MS = 1000;
 /** Board activity reaches the voice service at most this often. */
@@ -219,6 +221,8 @@ export class RoundController {
   private socketWanted = false;
   private socketUp: Promise<void> | null = null;
   private renewed = false;
+  private sessionAt = 0;
+  private helloSent = false;
   private longAnswerMuted = false;
   private reportLoading: Promise<void> | null = null;
   private lastCard: HeadsetCard | null = null;
@@ -377,6 +381,7 @@ export class RoundController {
           throw err;
         }
         this.preparedRes = res;
+        this.sessionAt = Date.now();
       }
       this.deps.timings?.mark('session_created');
       if (this.disposed) return this.releaseMic();
@@ -397,11 +402,22 @@ export class RoundController {
       this.res = res;
       this.applyTiming(res);
       this.openSocket(res);
+      if (input.kind === 'resume') {
+        // A resumed round is already running and counted on the server, and its offline clock is
+        // ticking: say hello now, not at the desk.
+        this.socketWanted = true;
+        void this.connectSocket();
+      }
       this.watchPage();
       this.deps.timings?.mark('prepared');
     } finally {
       this.preparing = false;
     }
+  }
+
+  /** True once the room has said hello to the server: from then on the round has started there and counts. */
+  get started(): boolean {
+    return this.helloSent;
   }
 
   /** True once prepare() has finished and enter() can run. */
@@ -463,42 +479,52 @@ export class RoundController {
     timings?.mark('placed');
     // The touch that placed the desk: a good moment to retry audio that autoplay rules held back.
     this.unlockAudio();
-    // The start chime plays now, with every mic still closed, and is over before anyone is asked
-    // to speak.
+    // The start chime plays now, with every mic still closed. The opening is asked for meanwhile
+    // (its first word is more than a chime away); the mic opens when the chime is over.
     const cue = xr.startCue?.().catch(() => undefined) ?? Promise.resolve();
 
     this.setState('greeting');
-    // Only now does the room say hello: the server's round clock and the round's count toward
-    // limits start when the user is at the desk, not at the mic tap.
-    this.socketWanted = true;
-    const hello = this.connectSocket();
     try {
       await voices;
     } catch (err) {
       await this.panel?.stopAll();
       this.voicesStarting = null;
       this.releaseMic();
+      // No voice, no round: the room never says hello, so nothing starts or counts on the server.
+      this.closeSocket();
       const e = err instanceof VoiceError ? err : new VoiceError('connect_failed', String((err as Error)?.message ?? err), err);
-      if (!this.disposed && isActive(this.st)) this.setState('failed');
+      if (!this.disposed && isActive(this.st)) {
+        this.setState('failed');
+        // The user is in the headset: say so there too, the page's Try again is out of sight.
+        xr.ui.setStatus('We could not start the round. Take off the headset to try again.');
+      }
       this.emitError(e);
       throw e;
     }
-    await Promise.all([cue, hello]);
+    // Only now, with the desk placed and the voices up, does the room say hello: the server's
+    // round clock and the round's count toward limits start here, not at the mic tap, and never
+    // for a round whose voice did not make it.
+    this.socketWanted = true;
+    await this.connectSocket();
     this.releaseMic(); // the voice service holds its own capture now
     const panel = this.panel;
     // Ended, failed or disposed while the voices were connecting: the panel stopped them.
     if (this.disposed || !panel || panel.isStopped || !isActive(this.st)) return;
 
     this.voicesUp = true;
-    // Paused meanwhile: everyone stays muted until Resume.
-    if (this.st !== 'paused') void panel.muteAll(this.userMuted);
     const head = this.deps.head;
     if (head) {
       head.setFloor(panel.floor);
       head.start((samples) => this.socket?.send('head.samples', { samples }));
     }
+    // The opening marker is a typed turn: it needs no mic, so it goes out at once.
     if (this.st === 'paused') this.startPending = true; // greet once the user is back
     else this.sendStart();
+
+    await cue;
+    // Paused meanwhile: everyone stays muted until Resume. Ended or closed: nothing to open.
+    if (this.disposed || panel.isStopped || (this.st !== 'greeting' && this.st !== 'live')) return;
+    void panel.muteAll(this.userMuted);
   }
 
   /**
@@ -523,7 +549,7 @@ export class RoundController {
   /** Brings the panel's voices up; a voice token that ran out is replaced by making the session again. */
   private async startVoices(): Promise<void> {
     let res = this.res!;
-    if (this.tokenStale(res)) res = await this.renewSession();
+    if (this.sessionStale(res)) res = await this.renewSession();
     for (;;) {
       const panel = new PanelController(res, (p, o) => this.wire(this.deps.makeTransport(p, o, this.res ?? res)), {
         api: this.deps.api,
@@ -532,7 +558,9 @@ export class RoundController {
       this.panel = panel;
       try {
         await panel.start();
-        if (!this.placed && !panel.isStopped) void panel.muteAll(true);
+        // Nobody hears the user before the opening has been asked for and the chime is over,
+        // also when the voices join after the desk is already down.
+        if (!this.voicesUp && !panel.isStopped) void panel.muteAll(true);
         return;
       } catch (err) {
         await panel.stopAll();
@@ -541,6 +569,16 @@ export class RoundController {
         res = await this.renewSession();
       }
     }
+  }
+
+  /**
+   * True when the session made at the mic tap can no longer be started: its voice token is past
+   * its join deadline, or the server is about to drop it for never having said hello (10 minutes).
+   * A resumed round said hello at the mic tap and is not dropped that way.
+   */
+  private sessionStale(res: CreateSessionRes): boolean {
+    if (this.input?.kind !== 'resume' && Date.now() - this.sessionAt > UNSTARTED_SESSION_MS) return true;
+    return this.tokenStale(res);
   }
 
   /** True when the floor's voice token is past (or about to pass) its join deadline. */
@@ -572,7 +610,9 @@ export class RoundController {
     if (this.disposed) throw new SessionError('cancelled', 'The round was closed');
     this.res = res;
     this.preparedRes = res;
+    this.sessionAt = Date.now();
     this.applyTiming(res);
+    // The earlier session's socket goes first, listeners and all: it must never say hello.
     this.closeSocket();
     this.openSocket(res);
     if (this.socketWanted) void this.connectSocket();
@@ -755,6 +795,7 @@ export class RoundController {
   private connectSocket(): Promise<void> {
     const s = this.socket;
     if (!s) return Promise.resolve();
+    this.helloSent = true;
     this.socketUp ??= s
       .connect()
       .then(() => {
@@ -1088,6 +1129,15 @@ export class RoundController {
     this.modes.delete(t);
     // A voice that stops mid-sentence sends no last mode: its avatar must not stay "speaking".
     this.deps.avatars?.(t.panelistId)?.setMode('idle');
+    // The floor's voice ended on its own before the round began (the user was away from the desk
+    // prompt for minutes): drop the panel, so the next enter() connects again instead of greeting
+    // through a dead voice.
+    const panel = this.panel;
+    if (!this.voicesUp && panel && !panel.isStopped && panel.current() === t && (this.st === 'placing' || this.st === 'idle')) {
+      this.voicesStarting = null;
+      void panel.stopAll();
+      return;
+    }
     for (const done of [...(this.quietWaiters.get(t) ?? [])]) done();
     // Transports we stop (hand-over, round end) are not the floor any more by then; a floor that
     // ends mid hand-over is being replaced.

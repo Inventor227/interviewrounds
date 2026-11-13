@@ -67,6 +67,9 @@ export function toSessionToken(fish: FishSession): LiveKitSessionToken {
   } as LiveKitSessionToken;
 }
 
+/** A failed unmute is tried again after this long. */
+export const UNMUTE_RETRY_MS = 300;
+
 const ERROR_CODES: Record<string, VoiceErrorCode> = {
   mic_permission_denied: 'mic_denied',
   connection_failed: 'connect_failed',
@@ -166,7 +169,20 @@ export class FishTransport implements VoiceTransport {
     this.muted = muted;
     const s = this.session;
     if (!s) return Promise.resolve();
-    return s.setMicMuted(muted).catch((e) => void this.events.emit('error', toVoiceError(e)));
+    return s
+      .setMicMuted(muted)
+      .catch(async (e) => {
+        // The SDK puts its own flag back when the toggle fails. An unmute is tried once more (the
+        // first unmute after a muted start captures the mic there and then); only then is it reported,
+        // as a mic problem, not as a lost connection.
+        if (!muted && this.session === s && !this.muted) {
+          await new Promise((r) => setTimeout(r, UNMUTE_RETRY_MS));
+          if (this.session === s && !this.muted) return s.setMicMuted(false);
+          return;
+        }
+        throw e;
+      })
+      .catch((e) => void this.events.emit('error', new VoiceError('mic_toggle_failed', 'Could not switch the microphone', e)));
   }
 
   sendEvent(marker: string): void {
