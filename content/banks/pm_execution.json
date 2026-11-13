@@ -48,12 +48,10 @@
         "Separates internal and external causes",
         "Segments by platform, version, region, new versus returning",
         "Finds the funnel step: hosts starting fine, joiners failing",
-        "Trade-off: compares revenue per group, long term retention and who pays, sets a threshold or tests it"
+        "Trade-off: compares revenue per group, long term retention and who pays, sets a threshold or tests it",
+        "Segments before naming a cause; makes the ship call"
       ],
-      "red_flags": [
-        "Jumps to a cause without segmenting",
-        "Refuses to make the ship call"
-      ]
+      "red_flags": []
     },
     {
       "id": "pm_execution.save_for_later",
@@ -95,12 +93,10 @@
         "Guardrail: cart conversion not cannibalised",
         "Notices saves up while purchases from saves fall: a return path problem",
         "Looks for a product change near the start of the drop",
-        "Trade-off: values a lost checkout against future purchases from saves, proposes a test or a threshold"
+        "Trade-off: values a lost checkout against future purchases from saves, proposes a test or a threshold",
+        "Does not treat the rise in saves as good news or every save as purchase intent"
       ],
-      "red_flags": [
-        "Celebrates the rise in saves",
-        "Treats all saves as purchase intent"
-      ]
+      "red_flags": []
     },
     {
       "id": "pm_execution.podcast_north_star",
@@ -141,12 +137,10 @@
         "Explains how downloads can be gamed or inflated",
         "Supporting metrics: follows that lead to listens, completion rate",
         "Finds the auto download change and heavy followers as the segment",
-        "Trade-off: weighs minutes against trust, proposes an opt in or a test with a complaint threshold"
+        "Trade-off: weighs minutes against trust, proposes an opt in or a test with a complaint threshold",
+        "Does not dismiss complaints because minutes went up"
       ],
-      "red_flags": [
-        "Picks downloads as the north star",
-        "Ignores complaints because minutes went up"
-      ]
+      "red_flags": []
     },
     {
       "id": "pm_execution.reminder_notifications",
@@ -189,12 +183,10 @@
         "Checks data, then whether the mix of new users changed",
         "Finds the onboarding change and the opt in drop",
         "Explains the mechanism: fewer reminders, fewer return visits",
-        "Trade-off: values an uninstall against session gains over months, segments who uninstalls, tests frequency or tone"
+        "Trade-off: values an uninstall against session gains over months, segments who uninstalls, tests frequency or tone",
+        "Checks seasonality instead of assuming it; does not ship on the session lift alone"
       ],
-      "red_flags": [
-        "Blames seasonality without checking",
-        "Ships on the session lift alone"
-      ]
+      "red_flags": []
     }
   ]
 }

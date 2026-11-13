@@ -39,7 +39,7 @@
       "weight": 1,
       "looks_for": "Decisions they owned, grounded in users and goals, with a measurable product or business result.",
       "descriptors": {
-        "1": "Vague role in the story; no result or a result that is not theirs.",
+        "1": "Vague role in the story; no result or a result that is not theirs, or takes credit for others' work when probed.",
         "2": "Owned some decisions; the result has no number or clear outcome.",
         "3": "Clear decisions they owned, grounded in user needs and data, with a measurable result.",
         "4": "Result at or above the level's scope, with clear learning applied to later work."
@@ -53,7 +53,7 @@
       "descriptors": {
         "1": "Clearly below the level, for example task level stories for a senior role.",
         "2": "One level below what the role expects.",
-        "3": "Matches the level: own work at junior, a feature with a few people at mid, a project of three or more people at senior, two or more teams at staff.",
+        "3": "Matches the level: own feature at junior, a product area with one team at mid, two or more teams at senior, an org or group of teams at staff.",
         "4": "Above the level's scope, with the candidate clearly leading it."
       }
     },
@@ -84,11 +84,14 @@
   ],
   "scoring_notes": [
     "Score the director's challenge phase on whether they held their position with reasons or updated with reasons; both can score well.",
-    "Polished delivery is not evidence. Specific actions, numbers and fair descriptions of others are."
+    "Polished delivery is not evidence. Specific actions, numbers and fair descriptions of others are.",
+    "Red flags are only the items in red_flags. Weak, wrong or incomplete answers lower the matching competency score and are never red flags."
   ],
   "red_flags": [
-    "Invented detail that changes between answers",
-    "Takes credit for the team's work when probed",
-    "Hostile to the interviewer"
+    "Makes up facts and keeps defending them after being questioned",
+    "Story details change when probed, showing the experience was invented",
+    "Hostile, insulting or disrespectful toward the interviewer",
+    "Refuses to engage with the questions",
+    "Integrity issue, such as reading answers from another source or getting outside help during the round"
   ]
 }

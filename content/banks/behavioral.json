@@ -33,12 +33,11 @@
         "States the other view fairly, at its strongest",
         "Uses data, a prototype or a written proposal rather than volume",
         "A clear outcome, including the case where they lost and committed anyway",
-        "The relationship after the disagreement"
+        "The relationship after the disagreement",
+        "Describes a real disagreement and reaches the other person directly, not around them"
       ],
       "red_flags": [
-        "'They were just wrong'",
-        "No real disagreement in the story",
-        "Went around the person without telling them"
+        "Story details change when probed, showing the experience was invented"
       ]
     },
     {
@@ -71,12 +70,11 @@
         "Notices early or explains why they didn't",
         "Owns their part without hiding behind the team",
         "Concrete fix plus a process change that stuck",
-        "Clear impact, ideally with a number"
+        "Clear impact, ideally with a number",
+        "Does not shift blame to another team or a tool"
       ],
       "red_flags": [
-        "Blames another team or a tool",
-        "A failure with no consequence",
-        "No lesson, or a lesson that is generic"
+        "Story details change when probed, showing the experience was invented"
       ]
     },
     {
@@ -112,8 +110,7 @@
         "Adoption or impact numbers"
       ],
       "red_flags": [
-        "Change imposed with no buy in",
-        "No evidence it helped"
+        "Story details change when probed, showing the experience was invented"
       ]
     },
     {
@@ -144,11 +141,11 @@
       "strong_answer_covers": [
         "Specific feedback, not a disguised strength",
         "No defensiveness in the retelling",
-        "A visible change in behaviour, with an example"
+        "A visible change in behaviour, with an example",
+        "Picks feedback that stung, not a disguised strength, and does not relitigate it"
       ],
       "red_flags": [
-        "Feedback that is really a strength, such as working too hard",
-        "Explains why the feedback was unfair"
+        "Story details change when probed, showing the experience was invented"
       ]
     },
     {
@@ -179,11 +176,11 @@
       "strong_answer_covers": [
         "Takes action to reduce ambiguity: questions, a prototype, a written proposal",
         "Makes reasonable decisions and records the assumptions",
-        "Delivers something useful and adjusts"
+        "Delivers something useful and adjusts",
+        "Does not wait to be told or blame whoever wrote the requirements"
       ],
       "red_flags": [
-        "Waits to be told",
-        "Blames the people who wrote the requirements"
+        "Story details change when probed, showing the experience was invented"
       ]
     },
     {
@@ -217,7 +214,7 @@
         "A visible outcome for the other person"
       ],
       "red_flags": [
-        "Took over the work and calls it mentoring"
+        "Story details change when probed, showing the experience was invented"
       ]
     }
   ]

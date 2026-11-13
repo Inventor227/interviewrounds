@@ -44,10 +44,7 @@
         "Success metric such as leases signed through the product, scam reports as a guardrail",
         "Trust as the core risk, with a mitigation"
       ],
-      "red_flags": [
-        "A feature list for every segment",
-        "Starts from a technology, not a user"
-      ]
+      "red_flags": []
     },
     {
       "id": "pm_product_sense.library_teens",
@@ -88,10 +85,7 @@
         "Respects privacy and safety for minors",
         "Metric such as weekly active teen members, with a guardrail"
       ],
-      "red_flags": [
-        "Gamifies reading with no insight into teens",
-        "Ignores safety and privacy for minors"
-      ]
+      "red_flags": []
     },
     {
       "id": "pm_product_sense.museum_glasses",
@@ -130,12 +124,10 @@
         "Context of use: hands free, short attention, walking",
         "Privacy of other visitors",
         "First version such as look to learn labels in the visitor's language",
-        "Metric tied to the museum's goal, such as membership sign ups, with crowding or dwell time as a guardrail"
+        "Metric tied to the museum's goal, such as membership sign ups, with crowding or dwell time as a guardrail",
+        "Designs for glasses, not a phone app moved onto them"
       ],
-      "red_flags": [
-        "Puts a phone app on the glasses",
-        "Ignores privacy entirely"
-      ]
+      "red_flags": []
     },
     {
       "id": "pm_product_sense.grocery_ai",
@@ -177,10 +169,7 @@
         "Risks: wrong substitutions, allergies, trust, with guardrails",
         "Metric such as weekly order rate or basket size, with complaint or refund rate as a guardrail"
       ],
-      "red_flags": [
-        "Starts with a chatbot because it's AI",
-        "No plan for when the model is wrong"
-      ]
+      "red_flags": []
     },
     {
       "id": "pm_product_sense.restaurant_waste",
@@ -218,11 +207,10 @@
         "Finds where waste happens: over ordering, prep, spoilage, unsold dishes",
         "Picks one with a reason",
         "A low effort first version that fits a busy kitchen",
-        "Metric such as waste as a share of purchases, with time spent per day as a guardrail"
+        "Metric such as waste as a share of purchases, with time spent per day as a guardrail",
+        "Does not assume busy owners will enter data by hand every day"
       ],
-      "red_flags": [
-        "Assumes owners will enter data by hand every day"
-      ]
+      "red_flags": []
     }
   ]
 }

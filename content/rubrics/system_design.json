@@ -85,10 +85,13 @@
   "scoring_notes": [
     "Judge the design from the words and the final board together. Items the Scribe placed count only if the candidate accepted them.",
     "Numbers that never change a decision earn no credit under Requirements.",
-    "The second panelist's questions count the same as the lead's."
+    "The second panelist's questions count the same as the lead's.",
+    "Red flags are only the items in red_flags. Weak, wrong or incomplete answers lower the matching competency score and are never red flags."
   ],
   "red_flags": [
-    "Invents facts that contradict the requirements given and defends them",
-    "Hostile to the interviewers"
+    "Makes up facts and keeps defending them after being questioned",
+    "Hostile, insulting or disrespectful toward the interviewer",
+    "Refuses to engage with the questions",
+    "Integrity issue, such as reading answers from another source or getting outside help during the round"
   ]
 }

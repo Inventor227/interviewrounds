@@ -49,12 +49,10 @@
         "Seat hold with an expiry and an atomic conditional write, so a seat moves from free to held only once",
         "Idempotent payment callbacks keyed by an order id; release holds on failure or timeout",
         "Seat map reads served from a cache or snapshot, separate from the write path",
-        "Load shedding and a fair queue order; bot defence at admission"
+        "Load shedding and a fair queue order; bot defence at admission",
+        "The source of truth for seat ownership is durable, never a cache"
       ],
-      "red_flags": [
-        "Relies on a cache as the source of truth for seat ownership",
-        "Says the database will handle three million users without any queue or numbers"
-      ]
+      "red_flags": []
     },
     {
       "id": "system_design.food_trucks",
@@ -102,9 +100,7 @@
         "Static data like menus in a database with a cache and object storage for photos",
         "Hot cell handling: finer cells or a cap and ranking of results"
       ],
-      "red_flags": [
-        "Scans every truck in a relational table for each search with no index"
-      ]
+      "red_flags": []
     },
     {
       "id": "system_design.team_chat",
@@ -153,10 +149,7 @@
         "Receipts stored as a last read pointer per member, batched, instead of one record per message per reader",
         "Reconnect storms handled with backoff and resume from the last sequence number"
       ],
-      "red_flags": [
-        "Writes a receipt row for every message for every member of large groups without noticing the cost",
-        "No ordering story"
-      ]
+      "red_flags": []
     },
     {
       "id": "system_design.notify_hub",
@@ -202,12 +195,10 @@
         "Idempotency key per notification, recorded before or atomically with the send",
         "Per channel workers with backoff, and failover to a second provider",
         "Separate priority lanes so urgent traffic never waits behind bulk",
-        "Delivery status tracking and a dead letter path"
+        "Delivery status tracking and a dead letter path",
+        "Never claims exactly once delivery from an outside provider"
       ],
-      "red_flags": [
-        "Calls providers synchronously from the ride service with no queue",
-        "Claims exactly once delivery from an outside provider with no idempotency story"
-      ]
+      "red_flags": []
     },
     {
       "id": "system_design.quiz_leaderboard",
@@ -253,12 +244,10 @@
         "Score in parallel by partition, then merge",
         "Sorted set or bucketed counts for ranks; exact rank via counts above a score",
         "Top hundred cached and pushed; own rank fetched or pushed per player",
-        "Graceful degradation: delayed ranks rather than lost answers"
+        "Graceful degradation: delayed ranks rather than lost answers",
+        "Never trusts the client clock; avoids re-sorting all players per request"
       ],
-      "red_flags": [
-        "Sorts two million players from scratch on every request",
-        "Trusts the client's timestamp"
-      ]
+      "red_flags": []
     }
   ]
 }

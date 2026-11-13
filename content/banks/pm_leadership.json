@@ -33,11 +33,11 @@
         "Grounds the no in goals, users and data",
         "Offers an alternative path or timing",
         "Keeps the relationship",
-        "Clear outcome"
+        "Clear outcome",
+        "Talks to the stakeholder before escalating"
       ],
       "red_flags": [
-        "Said yes to everything, or no with no reason",
-        "Escalated first instead of talking"
+        "Story details change when probed, showing the experience was invented"
       ]
     },
     {
@@ -69,11 +69,11 @@
         "Understands the team's incentives and constraints",
         "Changes the plan based on their input",
         "Agreement built on shared goals, not authority",
-        "A measured result"
+        "A measured result",
+        "Does not rely on authority or the team's manager"
       ],
       "red_flags": [
-        "'I told them to'",
-        "Went to their manager first"
+        "Story details change when probed, showing the experience was invented"
       ]
     },
     {
@@ -106,11 +106,11 @@
         "A clear, measured goal and the gap",
         "Owns the decision, not just the execution",
         "Acted on the miss: iterated, rolled back or stopped",
-        "A lesson visible in later work"
+        "A lesson visible in later work",
+        "Does not blame engineering, design or marketing"
       ],
       "red_flags": [
-        "Blames engineering, design or marketing",
-        "No metric, so no clear miss"
+        "Story details change when probed, showing the experience was invented"
       ]
     },
     {
@@ -142,11 +142,11 @@
         "Names the missing data and why waiting cost more",
         "Makes the call with stated assumptions",
         "Builds in a way to learn and reverse",
-        "Honest outcome"
+        "Honest outcome",
+        "Does not wait for certainty or pretend the data was clear"
       ],
       "red_flags": [
-        "Waited for certainty",
-        "Pretends the data was clear"
+        "Story details change when probed, showing the experience was invented"
       ]
     },
     {
@@ -178,11 +178,11 @@
         "States both sides fairly",
         "Reframes around the user and the goal",
         "Clear decision and the reason for it",
-        "Relationships intact afterwards"
+        "Relationships intact afterwards",
+        "Takes a position on the merits, not by who is louder"
       ],
       "red_flags": [
-        "Picked the louder side",
-        "Took no position at all"
+        "Story details change when probed, showing the experience was invented"
       ]
     }
   ]

@@ -53,12 +53,10 @@
         "O of n log n time, constant extra space beyond the sort",
         "A short exchange argument for why the pairing is safe",
         "Tests: all heavy, all light, a single package, exact fits at W",
-        "Twist: sees it is a bin packing style problem, offers a reasonable heuristic and says it may not be optimal"
+        "Twist: sees it is a bin packing style problem, offers a reasonable heuristic and says it may not be optimal",
+        "Does not claim the three per trip version stays greedy optimal without an argument"
       ],
-      "red_flags": [
-        "Tries every pairing with no plan to prune",
-        "Claims the three per trip version stays greedy optimal without an argument"
-      ],
+      "red_flags": [],
       "reference_solution": {
         "language": "python",
         "time": "O(n log n)",
@@ -164,12 +162,10 @@
         "Updates the time only when it prints",
         "Bounds memory with a queue of time and text, or periodic cleanup of entries older than ten seconds",
         "Concurrency: a lock, or sharding the map by a hash of the message",
-        "Tests: exactly ten seconds apart, nine seconds apart, interleaved messages"
+        "Tests: exactly ten seconds apart, nine seconds apart, interleaved messages",
+        "Notices that updating the time on dropped messages changes behaviour"
       ],
-      "red_flags": [
-        "Updates the stored time even when the message is dropped, without noticing it changes behaviour",
-        "Scans the whole history on every call"
-      ],
+      "red_flags": [],
       "reference_solution": {
         "language": "python",
         "time": "O(1) per call",
@@ -272,11 +268,10 @@
         "Max and min via two monotonic deques for linear time, or a sorted structure for n log n",
         "Argues each index is added and removed once",
         "Tests: K of zero, all equal, strictly increasing, a single reading",
-        "Stream twist: same window works online, best so far is a running max"
+        "Stream twist: same window works online, best so far is a running max",
+        "Does not call a window rescan linear"
       ],
-      "red_flags": [
-        "Recomputes max and min by scanning the window on every step and calls it linear"
-      ],
+      "red_flags": [],
       "reference_solution": {
         "language": "python",
         "time": "O(n)",
@@ -418,12 +413,10 @@
         "Impossible exactly when not every module gets placed, meaning a cycle",
         "Linear in modules plus pairs",
         "Finding the loop: DFS with the recursion stack, or the leftover nodes",
-        "Twist: process the queue level by level; the number of levels is the fewest terms"
+        "Twist: process the queue level by level; the number of levels is the fewest terms",
+        "Asks whether a cycle can happen instead of assuming it cannot"
       ],
-      "red_flags": [
-        "Repeatedly scans all modules for ready ones with no bound on the cost",
-        "Claims a cycle cannot happen without asking"
-      ],
+      "red_flags": [],
       "reference_solution": {
         "language": "python",
         "time": "O(V + E)",
@@ -561,9 +554,7 @@
         "Tests: no matches, fewer than three matches, a product equal to the prefix",
         "Twist: store top three by popularity per trie node, update on popularity changes"
       ],
-      "red_flags": [
-        "Rescans every product on every keystroke at scale without noticing the cost"
-      ],
+      "red_flags": [],
       "reference_solution": {
         "language": "python",
         "time": "O(n log n) to sort, then O(log n) per letter",

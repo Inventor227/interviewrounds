@@ -55,10 +55,7 @@
         "Bay allocation guarded for concurrent requests",
         "Off peak extension as a new pricing policy without editing sessions"
       ],
-      "red_flags": [
-        "One Hub class that holds all logic",
-        "Pricing rules spread across several classes with if statements"
-      ]
+      "red_flags": []
     },
     {
       "id": "object_design.library_holds",
@@ -110,12 +107,10 @@
         "FinePolicy in one place, with the cap",
         "Return flow: copy goes to the next hold, with a pickup deadline",
         "Claiming a copy is atomic or locked",
-        "E-books through a shared Lendable interface or licence policy, without special cases everywhere"
+        "E-books through a shared Lendable interface or licence policy, without special cases everywhere",
+        "Holds go on titles, not specific copies; fine logic lives in one place"
       ],
-      "red_flags": [
-        "Holds placed on a specific copy",
-        "Fine logic duplicated in Member and Loan"
-      ]
+      "red_flags": []
     },
     {
       "id": "object_design.expense_splitter",
@@ -170,10 +165,7 @@
         "Settlement by matching largest debtor with largest creditor",
         "Recurring expenses as a schedule that creates expenses, not a new split type"
       ],
-      "red_flags": [
-        "Floating point money",
-        "Split type handled by a growing switch in Expense"
-      ]
+      "red_flags": []
     },
     {
       "id": "object_design.coffee_kiosk",
@@ -227,10 +219,7 @@
         "Customisations as recipe modifiers rather than new recipes",
         "Seasonal drinks through an availability rule on the recipe"
       ],
-      "red_flags": [
-        "Boolean flags for every mode checked in every method",
-        "Inventory decremented at order time with no way to release"
-      ]
+      "red_flags": []
     }
   ]
 }

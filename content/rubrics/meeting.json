@@ -85,10 +85,13 @@
   "scoring_notes": [
     "Meetings have no hire verdict. Level is n/a; judge against a capable professional in the user's stated role.",
     "A concern counts as resolved only when the user answered it with a specific fact, number, commitment or concession.",
-    "Negotiations: going below the user's walk away point is a weakness under Driving to outcome, whatever the attendees said."
+    "Negotiations: going below the user's walk away point is a weakness under Driving to outcome, whatever the attendees said.",
+    "Red flags are only the items in red_flags. Weak, wrong or incomplete answers lower the matching competency score and are never red flags."
   ],
   "red_flags": [
-    "Makes up facts that contradict the setup and defends them",
-    "Hostile or insulting to attendees"
+    "Makes up facts that contradict the setup and keeps defending them",
+    "Hostile, insulting or disrespectful toward attendees",
+    "Refuses to engage with the meeting",
+    "Integrity issue, such as reading answers from another source during the rehearsal"
   ]
 }

@@ -39,7 +39,7 @@
       "weight": 1,
       "looks_for": "Personal actions, stakes, a measurable result, and what changed because of them.",
       "descriptors": {
-        "1": "Says 'we' throughout with no personal action, or the result is vague.",
+        "1": "Says 'we' throughout with no personal action, or the result is vague, or takes credit for others' work when probed.",
         "2": "Some personal action; a result with no number or concrete outcome.",
         "3": "Clear personal actions and a measurable or concrete result.",
         "4": "Result at or above the level's scope; knows what changed afterwards and would make the call again or knows why not."
@@ -85,11 +85,14 @@
   "scoring_notes": [
     "Most down levelling comes from scope: score Scope for level strictly against the chosen level.",
     "Polished delivery is not evidence. Specific actions, numbers and fair descriptions of others are.",
-    "Reading from a story card is not penalised by itself."
+    "Reading from a story card is not penalised by itself.",
+    "Red flags are only the items in red_flags. Weak, wrong or incomplete answers lower the matching competency score and are never red flags."
   ],
   "red_flags": [
-    "Invented detail that changes between answers",
-    "Takes credit for others' work when probed",
-    "Hostile to the interviewer"
+    "Makes up facts and keeps defending them after being questioned",
+    "Story details change when probed, showing the experience was invented",
+    "Hostile, insulting or disrespectful toward the interviewer",
+    "Refuses to engage with the questions",
+    "Integrity issue, such as reading answers from another source or getting outside help during the round"
   ]
 }

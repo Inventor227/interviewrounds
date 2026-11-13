@@ -23,12 +23,10 @@
         "Market size built bottom up, not a top down headline",
         "Biggest risk named honestly with a plan",
         "Use of funds tied to milestones",
-        "Asks for a concrete next step, such as a partner meeting"
+        "Asks for a concrete next step, such as a partner meeting",
+        "Answers the churn question directly"
       ],
-      "red_flags": [
-        "Avoids the churn question",
-        "No clear ask at the end"
-      ]
+      "red_flags": []
     },
     {
       "id": "meeting.client_proposal",
@@ -48,12 +46,10 @@
         "Price framed against savings and payback",
         "Implementation plan that protects drivers and dispatchers",
         "Clear pilot success criteria agreed up front",
-        "Asks for a decision and a start date"
+        "Asks for a decision and a start date",
+        "Shows savings instead of attacking the spreadsheet; holds price unless something is traded"
       ],
-      "red_flags": [
-        "Argues the spreadsheet is bad instead of showing savings",
-        "Discounts the price without being asked"
-      ]
+      "red_flags": []
     },
     {
       "id": "meeting.exec_update",
@@ -73,12 +69,10 @@
         "Options with trade-offs, not just the ask",
         "Who loses the engineer and what that costs",
         "A date with confidence level",
-        "Gets an explicit decision"
+        "Gets an explicit decision",
+        "No new bad news surfaces only under probing"
       ],
-      "red_flags": [
-        "Buries the slip under detail",
-        "Surprises the VP with new bad news when probed"
-      ]
+      "red_flags": []
     },
     {
       "id": "meeting.salary_negotiation",
@@ -98,12 +92,10 @@
         "Uses market data and the competing process without bluffing",
         "Asks about every lever: base, sign on, equity, level, start date",
         "Stays above the walk away point",
-        "Agrees concrete next steps and a date"
+        "Agrees concrete next steps and a date",
+        "Does not accept the first counter on the spot; never bluffs about an offer"
       ],
-      "red_flags": [
-        "Accepts the first counter immediately",
-        "Bluffs about an offer that does not exist"
-      ]
+      "red_flags": []
     },
     {
       "id": "meeting.performance_review",
@@ -123,12 +115,10 @@
         "Separates the person from the behaviour",
         "Listens and acknowledges their view",
         "Agrees a concrete plan with a check in date",
-        "Keeps the relationship and their strengths in view"
+        "Keeps the relationship and their strengths in view",
+        "The message stays clear; listens rather than argues"
       ],
-      "red_flags": [
-        "Softens the message until it disappears",
-        "Argues instead of listening"
-      ]
+      "red_flags": []
     },
     {
       "id": "meeting.project_kickoff",
@@ -148,12 +138,10 @@
         "Scope in and out, explicitly",
         "Named owners for each workstream",
         "Risks and how the timeline accounts for them",
-        "Agrees the first milestone and date"
+        "Agrees the first milestone and date",
+        "Does not accept a doubted date without changing scope or resources"
       ],
-      "red_flags": [
-        "Commits to a date the engineering lead has already doubted, with no change in scope",
-        "Leaves owners unnamed"
-      ]
+      "red_flags": []
     }
   ]
 }
