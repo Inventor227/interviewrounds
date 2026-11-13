@@ -1,0 +1,58 @@
+{
+  "id": "meeting.full",
+  "title": "Meeting rehearsal",
+  "summary": "A full meeting with one to three people: your pitch, cross questions on every open concern, then a decision.",
+  "role": "none",
+  "round_type": "meeting",
+  "length": "full",
+  "target_minutes": 20,
+  "hard_stop_minutes": 23,
+  "silence_wait_seconds": 12,
+  "interrupt_after_seconds": 90,
+  "panel": {
+    "lead": "persona.grace",
+    "second": null,
+    "second_enters_phase": null
+  },
+  "phases": [
+    {
+      "id": "welcome",
+      "title": "Welcome",
+      "minutes": 1,
+      "goal": "The chair welcomes everyone and asks what we are here to decide, or hands straight to the user if they open. When the user runs the meeting, the opening line has been spoken and the user opens; nobody else welcomes."
+    },
+    {
+      "id": "opening",
+      "title": "Your opening",
+      "minutes": 4,
+      "goal": "The user's opening or pitch. At most one or two interruptions from impatient attendees, only on the long answer marker. The chair cuts in once if no ask has appeared; when the user runs the meeting, nobody does."
+    },
+    {
+      "id": "questions",
+      "title": "Questions",
+      "minutes": 10,
+      "goal": "Cross questions, rotating by the most important open concern. Nobody silent for more than about three user turns. One attendee may pick up another's point; one disagreement between attendees is allowed."
+    },
+    {
+      "id": "decision",
+      "title": "Decision",
+      "minutes": 4,
+      "goal": "The chair says 'We need to wrap up. What exactly are you asking us for?' The decision maker states the outcome from the meeting state with its reason, conditions or what information is missing. When the user runs the meeting, wait for the user to ask; then the decision maker answers in their own words.",
+      "must_cover": [
+        "ask",
+        "decision"
+      ]
+    },
+    {
+      "id": "close",
+      "title": "Close",
+      "minutes": 1,
+      "goal": "The chair reads back next steps with owners and dates and calls end_round. No ask made: 'Let's regroup when you have a clear proposal.' When the user runs the meeting, the meeting ends on the user's close; the decision maker says one short line and calls end_round."
+    }
+  ],
+  "rubric_id": "rubric.meeting",
+  "question_pool": "bank.meeting",
+  "hands": "meeting_cards",
+  "board_kit": "meeting",
+  "short_version": "meeting.short"
+}

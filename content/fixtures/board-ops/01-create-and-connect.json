@@ -1,0 +1,129 @@
+{
+  "name": "create two components and connect them",
+  "start": {
+    "schema": "ir.board.v1",
+    "round": {
+      "id": "s_fixture",
+      "type": "hld",
+      "question_id": null,
+      "language": null
+    },
+    "rev": 0,
+    "size": {
+      "w": 64,
+      "h": 40
+    },
+    "brief": {
+      "question": "Fixture board",
+      "lines": []
+    },
+    "items": [],
+    "edges": [],
+    "code": null,
+    "meeting": null,
+    "focus": null,
+    "ghosts": [],
+    "op_ids": []
+  },
+  "ops": [
+    {
+      "op_id": "o1",
+      "src": "hand",
+      "op": "item.create",
+      "args": {
+        "id": "n1",
+        "kind": "component",
+        "type": "client",
+        "label": null,
+        "x": 4,
+        "y": 18,
+        "w": 8,
+        "h": 5
+      }
+    },
+    {
+      "op_id": "o2",
+      "src": "hand",
+      "op": "item.create",
+      "args": {
+        "id": "n2",
+        "kind": "component",
+        "type": "service",
+        "label": "Shortener",
+        "x": 20,
+        "y": 18,
+        "w": 8,
+        "h": 5
+      }
+    },
+    {
+      "op_id": "o3",
+      "src": "hand",
+      "op": "edge.create",
+      "args": {
+        "id": "e1",
+        "from": "n1",
+        "to": "n2"
+      }
+    }
+  ],
+  "expected": {
+    "schema": "ir.board.v1",
+    "round": {
+      "id": "s_fixture",
+      "type": "hld",
+      "question_id": null,
+      "language": null
+    },
+    "rev": 3,
+    "size": {
+      "w": 64,
+      "h": 40
+    },
+    "brief": {
+      "question": "Fixture board",
+      "lines": []
+    },
+    "items": [
+      {
+        "id": "n1",
+        "kind": "component",
+        "type": "client",
+        "label": null,
+        "x": 4,
+        "y": 18,
+        "w": 8,
+        "h": 5
+      },
+      {
+        "id": "n2",
+        "kind": "component",
+        "type": "service",
+        "label": "Shortener",
+        "x": 20,
+        "y": 18,
+        "w": 8,
+        "h": 5
+      }
+    ],
+    "edges": [
+      {
+        "id": "e1",
+        "from": "n1",
+        "to": "n2",
+        "dir": "->",
+        "label": null,
+        "rel": null
+      }
+    ],
+    "code": null,
+    "meeting": null,
+    "focus": null,
+    "ghosts": [],
+    "op_ids": [
+      "o1",
+      "o2",
+      "o3"
+    ]
+  }
+}

@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rounds.dijmo.com/schema/round.schema.json",
+  "title": "RoundConfig",
+  "description": "One file per round and length in content/rounds/, named <id>.json.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id", "title", "role", "round_type", "length", "target_minutes", "hard_stop_minutes",
+    "silence_wait_seconds", "interrupt_after_seconds", "panel", "phases", "rubric_id", "question_pool", "hands", "board_kit"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z]+(\\.[a-z_]+)*\\.(short|full)$",
+      "description": "e.g. sde.system_design.full, meeting.short."
+    },
+    "title": { "type": "string", "minLength": 1, "maxLength": 40, "description": "User-facing round name, e.g. \"System design\"." },
+    "summary": { "type": "string", "maxLength": 140, "description": "User-facing one line shown in the catalog." },
+    "role": { "enum": ["sde", "pm", "none"], "description": "none = meeting rehearsal." },
+    "round_type": {
+      "enum": ["coding", "system_design", "object_design", "behavioral", "recruiter_screen", "pm_product_sense", "pm_execution", "pm_estimation", "pm_strategy", "pm_leadership", "meeting"]
+    },
+    "length": { "enum": ["short", "full"] },
+    "target_minutes": { "type": "number", "exclusiveMinimum": 0 },
+    "hard_stop_minutes": { "type": "number", "exclusiveMinimum": 0 },
+    "silence_wait_seconds": { "type": "integer", "minimum": 0, "description": "Thinking silence the interviewer lets run before \"Want to think out loud?\"." },
+    "interrupt_after_seconds": { "type": "integer", "minimum": 0, "description": "Answer length after which the interviewer may cut in. A persona's interrupts_after_seconds overrides it." },
+    "panel": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["lead"],
+      "properties": {
+        "lead": { "$ref": "#/$defs/persona_id" },
+        "second": { "oneOf": [{ "$ref": "#/$defs/persona_id" }, { "type": "null" }] },
+        "second_enters_phase": { "type": ["string", "null"], "description": "Phase id where the second panelist joins." }
+      }
+    },
+    "phases": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "minutes", "goal"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" },
+          "title": { "type": "string", "description": "User-facing phase name for the round bar." },
+          "minutes": { "type": "number", "exclusiveMinimum": 0 },
+          "goal": { "type": "string", "minLength": 1, "description": "Goal for the interviewer (prompt text)." },
+          "must_cover": { "type": "array", "items": { "type": "string" } },
+          "uses_whiteboard": { "type": "boolean", "default": false }
+        }
+      }
+    },
+    "rubric_id": { "type": "string", "pattern": "^rubric\\.[a-z_]+$" },
+    "question_pool": { "type": "string", "pattern": "^bank\\.[a-z_]+$" },
+    "hands": { "enum": ["whiteboard", "code_panel", "class_cards", "stickies", "meeting_cards", "none"] },
+    "board_kit": { "enum": ["hld", "lld", "coding", "pm", "meeting", null] },
+    "short_version": { "type": ["string", "null"], "description": "Full rounds: id of the short round." },
+    "full_version": { "type": ["string", "null"], "description": "Short rounds: id of the full round." }
+  },
+  "$defs": {
+    "persona_id": { "type": "string", "pattern": "^persona\\.[a-z]+$" }
+  }
+}

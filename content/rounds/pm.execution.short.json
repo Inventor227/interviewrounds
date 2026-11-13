@@ -1,0 +1,43 @@
+{
+  "id": "pm.execution.short",
+  "title": "Metrics and execution",
+  "summary": "A key metric moved. Structure the investigation and say what you would check first.",
+  "role": "pm",
+  "round_type": "pm_execution",
+  "length": "short",
+  "target_minutes": 6,
+  "hard_stop_minutes": 7,
+  "silence_wait_seconds": 30,
+  "interrupt_after_seconds": 120,
+  "panel": {
+    "lead": "persona.priya",
+    "second": null,
+    "second_enters_phase": null
+  },
+  "phases": [
+    {
+      "id": "clarify",
+      "title": "Clarify",
+      "minutes": 1.5,
+      "goal": "Introduce yourself in one line, give the product context and the metric change, call show_question. Answer clarifying questions with the facts."
+    },
+    {
+      "id": "hypotheses",
+      "title": "Hypotheses",
+      "minutes": 3,
+      "goal": "Let them structure: data checks, internal versus external, segments, funnel step. Give data exactly when asked. If they jump to one cause, ask what else could explain it.",
+      "uses_whiteboard": true
+    },
+    {
+      "id": "first_checks",
+      "title": "First checks",
+      "minutes": 1.5,
+      "goal": "Ask what they would check first and why that before the rest. Close and call end_round."
+    }
+  ],
+  "rubric_id": "rubric.pm_execution",
+  "question_pool": "bank.pm_execution",
+  "hands": "stickies",
+  "board_kit": "pm",
+  "full_version": "pm.execution.full"
+}

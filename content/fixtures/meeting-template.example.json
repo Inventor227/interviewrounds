@@ -1,0 +1,26 @@
+{
+  "id": "performance_review",
+  "title": "Performance review",
+  "summary": "Give a strong engineer hard feedback and agree a plan.",
+  "goal": "Your report understands the gap and agrees a plan with dates.",
+  "your_role": "Engineering manager",
+  "scenario": "Strong engineer, misses review deadlines, team frustrated.",
+  "attendees": [
+    {
+      "name": "Jordan",
+      "role": "Senior engineer, your direct report",
+      "cares_about": ["fairness", "promotion path"],
+      "personality": "skeptical",
+      "likely_objections": ["Nobody told me this was a problem", "The deadlines were never realistic"],
+      "decision_power": "influencer",
+      "voice_base": "persona.sam"
+    }
+  ],
+  "hidden_concerns": ["Fairness", "Specific examples", "What happens next"],
+  "success": "Your report names the gap in their own words and agrees two actions with dates.",
+  "tips": ["Lead with one specific example.", "Ask before you tell.", "End with agreed actions and dates."],
+  "difficulty": "realistic",
+  "who_speaks_first": "user",
+  "length": "short",
+  "user_chairs": true
+}

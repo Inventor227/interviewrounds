@@ -1,0 +1,70 @@
+{
+  "id": "sde.object_design.full",
+  "title": "Object design",
+  "summary": "Model a small system as classes, walk its main flows method by method, then extend it cleanly.",
+  "role": "sde",
+  "round_type": "object_design",
+  "length": "full",
+  "target_minutes": 30,
+  "hard_stop_minutes": 33,
+  "silence_wait_seconds": 60,
+  "interrupt_after_seconds": 120,
+  "panel": {
+    "lead": "persona.maya",
+    "second": null,
+    "second_enters_phase": null
+  },
+  "phases": [
+    {
+      "id": "intro",
+      "title": "Intro",
+      "minutes": 1,
+      "goal": "Introduce yourself and the format in under twenty seconds."
+    },
+    {
+      "id": "requirements",
+      "title": "Requirements",
+      "minutes": 6,
+      "goal": "State the problem and call show_question. Let them scope: actors, main use cases, what is out of scope. Keep it in one process, not distributed design.",
+      "must_cover": [
+        "actors",
+        "use_cases",
+        "out_of_scope"
+      ]
+    },
+    {
+      "id": "classes",
+      "title": "Classes",
+      "minutes": 7,
+      "goal": "They name the core classes with one responsibility each. Probe overloaded classes and nouns from their use cases that have no home.",
+      "uses_whiteboard": true
+    },
+    {
+      "id": "relationships",
+      "title": "Relationships",
+      "minutes": 6,
+      "goal": "They connect classes. Check each arrow kind against what they said: inheritance only for true is-a, composition where behaviour varies.",
+      "uses_whiteboard": true
+    },
+    {
+      "id": "flows",
+      "title": "Flows",
+      "minutes": 8,
+      "goal": "Ask them to walk two main use cases method by method in pseudo code. Probe one state change or one concurrent case.",
+      "must_cover": [
+        "two_flows"
+      ]
+    },
+    {
+      "id": "extension",
+      "title": "Extension",
+      "minutes": 2,
+      "goal": "Give the extension request. Ask what changes. If time allows, take one question. Close and call end_round."
+    }
+  ],
+  "rubric_id": "rubric.object_design",
+  "question_pool": "bank.object_design",
+  "hands": "class_cards",
+  "board_kit": "lld",
+  "short_version": "sde.object_design.short"
+}

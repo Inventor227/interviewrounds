@@ -1,0 +1,96 @@
+{
+  "id": "rubric.object_design",
+  "round_types": [
+    "object_design"
+  ],
+  "title": "Object design",
+  "scale": {
+    "1": {
+      "label": "below",
+      "name": "Below the bar",
+      "meaning": "Concerning for this level; this alone would likely block an offer."
+    },
+    "2": {
+      "label": "developing",
+      "name": "Developing",
+      "meaning": "Some signal, but clear gaps for this level."
+    },
+    "3": {
+      "label": "meets_bar",
+      "name": "Meets the bar",
+      "meaning": "What a solid candidate at the chosen level shows."
+    },
+    "4": {
+      "label": "above_bar",
+      "name": "Above the bar",
+      "meaning": "Would read as the next level up."
+    }
+  },
+  "level_bar": {
+    "junior": "A reasonable set of classes with mostly clear responsibilities and one flow that works.",
+    "mid": "Bounded requirements, one job per class, correct relationships, two flows that walk, an extension that fits.",
+    "senior": "All of mid, plus clear abstractions, state and concurrency handled where they matter, and a stated trade-off with the rejected alternative.",
+    "staff": "All of senior, plus testability, clean seams for future change, and pushing back on scope with reasons."
+  },
+  "competencies": [
+    {
+      "id": "requirements",
+      "name": "Requirements and use cases",
+      "weight": 1,
+      "looks_for": "Actors, main use cases, and what is out of scope.",
+      "descriptors": {
+        "1": "Designs without scoping anything.",
+        "2": "Partial use cases; scope keeps growing or stays vague.",
+        "3": "Bounded requirements with actors and main use cases.",
+        "4": "Prioritises use cases and says what is out of scope and why."
+      }
+    },
+    {
+      "id": "class_model",
+      "name": "Class model",
+      "weight": 1,
+      "looks_for": "Domain classes with one responsibility each and correct relationships.",
+      "descriptors": {
+        "1": "God classes or unclear ownership of state.",
+        "2": "Reasonable nouns but mixed responsibilities or wrong relationship kinds.",
+        "3": "One responsibility per class; correct uses, has-a, is-a and implements choices.",
+        "4": "Clean abstractions; composition over inheritance where behaviour varies, with a reason."
+      }
+    },
+    {
+      "id": "behaviour",
+      "name": "Behaviour and code",
+      "weight": 1,
+      "looks_for": "Main flows walked method by method; pseudo code matches the diagram; state transitions and concurrency.",
+      "descriptors": {
+        "1": "Cannot walk a flow through the classes.",
+        "2": "Flows walk with gaps, or the code calls methods the model does not have.",
+        "3": "Two main flows walk correctly in pseudo code that matches the model.",
+        "4": "Handles state transitions and concurrent access cleanly."
+      }
+    },
+    {
+      "id": "extensibility",
+      "name": "Extensibility and trade-offs",
+      "weight": 1,
+      "looks_for": "How the model absorbs the extension; patterns used for a stated reason; alternatives considered.",
+      "descriptors": {
+        "1": "The extension breaks the model.",
+        "2": "The extension needs edits across many classes or a growing chain of conditionals.",
+        "3": "The extension fits with few edits; a pattern is used for a stated reason.",
+        "4": "Names alternatives and why they were rejected; considers testability."
+      }
+    }
+  ],
+  "scoring_notes": [
+    "Do not judge UML notation or naming style.",
+    "Distributed system concerns earn no credit here unless the problem asked for them.",
+    "Red flags are only the items in red_flags. Weak, wrong or incomplete answers lower the matching competency score and are never red flags."
+  ],
+  "red_flags": [
+    "Makes up facts and keeps defending them after being questioned",
+    "Hostile, insulting or disrespectful toward the interviewer",
+    "Refuses to engage with the questions",
+    "Integrity issue, such as reading answers from another source or getting outside help during the round"
+  ]
+}
