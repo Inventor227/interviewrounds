@@ -327,7 +327,6 @@ fn test_app_with(llm: Arc<FakeLlm>, catalog: Catalog, confirm: bool) -> (Router,
     let cfg = common::test_config(url, &common::temp_dir("public"));
     let opts = OrchestratorOptions {
         first_text_timeout: Duration::from_millis(500),
-        retry_first_text_timeout: Duration::from_millis(500),
         confirm_speech_turns: confirm,
         ..OrchestratorOptions::default()
     };
@@ -2207,7 +2206,6 @@ async fn three_person_meeting_with_sonnet_down_is_answered_by_the_fallback() {
         .with_catalog(catalog.clone())
         .with_orchestrator_options(OrchestratorOptions {
             first_text_timeout: Duration::from_millis(500),
-            retry_first_text_timeout: Duration::from_millis(500),
             confirm_speech_turns: false,
             ..OrchestratorOptions::default()
         });

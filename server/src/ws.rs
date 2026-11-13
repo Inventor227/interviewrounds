@@ -827,7 +827,13 @@ pub async fn degraded_changed(
         }
     };
     tracing::info!(session_id = %session_id, clock_runs = at_ms.is_some(), "model back");
-    if let (Some(id), Some(at_ms)) = (id, at_ms) {
+    // Always logged: it closes the outage hold in the report even while the user is paused or away (their own
+    // hold, logged separately, covers the rest).
+    let at_ms = match at_ms {
+        Some(ms) => ms,
+        None => handle.lock().await.elapsed_ms(now) as i64,
+    };
+    if let Some(id) = id {
         let d = json!({"kind": "resume", "reason": "model_back", "at_ms": at_ms});
         if let Err(err) = store_event(app, id, "ui.event", &d).await {
             tracing::warn!(session_id = %id, error = %err, "could not log the end of the degraded hold");

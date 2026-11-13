@@ -1127,3 +1127,131 @@ async fn degraded_hold_is_logged_as_a_pause_and_the_clock_waits_for_a_real_reply
         "{events:?}"
     );
 }
+
+/// The report's view of held time (union of the logged holds) against the server's round clock.
+async fn report_round_ms(app: &live::TestApp, id: &str) -> i64 {
+    use ir_server::scoring::clock::{RoundClock, hold_spans, hold_toggle};
+    let uuid = Uuid::parse_str(id).unwrap();
+    let rows: Vec<(Value, DateTime<Utc>)> = sqlx::query_as(
+        "select data, created_at from session_events where session_id = $1 and kind = 'ui.event' order by id",
+    )
+    .bind(uuid)
+    .fetch_all(&app.state.db)
+    .await
+    .unwrap();
+    let started: DateTime<Utc> =
+        sqlx::query_scalar("select started_at from sessions where id = $1")
+            .bind(uuid)
+            .fetch_one(&app.state.db)
+            .await
+            .unwrap();
+    let toggles: Vec<(i64, bool, bool)> = rows
+        .iter()
+        .filter_map(|(d, at)| hold_toggle(d, at.timestamp_millis()))
+        .collect();
+    let now = Utc::now().timestamp_millis();
+    RoundClock::new(started.timestamp_millis(), hold_spans(&toggles, now), 0).wall_to_round(now)
+}
+
+async fn degrade(app: &live::TestApp, id: &str, token: &str) {
+    *app.llm.down.lock().unwrap() = ALL_MODELS.iter().map(|m| m.to_string()).collect();
+    for i in 0..3 {
+        let res = app.turn(token, id, &format!("Outage point {i}.")).await;
+        assert_eq!(res.status, StatusCode::OK);
+    }
+    assert!(app.state.registry.get(id).unwrap().lock().await.degraded);
+}
+
+async fn wait_status(app: &live::TestApp, id: &str, want: ir_server::orchestrator::SessionStatus) {
+    let handle = app.state.registry.get(id).unwrap();
+    live::eventually("status", WAIT, || async {
+        handle.lock().await.status == want
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn report_clock_matches_the_server_when_a_pause_overlaps_an_outage() {
+    use ir_server::orchestrator::SessionStatus;
+    let app = live::test_app(Options {
+        timing: roomy(),
+        ..Options::default()
+    })
+    .await;
+    let base = app.serve().await;
+
+    // 1. Pause during the outage, resume while still degraded, then the model comes back.
+    let (_, id, token) = new_session(&app, "fake").await;
+    let mut ws = hello(&base, &id, &token, 0).await;
+    frame_of(&mut ws, "round.state", WAIT).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    degrade(&app, &id, &token).await;
+    send(
+        &mut ws,
+        "ui.event",
+        1,
+        json!({"kind": "pause", "reason": "headset_removed"}),
+    )
+    .await;
+    wait_status(&app, &id, SessionStatus::Paused).await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    send(&mut ws, "ui.event", 2, json!({"kind": "resume"})).await;
+    wait_status(&app, &id, SessionStatus::Live).await;
+    tokio::time::sleep(Duration::from_millis(600)).await;
+    app.llm.down.lock().unwrap().clear();
+    assert_eq!(
+        app.turn(&token, &id, "Back to the design.").await.status,
+        StatusCode::OK
+    );
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let server = round_ms(&app, &id).await as i64;
+    let report = report_round_ms(&app, &id).await;
+    assert!(
+        (server - report).abs() < 250,
+        "server {server} ms, report {report} ms"
+    );
+    drop(ws);
+
+    // 2. The model comes back while the user is still paused; then the user resumes.
+    let (_, id, token) = new_session(&app, "fake").await;
+    let mut ws = hello(&base, &id, &token, 0).await;
+    frame_of(&mut ws, "round.state", WAIT).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    degrade(&app, &id, &token).await;
+    send(
+        &mut ws,
+        "ui.event",
+        1,
+        json!({"kind": "pause", "reason": "headset_removed"}),
+    )
+    .await;
+    wait_status(&app, &id, SessionStatus::Paused).await;
+    app.llm.down.lock().unwrap().clear();
+    // A turn that was already in flight gets through while the user is away (the gate refuses new turns while
+    // paused): the round leaves the outage with the user still paused.
+    let handle = app.state.registry.get(&id).unwrap();
+    let change = handle
+        .lock()
+        .await
+        .note_live_turn(false, false, std::time::Instant::now());
+    assert_eq!(change, Some(false));
+    ws::degraded_changed(&app.state, &id, &handle, false).await;
+    assert!(!handle.lock().await.degraded);
+    tokio::time::sleep(Duration::from_millis(600)).await;
+    send(&mut ws, "ui.event", 2, json!({"kind": "resume"})).await;
+    wait_status(&app, &id, SessionStatus::Live).await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let server = round_ms(&app, &id).await as i64;
+    let report = report_round_ms(&app, &id).await;
+    assert!(
+        (server - report).abs() < 250,
+        "server {server} ms, report {report} ms"
+    );
+    let events = ui_events(&app, &id).await;
+    assert!(
+        events
+            .iter()
+            .any(|e| e["kind"] == "resume" && e["reason"] == "model_back"),
+        "model_back is logged even while paused: {events:?}"
+    );
+}

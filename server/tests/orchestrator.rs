@@ -40,6 +40,8 @@ enum Script {
     Hang,
     /// Opens the stream, then sends these events after a delay (a slow model).
     Delay(Duration, Vec<StreamEvent>),
+    /// Opens the stream, then fails with this error after a delay.
+    DelayFail(Duration, ClaudeError),
 }
 
 #[derive(Default)]
@@ -49,6 +51,8 @@ struct ScriptedLlm {
     /// Non-streamed (director) replies, and the requests they answered.
     creates: Mutex<VecDeque<MessagesResponse>>,
     created: Mutex<Vec<MessagesRequest>>,
+    /// When each stream was asked for (tokio time, so paused-time tests can measure gaps).
+    stream_times: Mutex<Vec<tokio::time::Instant>>,
     /// The next this many creates fail as overloaded.
     failing_creates: Mutex<usize>,
 }
@@ -98,10 +102,19 @@ impl LlmApi for ScriptedLlm {
         req: &MessagesRequest,
     ) -> Result<BoxStream<'static, Result<StreamEvent, ClaudeError>>, ClaudeError> {
         self.requests.lock().unwrap().push(req.clone());
+        self.stream_times
+            .lock()
+            .unwrap()
+            .push(tokio::time::Instant::now());
         match self.scripts.lock().unwrap().pop_front() {
             Some(Script::Reply(events)) => Ok(stream::iter(events.into_iter().map(Ok)).boxed()),
             Some(Script::Fail(err)) => Err(err),
             Some(Script::Hang) => Ok(stream::pending().boxed()),
+            Some(Script::DelayFail(d, err)) => Ok(stream::once(async move {
+                tokio::time::sleep(d).await;
+                Err::<StreamEvent, ClaudeError>(err)
+            })
+            .boxed()),
             Some(Script::Delay(d, events)) => Ok(stream::once(tokio::time::sleep(d))
                 .filter_map(|_| async { None::<Result<StreamEvent, ClaudeError>> })
                 .chain(stream::iter(events.into_iter().map(Ok)))
@@ -185,7 +198,6 @@ fn test_app_with(
     // Most tests check the commit itself, so replies to speech are committed at once unless a test opts in.
     let mut opts = OrchestratorOptions {
         first_text_timeout: Duration::from_millis(300),
-        retry_first_text_timeout: Duration::from_millis(300),
         confirm_speech_turns: false,
         ..OrchestratorOptions::default()
     };
@@ -1155,7 +1167,6 @@ async fn one_turn_deadline_covers_the_call_and_any_retry() {
     let llm = ScriptedLlm::new(vec![Script::Hang, Script::Hang]);
     let (app, state) = test_app_with(llm.clone(), |o| {
         o.first_text_timeout = Duration::from_secs(5);
-        o.retry_first_text_timeout = Duration::from_secs(5);
         o.turn_deadline = Duration::from_millis(800);
     });
     state
@@ -3000,4 +3011,92 @@ async fn start_marker_says_a_written_opener_when_every_attempt_fails() {
             .any(|m| m.role == Role::Assistant && m.text() == opener),
         "the opener is in the history"
     );
+}
+
+#[tokio::test(start_paused = true)]
+async fn third_attempt_waits_400_ms_and_needs_time_left() {
+    let llm = ScriptedLlm::new(vec![
+        Script::Fail(ClaudeError::Overloaded),
+        Script::Fail(ClaudeError::Overloaded),
+        reply("Hi. Where would you start?"),
+    ]);
+    let (app, state) = test_app(llm.clone());
+    state.registry.insert(prod_state("s1"));
+    let res = post_chat(
+        &app,
+        SECRET,
+        chat_body("s1", "p1", json!([{"role": "user", "content": "Hi."}])),
+    )
+    .await;
+    assert_eq!(res.text(), "Hi. Where would you start?");
+    let times = llm.stream_times.lock().unwrap().clone();
+    assert!(
+        times[2] - times[1] >= Duration::from_millis(400),
+        "{:?}",
+        times[2] - times[1]
+    );
+    // The third attempt is the live model again, with its own fast settings.
+    let third = llm.request(2);
+    assert_eq!(third.model, "claude-sonnet-5-5");
+    assert_eq!(
+        third.thinking,
+        Some(ir_server::claude::Thinking::BetweenTools)
+    );
+    assert_eq!(
+        third.fallbacks,
+        ir_server::claude::fallbacks_for("claude-sonnet-5-5")
+    );
+
+    // The fallback refuses only after 6.8 s of the 8.5 s turn: under 1.9 s left, so no third attempt.
+    let llm = ScriptedLlm::new(vec![
+        Script::Fail(ClaudeError::Overloaded),
+        Script::DelayFail(Duration::from_millis(6800), ClaudeError::Overloaded),
+        reply("Too late."),
+    ]);
+    let (app, state) = test_app(llm.clone());
+    state.registry.insert(prod_state("s2"));
+    let res = post_chat(
+        &app,
+        SECRET,
+        chat_body("s2", "p1", json!([{"role": "user", "content": "Hi."}])),
+    )
+    .await;
+    assert_eq!(res.text(), "Sorry, give me a second.");
+    assert_eq!(llm.calls(), 2);
+}
+
+#[tokio::test]
+async fn a_bad_request_is_not_retried() {
+    let llm = ScriptedLlm::new(vec![
+        Script::Fail(ClaudeError::BadRequest(
+            "400 invalid_request_error: bad".into(),
+        )),
+        reply("Never asked."),
+    ]);
+    let (app, state) = test_app(llm.clone());
+    state.registry.insert(prod_state("s1"));
+    let res = post_chat(
+        &app,
+        SECRET,
+        chat_body("s1", "p1", json!([{"role": "user", "content": "Hi."}])),
+    )
+    .await;
+    assert_eq!(res.text(), "Sorry, give me a second.");
+    assert_eq!(llm.calls(), 1);
+}
+
+#[test]
+fn a_retarget_to_thinking_off_caps_the_effort_at_high() {
+    let req = MessagesRequest {
+        model: "claude-sonnet-5-5".into(),
+        thinking: Some(ir_server::claude::Thinking::BetweenTools),
+        output_config: Some(ir_server::claude::OutputConfig {
+            effort: Some("max".into()),
+            format: None,
+        }),
+        ..MessagesRequest::default()
+    };
+    let out = ir_server::orchestrator::retarget(&req, "claude-haiku-5-5");
+    assert_eq!(out.thinking, Some(ir_server::claude::Thinking::Disabled));
+    assert_eq!(out.output_config.unwrap().effort.as_deref(), Some("high"));
 }

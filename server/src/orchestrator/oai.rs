@@ -295,6 +295,7 @@ fn retarget_for_retry(req: &mut MessagesRequest, model: &str) {
             None
         };
     req.fallbacks = fallbacks_for(model);
+    crate::orchestrator::cap_effort_for_thinking_off(req);
 }
 
 /// A retry is only worth starting with at least this much of the turn deadline left.
@@ -577,6 +578,8 @@ fn turn_stream(
                 (tokio::time::Instant::now() + opts.first_text_timeout).min(turn_deadline)
             };
             let mut refused = false;
+            // The request itself was refused as invalid: no other attempt would fare better.
+            let mut bad_request = false;
             let mut text_seen = !guard.spoken.is_empty();
             let mut stop_reason: Option<String> = None;
             let mut error: Option<String> = None;
@@ -592,6 +595,7 @@ fn turn_stream(
                 Ok(Err(e)) => {
                     unavailable = e.is_unavailable();
                     refused = unavailable;
+                    bad_request = matches!(e, crate::claude::ClaudeError::BadRequest(_));
                     error = Some(e.to_string());
                 }
                 Ok(Ok(mut events)) => loop {
@@ -615,6 +619,7 @@ fn turn_stream(
                         Ok(Some(Err(e))) => {
                             unavailable = !text_seen && e.is_unavailable();
                             refused = unavailable;
+                            bad_request = matches!(e, crate::claude::ClaudeError::BadRequest(_));
                             error = Some(e.to_string());
                             break;
                         }
@@ -683,6 +688,7 @@ fn turn_stream(
             let left = turn_deadline.saturating_duration_since(tokio::time::Instant::now());
             let third = attempts == 2 && all_refused;
             if attempts >= MAX_ATTEMPTS
+                || bad_request
                 || (attempts == 2 && !third)
                 || left < MIN_RETRY_WINDOW + if third { THIRD_ATTEMPT_PAUSE } else { Duration::ZERO }
             {

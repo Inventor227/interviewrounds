@@ -181,7 +181,8 @@ Sequencing and acks:
   while it is true. Held time counts toward the 10-minute pause budget.
   (Each live turn retries within its time budget, never after any of the reply was spoken: first on a different
   model, the fallback `LIVE_FALLBACK_MODEL`, when the model was overloaded, rate limited, failed with a 5xx or gave
-  no text in time; then, while both only refuse, once more on the first model after a short pause. A start marker
+  no text in time; then, while both only refuse, once more on the first model after a short pause. A request the API
+  rejects as invalid is not retried. A start marker
   whose attempts all fail gets a written opener (who is speaking, which round, the question is on the card) instead
   of the hold line, recorded as the opener.) `time_check_due: true` is sent once per phase boundary, on the snapshot when the
   current phase runs out of time, and again on the snapshot after a `hello` while that time check is still owed (no

@@ -418,14 +418,11 @@ pub async fn load_scoring_input(
     } else {
         Vec::new()
     };
-    let toggles: Vec<(i64, bool)> = events
+    // Each event: (wall ms, pause?, outage kind?). The outage hold and user pauses pair within their own kind.
+    let toggles: Vec<(i64, bool, bool)> = events
         .iter()
         .filter(|(kind, ..)| kind == "ui.event")
-        .filter_map(|(_, _, data, at)| match data["kind"].as_str() {
-            Some("pause") => Some((at.timestamp_millis(), true)),
-            Some("resume") => Some((at.timestamp_millis(), false)),
-            _ => None,
-        })
+        .filter_map(|(_, _, data, at)| clock::hold_toggle(data, at.timestamp_millis()))
         .collect();
     let end_wall = input.ended_at.unwrap_or_else(Utc::now).timestamp_millis();
 
@@ -443,7 +440,7 @@ pub async fn load_scoring_input(
         .collect();
     input.clock = RoundClock::new(
         start_epoch_ms,
-        clock::pause_spans(&toggles, end_wall),
+        clock::hold_spans(&toggles, end_wall),
         RoundClock::offset_from(&pairs),
     );
     input.marks = marks
