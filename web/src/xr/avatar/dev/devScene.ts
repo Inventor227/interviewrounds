@@ -69,6 +69,7 @@ export class AvatarDevScene {
   private readonly audio: HTMLAudioElement;
   private ctx: AudioContext | null = null;
   private frozen = false;
+  private disposed = false;
   private view: DevView;
   private readonly user = USER_EYE.clone();
   private t = 0;
@@ -122,6 +123,10 @@ export class AvatarDevScene {
       const entry = await manifestEntry(this.opts.id);
       this.audio.src = this.opts.voiceUrl(entry.sex);
       const a = await Avatar.load(entry, { renderer: this.renderer, mood: this.opts.mood, seed: 7 });
+      if (this.disposed) {
+        a.dispose(); // the page went away while loading
+        return;
+      }
       a.place({ position: { x: 0, y: 0, z: 0 }, yaw: 0, deskY: 0.74 });
       this.scene.add(a.root);
       a.setMode('listening');
@@ -181,6 +186,7 @@ export class AvatarDevScene {
   }
 
   dispose(): void {
+    this.disposed = true;
     removeEventListener('resize', this.onResize);
     this.renderer.setAnimationLoop(null);
     this.audio.pause();
