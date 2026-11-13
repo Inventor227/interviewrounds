@@ -42,7 +42,8 @@ const dist = (a: P2, b: P2) => Math.hypot(a.x - b.x, a.y - b.y);
 export interface HandResults {
   hold: { filtered: Jitter | null; raw: Jitter | null; tries: number; skipped: boolean };
   line: { filtered: Straightness | null; raw: Straightness | null; tries: number; skipped: boolean };
-  targets: { stats: HitStats | null; taps: { target: P2; down: P2; up: P2 }[]; radius_cm: number; skipped: boolean };
+  /** Taps with how long each pinch was held (a ghost card is dismissed by a 600 ms hold). */
+  targets: { stats: HitStats | null; taps: { target: P2; down: P2; up: P2; ms: number }[]; radius_cm: number; skipped: boolean };
   /** Pinches the board saw start on the sheet, and the ones lost to tracking. */
   gestures: number;
   lost: number;
@@ -133,7 +134,7 @@ export class HandFlow {
     this.next('line');
   }
 
-  up(p: P2, _t: number): void {
+  up(p: P2, t: number): void {
     const g = this.g;
     this.g = null;
     if (!g || g.consumed) return;
@@ -160,7 +161,7 @@ export class HandFlow {
     }
     if (g.kind === 'tap') {
       const target = TARGETS[this.target]!;
-      this.res.targets.taps.push({ target, down: g.down, up: p });
+      this.res.targets.taps.push({ target, down: g.down, up: p, ms: Math.round(t - g.start) });
       this.target++;
       if (this.target >= TARGETS.length) {
         this.res.targets.stats = hitStats(this.taps(), TARGET_R);

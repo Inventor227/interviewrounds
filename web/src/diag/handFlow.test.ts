@@ -60,6 +60,7 @@ describe('HandFlow', () => {
     expect(r.line.filtered!.length_cm).toBe(10);
     expect(r.line.raw!.rms_cm).toBeCloseTo(0.2, 1);
     expect(r.targets.stats).toMatchObject({ taps: 5, hits: 5, rate: 1, mean_dx_cm: 0.5, mean_dy_cm: 0 });
+    expect(r.targets.taps.map((t) => t.ms)).toEqual([150, 150, 150, 150, 150]);
     expect(r.gestures).toBe(1 + 1 + 5 + 1);
   });
 

@@ -364,6 +364,7 @@ export function Diag() {
                 h?.targets.stats ? `${h.targets.stats.hits} of ${h.targets.stats.taps} hit, off by ${h.targets.stats.mean_dist_cm} cm (x ${h.targets.stats.mean_dx_cm}, y ${h.targets.stats.mean_dy_cm})` : 'n/a',
                 h?.targets.stats ? tone(h.targets.stats.rate >= 0.8, h.targets.stats.rate >= 0.6) : undefined,
               ],
+              ['Tap pinch length', h?.targets.taps.length ? `${Math.max(...h.targets.taps.map((t) => t.ms))} ms longest` : 'n/a'],
               ['Pinches (fingers) and selects', `${x.finger_pinches} pinches, ${x.selects.starts} selects, ${x.selects.cancels} cancelled`],
               ['Selects per pinch', fmt(x.select_per_pinch), x.select_per_pinch === null ? undefined : tone(x.select_per_pinch >= 0.9, x.select_per_pinch >= 0.75)],
               ['Hands tracked', x.tracked_pct ? `left ${x.tracked_pct.left}%, right ${x.tracked_pct.right}%` : 'n/a'],
