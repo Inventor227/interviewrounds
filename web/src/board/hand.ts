@@ -9,6 +9,15 @@ import { SHEET, type Rect } from './model';
 import type { BoardXRPort, SelectPhase, Vec3, XRHandSample } from './port';
 
 export const TRACKING_GRACE_MS = 300;
+/**
+ * The pinch point slides as the fingers finish closing after select fires (about 2 cm in
+ * the emulator). For this long after a pinch starts, movement under PINCH_DRIFT_MAX_CM is
+ * that drift: the point is held, then the drift is taken off later moves, so a tap stays a tap.
+ */
+export const PINCH_SETTLE_MS = 100;
+export const PINCH_DRIFT_MAX_CM = 2.5;
+/** The fingers opening before select ends move the point too: release at where it was this long before. */
+export const RELEASE_TRIM_MS = 80;
 /** A pinch may start this far outside the zone (cm). */
 export const ZONE_MARGIN_CM = 3;
 /** A pinch starts only this close above the sheet (cm), or slightly below it. */
@@ -42,9 +51,14 @@ interface HandTrack {
   visible: boolean;
   active: boolean;
   lostAt: number | null;
+  /** The gesture: when and where it started, the closing drift taken off, the points sent. */
+  downAt: number;
+  downPoint: Projected | null;
+  drift: { x: number; y: number } | null;
+  sent: { t: number; p: Projected }[];
 }
 
-const track = (): HandTrack => ({ fx: new OneEuroFilter(), fy: new OneEuroFilter(), fz: new OneEuroFilter(), last: null, raw: null, visible: false, active: false, lostAt: null });
+const track = (): HandTrack => ({ fx: new OneEuroFilter(), fy: new OneEuroFilter(), fz: new OneEuroFilter(), last: null, raw: null, visible: false, active: false, lostAt: null, downAt: 0, downPoint: null, drift: null, sent: [] });
 
 export class HandAdapter implements PointerAdapter {
   private readonly subs = { down: new Set<Cb>(), move: new Set<Cb>(), up: new Set<Cb>(), cancel: new Set<Cb>() };
@@ -126,7 +140,8 @@ export class HandAdapter implements PointerAdapter {
         t.last = this.project(f);
         t.visible = true;
         t.lostAt = null;
-        if (t.active || this.inZone(t.last)) this.emit(this.subs.move, hand, t.last, now);
+        if (t.active) this.emit(this.subs.move, hand, this.gesturePoint(t, t.last, now), now);
+        else if (this.inZone(t.last)) this.emit(this.subs.move, hand, t.last, now);
         continue;
       }
       // No joints this frame: hold the gesture at the last good point for the grace time.
@@ -140,7 +155,8 @@ export class HandAdapter implements PointerAdapter {
       if (now - t.lostAt > this.graceMs) {
         t.active = false;
         t.lostAt = null;
-        if (t.last) this.emit(this.subs.cancel, hand, t.last, now);
+        const at = t.sent[t.sent.length - 1]?.p ?? t.downPoint ?? t.last;
+        if (at) this.emit(this.subs.cancel, hand, at, now);
       }
     }
   }
@@ -162,12 +178,39 @@ export class HandAdapter implements PointerAdapter {
       t.fz.filter(t.raw.z, now);
       t.last = p;
       t.active = true;
+      t.downAt = now;
+      t.downPoint = p;
+      t.drift = null;
+      t.sent = [];
       this.emit(this.subs.down, hand, p, now);
       return;
     }
     if (!t.active) return;
     t.active = false;
     t.lostAt = null;
-    if (t.last) this.emit(this.subs.up, hand, t.last, now);
+    // Release where the hand was before the fingers began to open.
+    let at = t.downPoint ?? t.last;
+    for (const s of t.sent) if (s.t <= now - RELEASE_TRIM_MS) at = s.p;
+    if (at) this.emit(this.subs.up, hand, at, now);
+  }
+
+  /** A gesture point with the pinch's closing drift held, then taken off. */
+  private gesturePoint(t: HandTrack, p: Projected, now: number): Projected {
+    const d = t.downPoint ?? p;
+    let out: Projected;
+    if (now - t.downAt < PINCH_SETTLE_MS) {
+      out = { ...p, x_cm: d.x_cm, y_cm: d.y_cm };
+    } else {
+      if (!t.drift) {
+        const dx = p.x_cm - d.x_cm;
+        const dy = p.y_cm - d.y_cm;
+        // A bigger move this early is the hand setting off, not drift.
+        t.drift = Math.hypot(dx, dy) < PINCH_DRIFT_MAX_CM ? { x: dx, y: dy } : { x: 0, y: 0 };
+      }
+      out = { ...p, x_cm: p.x_cm - t.drift.x, y_cm: p.y_cm - t.drift.y };
+    }
+    t.sent.push({ t: now, p: out });
+    while (t.sent.length && t.sent[0]!.t < now - 400) t.sent.shift();
+    return out;
   }
 }

@@ -70,6 +70,12 @@ describe('ghosts', () => {
     expect(store.board.items[0]).toMatchObject({ label: 'Orders' });
   });
 
+  it('a pinch that wobbles past the drag threshold but lets go near where it started is still a tap', () => {
+    const { adapter, sent } = setup();
+    adapter.stroke([[44, 22], [46, 22], [44.4, 22.2]]);
+    expect(sent.map((o) => o.op_id)).toEqual(['g1']);
+  });
+
   it('a pinch-hold of 0.6 s rejects the ghost; letting go after does nothing more', () => {
     const { store, adapter, sent, rejected, tick } = setup();
     adapter.down(44, 22);

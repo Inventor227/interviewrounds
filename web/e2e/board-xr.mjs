@@ -254,6 +254,8 @@ b = await board();
 const sent = await page(() => globalThis.__boardxr.sent.map((o) => [o.op_id, o.src, o.op]));
 if (!b.items.some((i) => i.id === 'n_cache') || b.ghosts.length) fail('pinching the ghost did not accept it', { b, sent });
 if (!sent.some(([id, src]) => id === 'g1' && src === 'scribe')) fail('the accepted ghost was not sent as a scribe op', sent);
+// Taps select; they never move a card.
+if (sent.some(([, , op]) => op === 'item.move')) fail('a tap moved a card', sent);
 await shot('xr-06-accepted');
 
 // 6. The wall board mirrors the sheet.

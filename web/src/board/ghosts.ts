@@ -217,8 +217,12 @@ export class GhostLayer implements PointerAdapter {
     const g = this.ghost(pr.opId);
     if (!g) return;
     if (pr.dragged) {
-      if (inRect(this.kit.bin, p.x_cm, p.y_cm) || pr.overBin) this.opts.reject(g.op_id);
-      return;
+      if (inRect(this.kit.bin, p.x_cm, p.y_cm) || pr.overBin) {
+        this.opts.reject(g.op_id);
+        return;
+      }
+      // Let go near where it started: a tap that wobbled, not a drag.
+      if (Math.hypot(p.x_cm - pr.start[0], p.y_cm - pr.start[1]) >= DRAG_THRESHOLD_CM) return;
     }
     this.opts.accept(g);
   }

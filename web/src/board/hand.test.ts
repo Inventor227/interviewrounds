@@ -136,6 +136,8 @@ describe('HandAdapter', () => {
     const { port, emitted, at } = dragSetup();
     at(14, 12.5, 3);
     port.select('right', 'start');
+    // The fingers close before the hand sets off.
+    at(14, 12.5, 8);
     for (const [x, y] of along([[14, 12.5], [20, 14]], 0.4)) at(x, y);
     // Lost for about 200 ms (no joints), then back with the pinch still held.
     for (let i = 0; i < 14; i++) {
@@ -170,6 +172,7 @@ describe('HandAdapter', () => {
     const { port, emitted, at } = dragSetup();
     at(14, 12.5, 3);
     port.select('right', 'start');
+    at(14, 12.5, 8);
     for (const [x, y] of along([[14, 12.5], [24, 12.5]], 0.4)) at(x, y);
     at(24, 12.5, 40);
     port.setHand('right', null);
@@ -195,6 +198,24 @@ describe('HandAdapter', () => {
     port.select('right', 'start');
     const down = ev.find((e) => e[0] === 'down')![1];
     expect(Math.abs(down.x_cm - 20)).toBeLessThan(0.3);
+  });
+
+  it('a tap stays a tap when the pinch point drifts as the fingers close and open', () => {
+    const { port, store, emitted } = dragSetup();
+    const at = (x: number, y: number) => {
+      port.handAt('right', x, y);
+      port.frame();
+    };
+    for (let i = 0; i < 15; i++) at(14, 12.5);
+    port.select('right', 'start');
+    // Closing: the pinch point slides 2 cm over 100 ms, then rests.
+    for (let i = 1; i <= 7; i++) at(14 + (2 * i) / 7, 12.5);
+    for (let i = 0; i < 10; i++) at(16, 12.5);
+    // Opening: it slides back 2 cm in the 50 ms before the release.
+    for (let i = 1; i <= 4; i++) at(16 - (2 * i) / 4, 12.5);
+    port.select('right', 'end');
+    expect(emitted).toEqual([]);
+    expect(store.board.focus).toBe('n1');
   });
 
   it('keeps both hands apart', () => {
