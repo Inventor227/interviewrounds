@@ -152,8 +152,9 @@ export function pulsePad(pad: HapticPad | null | undefined, strength: number, ms
 }
 
 /**
- * Haptics for the controllers in the room. Nothing pulses while the user is speaking: a controller resting on the
- * desk can buzz loud enough for the microphone, the same reason the room's sounds wait.
+ * Haptics for the controllers in the room. While the user is speaking, a controller that rests on the desk does
+ * not pulse: the desk can carry the buzz to the microphone, the same reason the room's sounds wait. A controller
+ * held in the air (pointing by ray, pressing a panel) pulses as usual: 12 to 28 ms in the hand is not heard.
  */
 export class Haptics {
   private readonly triggerAt: Record<Side, number> = { left: -Infinity, right: -Infinity };
@@ -165,11 +166,13 @@ export class Haptics {
     private readonly pad: (hand: Side) => HapticPad | null,
     private readonly isSpeaking: () => boolean = () => false,
     private readonly now: () => number = () => performance.now(),
+    /** True when that side's controller rests on (or within a few centimetres of) the desk. Default: assume it does. */
+    private readonly onDesk: (hand: Side) => boolean = () => true,
   ) {}
 
-  /** A pulse on that side's controller. False when there is no controller there, or the user is speaking. */
+  /** A pulse on that side's controller. False when there is no controller there, or it rests on the desk while the user speaks. */
   pulse(hand: Side, name: HapticName): boolean {
-    if (this.isSpeaking()) return false;
+    if (this.isSpeaking() && this.onDesk(hand)) return false;
     const h = HAPTICS[name];
     if (!pulsePad(this.pad(hand), h.strength, h.ms)) return false;
     this.log.push({ hand, name, atMs: Math.round(this.now()) });

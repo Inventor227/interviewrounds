@@ -281,7 +281,17 @@ export async function createXRApp(root: HTMLElement, opts: XRAppOptions): Promis
   const pads: Record<'left' | 'right', HapticPad | null> = { left: null, right: null };
   const input = new InputTracker();
   const buttons = new ButtonEdges();
-  const haptics = new Haptics((hand) => pads[hand], () => opts.isUserSpeaking?.() ?? false);
+  // A controller within 6 cm of the desk top counts as resting on it (its pulses wait while the user speaks).
+  const haptics = new Haptics(
+    (hand) => pads[hand],
+    () => opts.isUserSpeaking?.() ?? false,
+    undefined,
+    (hand) => {
+      const desk = desk$.value;
+      const c = hand === 'left' ? ctrlLeft : ctrlRight;
+      return !desk || c.tip.y < desk.deskY + 0.06;
+    },
+  );
   const controllerViews = { left: new ControllerView('left'), right: new ControllerView('right') };
   if (mode === 'ar') {
     // The controller model comes from this origin (the page loads nothing from elsewhere).
@@ -916,7 +926,11 @@ export async function createXRApp(root: HTMLElement, opts: XRAppOptions): Promis
     controllers: () => controllerStates,
     activeInput: () => input.activeInput(),
     onInputChange: (cb) => input.onInputChange(cb),
-    onButton: (cb) => buttons.on(cb),
+    // Buttons act on the round's board only while a round is on (A is "confirm" elsewhere: on the summary card it
+    // must not take back the last box).
+    onButton: (cb) => buttons.on((hand, button, t) => {
+      if (ui.chromeVisible && !ui.summary.group.visible) cb(hand, button, t);
+    }),
     haptic: (hand, name) => void haptics.pulse(hand, name),
     hapticLog: () => haptics.log,
     sheetAnchor: room.sheetAnchor,

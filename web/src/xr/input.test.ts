@@ -140,14 +140,23 @@ describe('haptics', () => {
     ).toBe(false);
   });
 
-  it('nothing_pulses_while_the_user_is_speaking', () => {
+  it('a_controller_resting_on_the_desk_does_not_pulse_while_the_user_is_speaking', () => {
     const r = quest();
     let speaking = true;
-    const h = new Haptics(() => r.pad, () => speaking);
+    let resting = true;
+    const h = new Haptics(() => r.pad, () => speaking, undefined, () => resting);
     expect(h.pulse('right', 'bin')).toBe(false);
     expect(r.pulse).not.toHaveBeenCalled();
+    // Held in the air (drawing by ray, pressing a panel) it pulses while the user talks.
+    resting = false;
+    expect(h.pulse('right', 'snap')).toBe(true);
+    // And on the desk again once they stop.
+    resting = true;
     speaking = false;
     expect(h.pulse('right', 'bin')).toBe(true);
+    // Without knowing where the controller is, it stays quiet during speech.
+    const q = quest();
+    expect(new Haptics(() => q.pad, () => true).pulse('left', 'snap')).toBe(false);
   });
 
   it('a_panel_press_pulses_the_controller_that_pulled_its_trigger', () => {
