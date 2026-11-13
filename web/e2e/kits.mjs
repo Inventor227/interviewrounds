@@ -215,14 +215,26 @@ await step(
 r = await step(
   'coding',
   `const P = await frame.evaluate(() => window.__board.panel);
-  const row = (i) => P.y + 2.6 + i * 1.5 + 0.75;
-  // seen[x] = i belongs after the if block, one level in: drag it down two rows and nudge it right.
-  await stroke([[P.x + 10, row(3)], [P.x + 11, row(4)], [P.x + 10 + 2.6, row(5) + 0.5]], 8);
+  const LH = 1.8;
+  const row = (i) => P.y + 2.6 + i * LH + LH / 2;
+  // seen[x] = i belongs after the if block, one level in: drag it down two rows, then nudge it right
+  // (a line gesture keeps the axis it starts on).
+  await stroke([[P.x + 10, row(3)], [P.x + 10, row(4)], [P.x + 10, row(5)]], 8);
+  await stroke([[P.x + 10, row(5)], [P.x + 11.5, row(5)], [P.x + 10 + 2.7, row(5)]], 8);
   // Complexity chips on the slots.
   await pull('O(n)', [12, 29]);
   await pull('O(n)', [34, 29]);
-  // Walk the trace marker down four lines.
-  await stroke([[P.x + 1.3, row(0)], [P.x + 1.3, row(1)], [P.x + 1.3, row(2)], [P.x + 1.3, row(3)], [P.x + 1.3, row(4)]], 4);
+  // Walk the trace marker down four lines, stopping on each.
+  const pts = await client([0, 1, 2, 3, 4].map((i) => [P.x + 1.4, row(i)]));
+  await page.mouse.move(pts[0][0] + ox, pts[0][1] + oy);
+  await page.mouse.down();
+  for (let i = 1; i < pts.length; i++) {
+    for (let s = 1; s <= 4; s++) await page.mouse.move(pts[i - 1][0] + ((pts[i][0] - pts[i - 1][0]) * s) / 4 + ox, pts[i - 1][1] + ((pts[i][1] - pts[i - 1][1]) * s) / 4 + oy);
+    await page.waitForTimeout(260);
+    await page.mouse.move(pts[i][0] + ox, pts[i][1] + oy + 1);
+  }
+  await page.mouse.up();
+  await page.waitForTimeout(120);
   const b = await board();
   return { lines: b.code.lines.map((l) => [l.id, l.indent]), complexity: b.code.complexity, trace: b.code.trace.map((t) => t.line) };`,
 );
