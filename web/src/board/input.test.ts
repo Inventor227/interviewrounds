@@ -164,6 +164,44 @@ describe('BoardInput', () => {
     expect(emitted[1]).toMatchObject({ op: 'edge.set_dir', args: { dir: '<->' } });
   });
 
+  it("a card's core wins over a close neighbour's tab and chip zones", () => {
+    const store = new BoardStore(emptyBoard());
+    const seed = (op: BoardOp) => expect(store.apply(op).accepted).toBe(true);
+    seed({ op_id: 's1', src: 'hand', op: 'item.create', args: { id: 'n1', kind: 'component', type: 'client', label: null, x: 10, y: 10, w: 8, h: 5 } });
+    seed({ op_id: 's2', src: 'hand', op: 'item.create', args: { id: 'n2', kind: 'component', type: 'service', label: null, x: 19, y: 10, w: 8, h: 5 } });
+    seed({ op_id: 's3', src: 'hand', op: 'edge.create', args: { id: 'e1', from: 'n1', to: 'n2' } });
+    const adapter = new FakeAdapter();
+    const emitted: BoardOp[] = [];
+    new BoardInput(store, adapter, HLD_KIT, (op) => {
+      emitted.push(op);
+      store.apply(op);
+    });
+    // Chip at (18.5, 12.5) in the 1 cm gap; 1.5 cm away inside n2's core: a tap on n2.
+    adapter.down(20, 12.5);
+    adapter.up(20, 12.5);
+    expect(emitted).toEqual([]);
+    expect(store.board.focus).toBe('n2');
+    // In the gap the chip still answers.
+    adapter.down(18.5, 12.5);
+    adapter.up(18.5, 12.5);
+    expect(emitted[0]).toMatchObject({ op: 'edge.set_dir', args: { id: 'e1', dir: '<->' } });
+    // n1's tab at (18.5, 9.5); 1.98 cm away inside n2's core: a drag of n2, not a connector from n1.
+    adapter.stroke([[19.9, 10.9], [22, 12], [24.9, 12.9]]);
+    expect(emitted[1]).toMatchObject({ op: 'item.move', args: { id: 'n2', x: 24, y: 12 } });
+  });
+
+  it('a labelled edge is tapped on its pill, not an invisible chip', () => {
+    const { store, adapter, emitted } = setup();
+    store.apply({ op_id: 'e', src: 'hand', op: 'edge.create', args: { id: 'e1', from: 'n1', to: 'n2', label: 'HTTPS' } });
+    // Midpoint (24, 12.5): 1.5 cm below is chip range for an unlabelled edge but off the pill.
+    adapter.down(24, 14);
+    adapter.up(24, 14);
+    expect(emitted).toEqual([]);
+    adapter.down(26, 12.6);
+    adapter.up(26, 12.6);
+    expect(emitted[0]).toMatchObject({ op: 'edge.set_dir', args: { id: 'e1' } });
+  });
+
   it('a press that jumps past the threshold between samples is a drag, not a tap', () => {
     const { adapter, emitted } = setup();
     adapter.down(14, 12.5);

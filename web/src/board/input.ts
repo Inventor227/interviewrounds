@@ -55,6 +55,12 @@ export const MAGNET_CM = 4;
 export const TAB_HIT_CM = 2.0;
 /** Hit radius around an edge's midpoint chip (hand sized). */
 export const CHIP_HIT_CM = 2.2;
+/** Drawn radius of the tab and the chip (render.ts, hand size): inside another card's core only these count. */
+export const TAB_DRAWN_CM = 1.2;
+export const CHIP_DRAWN_CM = 1.1;
+/** Half size of an edge label pill, the target of a labelled edge. */
+const LABEL_PILL_HALF_W_CM = 3;
+const LABEL_PILL_HALF_H_CM = 0.8;
 /** Hit distance from an ink stroke, for picking it up. */
 export const INK_HIT_CM = 0.5;
 /**
@@ -161,32 +167,42 @@ export class BoardInput {
     const slot = traySlotAt(this.kit, x, y);
     if (slot) return { kind: 'tray', type: slot.type, x, y, onSheet: false, overBin: false };
 
-    for (let i = b.items.length - 1; i >= 0; i--) {
-      const it = b.items[i]!;
-      if (!hasTab(it)) continue;
-      const [tx, ty] = tabCenter(it);
-      if (Math.hypot(tx - x, ty - y) <= TAB_HIT_CM) return { kind: 'connect', from: it.id, x, y, target: null };
-    }
-
-    for (let i = b.edges.length - 1; i >= 0; i--) {
-      const e = b.edges[i]!;
-      const m = edgeMid(b, e);
-      if (m && Math.hypot(m[0] - x, m[1] - y) <= CHIP_HIT_CM) return { kind: 'press', id: e.id, start: [x, y], target: 'edge' };
-    }
-
+    // The card under the point: its core drags it, its rim draws (so lines from a card's edge connect).
+    let core: BoardItem | null = null;
     for (let i = b.items.length - 1; i >= 0; i--) {
       const it = b.items[i]!;
       if (!isCard(it)) continue;
       const r = itemRect(it);
       if (!inRect(r, x, y)) continue;
-      const rim = Math.min(RIM_CM, 0.2 * Math.min(r.w, r.h));
-      const inCore = inRect({ x: r.x + rim, y: r.y + rim, w: r.w - 2 * rim, h: r.h - 2 * rim }, x, y);
-      if (inCore) return { kind: 'press', id: it.id, start: [x, y], target: 'item' };
-      // On the rim: a stroke, so it can become a connection.
+      const band = Math.min(RIM_CM, 0.2 * Math.min(r.w, r.h));
+      if (inRect({ x: r.x + band, y: r.y + band, w: r.w - 2 * band, h: r.h - 2 * band }, x, y)) core = it;
       break;
     }
 
-    return null;
+    // Tabs and chips have hand-sized hit areas, but inside another card's core only their
+    // drawn circle counts, so a neighbour's zone never takes that card's presses.
+    for (let i = b.items.length - 1; i >= 0; i--) {
+      const it = b.items[i]!;
+      if (!hasTab(it)) continue;
+      const [tx, ty] = tabCenter(it);
+      const d = Math.hypot(tx - x, ty - y);
+      if (d > TAB_HIT_CM) continue;
+      if (core && core.id !== it.id && d > TAB_DRAWN_CM) continue;
+      return { kind: 'connect', from: it.id, x, y, target: null };
+    }
+
+    for (let i = b.edges.length - 1; i >= 0; i--) {
+      const e = b.edges[i]!;
+      const m = edgeMid(b, e);
+      if (!m) continue;
+      // A labelled edge shows a pill instead of a chip: the pill is the target.
+      const hitChip = e.label
+        ? Math.abs(m[0] - x) <= LABEL_PILL_HALF_W_CM && Math.abs(m[1] - y) <= LABEL_PILL_HALF_H_CM
+        : Math.hypot(m[0] - x, m[1] - y) <= (core ? CHIP_DRAWN_CM : CHIP_HIT_CM);
+      if (hitChip) return { kind: 'press', id: e.id, start: [x, y], target: 'edge' };
+    }
+
+    return core ? { kind: 'press', id: core.id, start: [x, y], target: 'item' } : null;
   }
 
   /** The topmost ink stroke under a point, a candidate for a pinch-hold pick-up. */
