@@ -7,11 +7,12 @@ pub mod me;
 pub mod meetings;
 pub mod report;
 pub mod sessions;
+pub mod shares;
 
 use axum::Router;
 use axum::extract::DefaultBodyLimit;
 use axum::middleware;
-use axum::routing::{get, post, put};
+use axum::routing::{delete, get, post, put};
 
 use crate::app::AppState;
 use crate::identity;
@@ -33,6 +34,8 @@ pub fn routes(state: &AppState) -> Router<AppState> {
         .route("/api/me/skills", get(me::skills_route))
         .route("/api/me/settings", put(me::put_settings))
         .route("/api/me/onboarding-done", post(me::onboarding_done))
+        .route("/api/shares", post(shares::create))
+        .route("/api/shares/{slug}", delete(shares::delete))
         .merge(report::routes())
         .route(
             "/api/meetings/prepare",
@@ -45,6 +48,8 @@ pub fn routes(state: &AppState) -> Router<AppState> {
         ));
     Router::new()
         .route("/api/content/catalog", get(content::catalog))
+        // Public scorecard links: no identity needed.
+        .route("/s/{slug}", get(shares::page))
         .merge(with_identity)
         .merge(diag::routes(state))
 }

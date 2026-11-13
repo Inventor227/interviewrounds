@@ -39,11 +39,12 @@ JSON; cookie `ir_id` identifies the device/user; all under same origin. A new gu
 - `POST /api/sessions/{id}/end` `{reason:"completed"|"user_ended"|"time_limit"|"disconnected"|"headset_removed"}` → 202. Ends
   the round at once with this reason (also during the goodbye after `ui.event {kind: "end"}`).
 - `GET /api/sessions/{id}` → `{status:"created"|"live"|"paused"|"scoring"|"scored"|"failed"|"abandoned", report_ready}`
-- `GET /api/sessions/{id}/report` → `Report` (404 until ready, and for a session that is not the caller's). A retry
-  session has no report of its own: it answers its parent's report (with the retry's entry in
-  `weakest_moment.retries`) once the retry is scored, and 404 before. `GET /api/sessions/{id}` gives a retry
-  `report_ready: true` once it is `scored`. The web app shows a retry's report at its parent's address
-  (`/report/{parent}`).
+- `GET /api/sessions/{id}/report` → `Report` (404 until ready, and for a session that is not the caller's). Its
+  `share` block is the session's live public link: `{public_slug, include_quotes}` (`include_quotes` is the link's
+  `include_transcript`), `public_slug: null` when there is none. A retry session has no report of its own: it answers
+  its parent's report (with the retry's entry in `weakest_moment.retries`) once the retry is scored, and 404 before.
+  `GET /api/sessions/{id}` gives a retry `report_ready: true` once it is `scored`. The web app shows a retry's report
+  at its parent's address (`/report/{parent}`).
 - `POST /api/sessions/{id}/report` → 202 `{status:"scoring"}`: score a `failed` session again ("Try again"). Scoring
   makes at most 2 attempts per session; this gives 2 fresh ones. At most 2 per session per day (429
   `rescore_limit`); 409 when the session is scored or has not ended; 202 no-op when already `scoring`.
@@ -72,11 +73,24 @@ JSON; cookie `ir_id` identifies the device/user; all under same origin. A new gu
 - `GET /api/me/skills?role=` → `{competencies:[{id, name, points:[{session_id, at, score}]}]}`
 - `PUT /api/me/settings` `Settings`; `POST /api/me/onboarding-done`; `DELETE /api/me`
 - `POST /api/meetings/prepare` `MeetingSetup` → `{meeting_plan_id, plan:MeetingPlan}`
-- `POST /api/shares` `{session_id, include_transcript}` → `{slug, url}`; `DELETE /api/shares/{slug}`
-  `POST /api/shares` is an upsert per session: a session has at most one live public link, and a new POST for a
+- `POST /api/shares` `{session_id, include_transcript}` → `{slug, url}`; `DELETE /api/shares/{slug}` → 204
+  Only the owner of a `scored` session with a report (else 404 for a session that is not the caller's, 409
+  `{code: "not_scored"}` before the report). `slug` is 10 random URL-safe characters (`A-Z a-z 0-9 - _`), never
+  derived from ids; `url` is `{PUBLIC_BASE_URL}/s/{slug}` (`PUBLIC_BASE_URL` defaults to `APP_ORIGIN`). DELETE sets
+  the link's `revoked_at` (idempotent: 204 again for a revoked link) and answers 404 for a link that is not the
+  caller's.
+  `POST /api/shares` is an upsert per session: a session has at most one live public link. A POST with the same
+  `include_transcript` as the live link returns that link; one with a different value revokes it and makes a new one.
+  A new POST for a
   session that already has one replaces it (the old slug stops working). The web app still deletes the old slug
   before posting a change, so either side alone keeps a single live link.
-- `GET /s/{slug}` server-rendered scorecard
+- `GET /s/{slug}` server-rendered scorecard, public (no cookie needed), no script: round title, date, verdict and
+  confidence (meetings: the outcome), competency bars (score of 4 and a one-line rationale), top 3 strengths, top 3
+  things to work on, the weakest moment's question, next drills, and the transcript (with evidence quotes) only when
+  the link has `include_transcript`. Never a name or an id. Open Graph and Twitter tags (title "Interview Rounds
+  scorecard", the headline summary as description), `<meta name="robots" content="noindex">`, `Cache-Control:
+  private, max-age=60`. A revoked link answers `410` and an unknown one `404`, both as small pages in the same style
+  (`Cache-Control: no-store`). Every report value is escaped.
 - `GET /auth/google/start`, `/auth/google/callback`, `POST /auth/logout`: not mounted in this build (no sign-in:
   everyone is a guest on their device, `sign_in_available` is always `false`).
 - `POST /v1/chat/completions` Fish custom LLM (bearer `FISH_LLM_SECRET`, or the session `client_token` when the session's

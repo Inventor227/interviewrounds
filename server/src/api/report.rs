@@ -51,7 +51,7 @@ async fn owned_status(app: &AppState, raw_id: &str, who: &Identity) -> AppResult
 }
 
 /// `GET /api/sessions/{id}/report` → `Report`, or 404 until it is ready. A retry answers its parent's report
-/// (with the retry's before and after on it) once the retry is scored.
+/// (with the retry's before and after on it) once the retry is scored. `share` is the session's live public link.
 async fn get_report(
     State(app): State<AppState>,
     Extension(who): Extension<Identity>,
@@ -67,7 +67,12 @@ async fn get_report(
             .fetch_optional(&app.db)
             .await?;
     match report {
-        Some(r) => Ok(([(header::CACHE_CONTROL, "no-store")], Json(r)).into_response()),
+        Some(mut r) => {
+            if r.is_object() {
+                r["share"] = super::shares::share_block(&app.db, id).await?;
+            }
+            Ok(([(header::CACHE_CONTROL, "no-store")], Json(r)).into_response())
+        }
         None => Err(AppError::NotFound),
     }
 }
