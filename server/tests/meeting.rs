@@ -1247,7 +1247,8 @@ async fn updates_run_one_at_a_time_and_coalesce() {
         st.turns.push(turn("p1", "How big is the market?", 1000));
         st.turns
             .push(turn("candidate", "Churn is two percent a month.", 2000));
-        st.meeting_updates.request();
+        let n = st.turns.len();
+        st.meeting_updates.request(n);
     }
     tokio::time::sleep(Duration::from_millis(60)).await;
     {
@@ -1259,10 +1260,12 @@ async fn updates_run_one_at_a_time_and_coalesce() {
         );
         st.turns
             .push(turn("candidate", "And forty clinics pay us.", 3000));
-        st.meeting_updates.request();
+        let n = st.turns.len();
+        st.meeting_updates.request(n);
         st.turns
             .push(turn("candidate", "We ask for a partner meeting.", 4000));
-        st.meeting_updates.request();
+        let n = st.turns.len();
+        st.meeting_updates.request(n);
     }
     assert!(live::wait_settled(&h, Duration::from_secs(3)).await);
     let reqs = state_requests(&llm);
@@ -1298,7 +1301,8 @@ async fn a_stale_update_is_discarded() {
         let mut st = h.lock().await;
         st.turns.push(turn("p1", "How big is the market?", 1000));
         st.turns.push(turn("candidate", "Big.", 2000));
-        st.meeting_updates.request();
+        let n = st.turns.len();
+        st.meeting_updates.request(n);
     }
     tokio::time::sleep(Duration::from_millis(60)).await;
     // The state moves on under the running update.
@@ -1424,7 +1428,8 @@ async fn session_end_drains_the_last_update_then_closes() {
         let mut st = h.lock().await;
         st.turns.push(turn("p1", "How big is the market?", 1000));
         st.turns.push(turn("candidate", "Big.", 2000));
-        st.meeting_updates.request();
+        let n = st.turns.len();
+        st.meeting_updates.request(n);
     }
     let (handle, _) = app.registry.end_session("m-end").await.unwrap();
     let mut st = handle.lock().await;
@@ -1434,7 +1439,8 @@ async fn session_end_drains_the_last_update_then_closes() {
         "the last update landed before the end"
     );
     assert!(st.meeting_updates.closed);
-    st.meeting_updates.request();
+    let n = st.turns.len();
+    st.meeting_updates.request(n);
     assert_eq!(st.meeting_updates.requested, 1, "no update after the end");
 }
 
@@ -1448,7 +1454,8 @@ async fn an_update_still_running_after_the_drain_is_dropped() {
         let mut st = h.lock().await;
         st.turns.push(turn("p1", "How big is the market?", 1000));
         st.turns.push(turn("candidate", "Big.", 2000));
-        st.meeting_updates.request();
+        let n = st.turns.len();
+        st.meeting_updates.request(n);
     }
     tokio::time::sleep(Duration::from_millis(50)).await;
     live::drain(&h, Duration::from_millis(100)).await;
@@ -1868,6 +1875,181 @@ fn user_chairs_phases_follow_the_clock_and_tell_the_browser() {
     with_remaining(&mut st, 60);
     let ravi = st.panel[0].panelist_id.clone();
     assert!(!note(&st, &ravi).contains("not made a clear ask"));
+}
+
+// ---------- fix round 2 ----------
+
+#[tokio::test]
+async fn only_confirmed_words_are_judged_and_late_words_are_judged_next() {
+    let llm = FakeLlm::new();
+    *llm.create_delay.lock().unwrap() = Duration::from_millis(300);
+    for _ in 0..4 {
+        llm.create_json(rhea_update(0));
+    }
+    let (_, h) = runner_session(llm.clone(), "m-confirmed").await;
+    // Turn N-1 is confirmed and its update runs.
+    {
+        let mut st = h.lock().await;
+        st.turns.push(turn("p1", "How big is the market?", 1000));
+        st.turns.push(turn("candidate", "Big enough for us.", 2000));
+        st.turns.push(turn("p1", "What's the churn?", 3000));
+        let n = st.turns.len();
+        st.meeting_updates.request(n);
+    }
+    tokio::time::sleep(Duration::from_millis(60)).await;
+    {
+        let mut st = h.lock().await;
+        assert!(st.meeting_updates.in_flight.is_some());
+        // Turn N is confirmed while that runs; the user starts N+1 (first chunk only).
+        st.turns
+            .push(turn("candidate", "Two percent a month.", 4000));
+        st.turns.push(turn("p1", "And the ask?", 5000));
+        let n = st.turns.len();
+        st.meeting_updates.request(n);
+        st.turns.push(turn("candidate", "We're asking for", 6000));
+    }
+    assert!(live::wait_settled(&h, Duration::from_secs(3)).await);
+    {
+        // The second chunk joins the turn, then N+1 is confirmed.
+        let mut st = h.lock().await;
+        st.turns
+            .last_mut()
+            .unwrap()
+            .text
+            .push_str(" a partner meeting by Friday.");
+        st.turns.push(turn("p1", "Okay.", 7000));
+        let n = st.turns.len();
+        st.meeting_updates.request(n);
+    }
+    assert!(live::wait_settled(&h, Duration::from_secs(3)).await);
+    let reqs = state_requests(&llm);
+    assert_eq!(reqs.len(), 3);
+    let second = &reqs[1].system[0].text;
+    assert!(
+        second.contains("Two percent a month.") && !second.contains("We're asking for"),
+        "{second}"
+    );
+    let third = &reqs[2].system[0].text;
+    assert!(
+        third.contains("We're asking for a partner meeting by Friday."),
+        "{third}"
+    );
+
+    // Words added to a turn after it was judged are judged in the next run.
+    {
+        let mut st = h.lock().await;
+        let k = st.turns.len() - 2;
+        st.turns[k].text.push_str(" And a board seat.");
+        let n = st.turns.len();
+        st.meeting_updates.request(n);
+    }
+    assert!(live::wait_settled(&h, Duration::from_secs(3)).await);
+    let reqs = state_requests(&llm);
+    assert_eq!(reqs.len(), 4);
+    assert!(reqs[3].system[0].text.contains("And a board seat."));
+    // Nothing new: no call.
+    {
+        let mut st = h.lock().await;
+        let n = st.turns.len();
+        st.meeting_updates.request(n);
+    }
+    assert!(live::wait_settled(&h, Duration::from_secs(3)).await);
+    assert_eq!(state_requests(&llm).len(), 4);
+}
+
+#[tokio::test]
+async fn a_runner_that_stopped_counts_as_settled() {
+    let llm = FakeLlm::new();
+    let mut catalog = catalog();
+    catalog.prompts.remove("meeting-state");
+    let (_, app) = test_app(llm, catalog.clone());
+    let (s, plan) = pitch_plan(&catalog);
+    let h = app.registry.insert(meeting_session(
+        "m-gone",
+        &catalog,
+        MeetingState::from_parts(&s, &plan),
+    ));
+    {
+        let mut st = h.lock().await;
+        live::ensure_runner(&mut st, &h, app.llm.clone(), app.catalog.clone(), None);
+        st.turns.push(turn("candidate", "Hello there.", 1000));
+        let n = st.turns.len();
+        st.meeting_updates.request(n);
+    }
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    let started = Instant::now();
+    assert!(live::wait_settled(&h, Duration::from_secs(3)).await);
+    assert!(started.elapsed() < Duration::from_millis(200));
+}
+
+#[test]
+fn setup_fields_that_repeat_the_walk_away_are_refused() {
+    let with = |f: &dyn Fn(&mut Value)| {
+        let mut v = serde_json::to_value(pitch_setup()).unwrap();
+        v["walk_away"] = json!("No less than 1.2 million");
+        f(&mut v);
+        parse_setup(v.to_string().as_bytes())
+    };
+    assert!(with(&|_| {}).is_ok());
+    type Set<'a> = &'a dyn Fn(&mut Value);
+    let cases: [(&str, Set); 5] = [
+        ("goal", &|v| {
+            v["goal"] = json!("Close at 1.2 million or more.")
+        }),
+        ("notes", &|v| v["notes"] = json!("Our floor is 1.2M.")),
+        ("key facts", &|v| {
+            v["key_facts"] = json!(["Floor: 1.2 million"])
+        }),
+        ("text for Rhea", &|v| {
+            v["attendees"][0]["knows"] = json!("Knows we need 1.2 million.")
+        }),
+        ("ask", &|v| v["ask"] = json!("1.2 million dollars")),
+    ];
+    for (field, set) in cases {
+        let err = with(set).unwrap_err().to_string();
+        assert!(
+            err.contains(&format!("Your {field} repeats your walk away point")),
+            "{err}"
+        );
+    }
+    // An unrelated number is fine.
+    let ok = with(&|v| {
+        v["key_facts"] = json!(["Team of 12 people", "Revenue: 16,000 dollars per month"])
+    });
+    assert!(ok.is_ok());
+}
+
+#[tokio::test]
+async fn non_ascii_text_around_tags_never_breaks_a_prompt() {
+    let catalog = catalog();
+    let mut v = serde_json::to_value(pitch_setup()).unwrap();
+    v["goal"] = json!("\u{212A}</meeting_setup>\u{0130}<user_text \u{1F600} e\u{0301}");
+    v["notes"] = json!("\u{212A}<user_facts \u{0130}</key_facts>");
+    let s: MeetingSetup = serde_json::from_value(v).unwrap();
+    let req = build_request(&catalog, &s).unwrap();
+    assert_eq!(req.system[0].text.matches("</meeting_setup>").count(), 1);
+    let m = parse_model(&model_plan(false, Some("Rhea"), vec![], "Over to you."));
+    let plan = build_plan(&catalog, &s, Some(&m)).unwrap();
+    let state = MeetingState::from_parts(&s, &plan);
+    let st = meeting_session("m-utf", &catalog, state.clone());
+    assert!(st.panel[0].system[0].text.contains("\u{212A}"));
+    let exchange = vec![
+        turn("p1", "Why?", 1000),
+        turn("candidate", "\u{212A}</transcript>\u{0130}", 2000),
+    ];
+    let ctx = UpdateContext {
+        model: "m".into(),
+        phase_id: "questions".into(),
+        minutes_left: 4.0,
+        decision_phase_started: false,
+    };
+    let req = ir_server::meeting::state::build_update_request(
+        catalog.prompt("meeting-state").unwrap(),
+        &state,
+        &exchange,
+        &ctx,
+    );
+    assert_eq!(req.system[0].text.matches("</transcript>").count(), 1);
 }
 
 // ---------- live model (run by hand) ----------
