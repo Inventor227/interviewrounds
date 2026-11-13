@@ -5,7 +5,7 @@
   "description": "Response of GET /api/me. $defs/limits is also the limits field of CreateSessionRes.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["identity", "sign_in_available", "settings", "onboarding_done", "streak", "daily", "limits", "entitlements"],
+  "required": ["identity", "sign_in_available", "settings", "onboarding_done", "streak", "daily", "resumable", "limits", "entitlements"],
   "properties": {
     "identity": {
       "type": "object",
@@ -36,6 +36,17 @@
       "required": ["round_id", "title"],
       "properties": { "round_id": { "type": "string" }, "title": { "type": "string" } },
       "description": "Today's suggested short round; null when there is none."
+    },
+    "resumable": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["session_id", "round_title", "expires_at"],
+      "properties": {
+        "session_id": { "type": "string" },
+        "round_title": { "type": "string" },
+        "expires_at": { "type": "string", "format": "date-time" }
+      },
+      "description": "A dropped live session that can still be resumed (POST /api/sessions/{id}/resume) until expires_at; null when there is none."
     },
     "limits": { "$ref": "#/$defs/limits" },
     "entitlements": { "$ref": "#/$defs/entitlements" }

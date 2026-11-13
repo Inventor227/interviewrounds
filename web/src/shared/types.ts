@@ -777,6 +777,8 @@ export interface Me {
   streak: Streak;
   /** Today's suggested short round; null when there is none. */
   daily: { round_id: string; title: string } | null;
+  /** A dropped live session that can still be resumed until expires_at; null when there is none. */
+  resumable: { session_id: string; round_title: string; expires_at: string } | null;
   limits: Limits;
   entitlements: Entitlements;
 }

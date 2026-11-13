@@ -21,7 +21,9 @@ JSON; cookie `ir_id` identifies the device/user; all under same origin.
 - `POST /api/sessions/{id}/board-image` (body `image/png`, ≤ 2 MB) → 204
 - `POST /api/sessions/{id}/retry` → `CreateSessionRes` (2-minute re-ask of the weakest moment)
 - `GET /api/me` → `{identity:{kind:"guest"|"user", name?, email?}, sign_in_available, settings, onboarding_done,
-  streak:{current, best, today_done}, daily:{round_id, title}, limits, entitlements}`
+  streak:{current, best, today_done}, daily:{round_id, title}|null, resumable:{session_id, round_title, expires_at}|null,
+  limits, entitlements}`. `resumable` is a dropped live session the user can still resume (`POST /api/sessions/{id}/resume`)
+  until `expires_at` (3 minutes after the drop); `null` when there is none
 - `GET /api/me/history?role=` → `[{session_id, round_id, title, started_at, headline}]` where `started_at` is a date-time
   and `headline: string` is the session report's `headline.summary`
 - `GET /api/me/skills?role=` → `{competencies:[{id, name, points:[{session_id, at, score}]}]}`

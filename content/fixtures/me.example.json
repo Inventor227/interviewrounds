@@ -15,6 +15,7 @@
   "onboarding_done": false,
   "streak": { "current": 0, "best": 0, "today_done": false },
   "daily": { "round_id": "sde.behavioral.short", "title": "Behavioral" },
+  "resumable": null,
   "limits": { "short_left_today": 2, "full_left": 1, "resets_at": "2026-11-14T00:00:00Z", "reason": null },
   "entitlements": { "plan": "guest", "free_rounds_left": 3, "minutes_total": null, "minutes_used": null, "period_end": null }
 }
