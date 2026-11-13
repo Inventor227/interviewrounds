@@ -28,6 +28,8 @@ const vb = new Vector3();
 const vc = new Vector3();
 const vd = new Vector3();
 const ve = new Vector3();
+const vf = new Vector3();
+const vg = new Vector3();
 const m4 = new Matrix4();
 const scl = new Vector3();
 
@@ -203,13 +205,13 @@ export class Rig {
     const u = vd.subVectors(e, s);
     const f = ve.subVectors(h, e);
     const bend = u.angleTo(f);
-    const axis = u.clone().cross(f);
+    const axis = vf.copy(u).cross(f);
     if (axis.lengthSq() > 1e-10) {
       axis.normalize();
       // Open the elbow by 70 % of its bend (the sign that reduces the angle between upper arm and forearm).
       const open = 0.7 * bend * w;
       qa.setFromAxisAngle(axis, open);
-      const test = f.clone().applyQuaternion(qa);
+      const test = vg.copy(f).applyQuaternion(qa);
       if (test.angleTo(u) > bend) qa.setFromAxisAngle(axis, -open);
       rotateWorld(arm.fore, qa);
     }
