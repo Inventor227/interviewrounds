@@ -118,6 +118,14 @@ function modelOnce(): Promise<string> {
   return modelBlobUrl;
 }
 
+/** Fetches the viseme model ahead of the first voice, so the first word already moves the lips. Never rejects. */
+export function preloadVisemeModel(): Promise<void> {
+  return modelOnce().then(
+    () => undefined,
+    () => undefined,
+  );
+}
+
 /**
  * HeadAudio on an AudioWorklet. Rejects when anything is missing, so the caller falls back to RMS.
  *

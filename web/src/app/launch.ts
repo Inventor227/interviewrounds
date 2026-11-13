@@ -237,7 +237,7 @@ export function placeholderXr(preview: boolean, fake: boolean = isFake()): XRPor
   };
 }
 
-const defaultRuntime: Runtime = async ({ preview }) => {
+export const defaultRuntime: Runtime = async ({ preview }) => {
   const [{ api }, browser] = await Promise.all([import('../net/api'), import('../session/browser')]);
   return {
     api,
