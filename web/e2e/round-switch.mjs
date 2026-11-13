@@ -37,17 +37,26 @@ await page(() => {
 
 const desk = await R.placeWithController(S, null);
 stage('desk placed with the controller', desk);
-await waitState(['live'], 120000);
-stage('answer 1', await answer('At a high level a client talks to an API service. The service writes the mapping to a key value store and reads go through a cache in front of it.'));
 
-// One box by ray with the controller.
+// A new guest's first round with a sheet teaches the one gesture first. Holding controllers, the line asks for the
+// trigger, and a box drawn by ray completes the step; the round starts after it.
 await look(S, -52);
 const from = await R.rayStand();
-await R.strokeBoard('right', box(8, 10, 12, 7), 'far', from);
+await until('the onboarding box step', () => (globalThis.__round.room.debug?.onboarding?.showing?.() === 'box' ? true : null), null, 20000, 500);
+const line = await page(() => globalThis.__xrApp.ui.status.view.title);
+stage('onboarding line with controllers', { line });
+if (line !== 'Pull the trigger and draw a box') await fail('the onboarding line is not the controller one', { line });
+await shot('s01-onboarding-controllers');
+await R.strokeBoard('right', box(8, 22, 12, 7), 'far', from);
 await sleep(1000);
 let b = await board();
+const taught = await page(() => globalThis.__round.room.debug.onboarding.showing());
+stage('box by ray completes the onboarding', { items: b.items.length, step: taught });
 if (b.items.filter((i) => i.kind === 'component' && i.label === null).length < 1) await fail('the box drawn by ray did not become a card', b);
-stage('box by ray', { items: b.items.length });
+if (taught) await fail('the onboarding did not complete on the box drawn with the controller', { taught });
+await waitState(['live'], 120000);
+stage('answer 1', await answer('At a high level a client talks to an API service. The service writes each order to a key value store and reads go through a cache in front of it.'));
+await look(S, -52);
 
 // A second stroke begins with the trigger held...
 const pts = await page((a) => globalThis.__round.room.debug.toWorld(a, 0), L.along([[36, 24], [50, 24]], 2));
@@ -59,7 +68,7 @@ for (const p of pts.slice(1, 4)) await C.glide('right', from, p, 0.12);
 const mid = await R.pointers();
 stage('mid stroke with the controller', mid);
 if (!mid.overlays.includes('ink')) await fail('the controller stroke did not start', mid);
-await shot('s01-mid-stroke-controller');
+await shot('s02-mid-stroke-controller');
 // ...and the controllers go down: hands take over, with the stroke still in the air.
 const logBefore = (await board()).log.length;
 await call('xr', 'set-input-mode', { mode: 'hand' });
@@ -75,10 +84,10 @@ if (after.overlays.length) await fail('the stroke was left hanging after the cha
 if (b.log.length !== logBefore) await fail('the unfinished stroke left an op on the board', b.log.slice(logBefore));
 if ((await roundState()).state !== 'live') await fail('the round did not stay live across the change', await roundState());
 if (st.hints.length) await fail('a hint was shown on the change', st.hints);
-await shot('s02-hands-took-over');
+await shot('s03-hands-took-over');
 
 // The round goes on with hands: a box and a connector by pinch.
-await draw(roughBox(38, 10, 12, 7, 5));
+await draw(roughBox(38, 22, 12, 7, 5));
 await sleep(1000);
 b = await board();
 const drawn = b.items.filter((i) => i.kind === 'component' && i.label === null).sort((p, q) => p.x - q.x);
@@ -91,7 +100,7 @@ stage('box and connector by hand', { items: b.items.length, edges: b.edges });
 if (!b.edges.length) await fail('the connector pinched after the change did not become an edge', b);
 await look(S, -52);
 await sleep(600);
-await shot('s03-drawn-by-both');
+await shot('s04-drawn-by-both');
 
 // A hand pokes Pause on the round bar (direct touch), then Resume. Recorded, not required: the emulator renders a
 // few frames a second, and a poke can fall between two of them.
@@ -120,7 +129,7 @@ await shot('s03-drawn-by-both');
   await look(S, -48);
   await poke(/Pause/);
   const paused = (await roundState()).state === 'paused';
-  if (paused) await shot('s02b-paused-by-poke');
+  if (paused) await shot('s03b-paused-by-poke');
   let resumed = null;
   if (paused) {
     await poke(/Resume/);
@@ -166,7 +175,13 @@ await sleep(1200);
 b = await board();
 stage('a box by touch after the controllers came back', { items: b.items.length, input: await R.inputState(), changes: await page(() => globalThis.__inputs) });
 if (b.items.length !== n1 + 1) await fail('the controller did not draw after coming back', b);
-await shot('s04-controllers-back');
+await shot('s05-controllers-back');
+// A on the right controller takes that box back.
+await C.pressButton('right', 'primary');
+await sleep(1500);
+b = await board();
+stage('A undid the last box', { items: b.items.length, log: b.log.slice(-2), pulses: await page(() => globalThis.__xrApp.hapticLog().map((p) => `${p.hand}:${p.name}`)) });
+if (b.items.length !== n1 || b.log.at(-1).op !== 'undo') await fail('A did not undo the last action', b);
 
 // And down again: the round is ended with hands (as in the hands run, through the round's own End).
 await call('xr', 'set-input-mode', { mode: 'hand' });
@@ -177,7 +192,7 @@ await page(() => globalThis.__round.controller.end());
 await waitState(['scoring', 'summary'], 60000);
 await until('the quick card or the summary', () => (globalThis.__xrApp?.ui.summary.group.visible ? true : null), null, 150000, 2000);
 await sleep(800);
-await shot('s05-card');
+await shot('s06-card');
 await waitState(['summary'], 240000);
 const final = await page(() => ({ rec: globalThis.__rec, session: globalThis.__round.session.session_id, stats: globalThis.__xrApp.stats(), changes: globalThis.__inputs, hints: globalThis.__xrApp.ui.hint.history, pulses: globalThis.__xrApp.hapticLog() }));
 final.board = await board();

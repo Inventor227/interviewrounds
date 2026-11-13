@@ -4,6 +4,7 @@ import { UIKitDocument } from '@iwsdk/core';
 import { createRayPointer } from '@pmndrs/pointer-events';
 import { Object3D, PerspectiveCamera, Scene, Vector3 } from 'three';
 import { describe, expect, it } from 'vitest';
+import { NOTICES, type NoticeKind } from '../../session/notices';
 import { RoundUI } from './index';
 import { layoutDesk } from './layout';
 import { END_HOLD_MS, RoundBar } from './roundBar';
@@ -156,6 +157,51 @@ describe('panels with a controller', () => {
     const n = pressEvery(ui.groups.summary);
     expect(n).toBeGreaterThanOrEqual(2);
     expect(actions).toEqual(expect.arrayContaining(['retry', 'report']));
+  });
+
+  it('every_interruption_card_and_the_onboarding_skip_press_by_ray', () => {
+    const ui = new RoundUI();
+    const actions: RoundAction[] = [];
+    ui.onAction((a) => actions.push(a));
+    const scene = new Scene();
+    scene.add(ui.groups.status);
+    ui.groups.status.addEventListener('pointerenter' as never, () => {});
+    place(ui.groups.status, layoutDesk(DESK).status);
+    const rig = rayRig(scene);
+    const from = new Vector3(DESK.head.x - 0.16, DESK.head.y - 0.28, DESK.head.z - 0.02);
+    const pressAll = () => {
+      rig.aim(from, from.clone().setY(from.y + 1));
+      scene.updateMatrixWorld(true);
+      const targets: Object3D[] = [];
+      ui.groups.status.traverse((o) => {
+        let shown = true;
+        for (let q: Object3D | null = o; q && q !== ui.groups.status; q = q.parent) {
+          if ((q as unknown as { properties?: { peek?(): { display?: string } } }).properties?.peek?.().display === 'none') shown = false;
+        }
+        const p = (o as unknown as { properties?: { peek?(): { onPointerDown?: unknown } } }).properties?.peek?.();
+        if (p?.onPointerDown && shown) targets.push(o);
+      });
+      for (const t of targets) {
+        rig.aim(from, t.getWorldPosition(new Vector3()));
+        rig.down();
+        // A slow pull: the trigger stays down for a second and a half.
+        for (let i = 0; i < 100; i++) rig.aim(from, t.getWorldPosition(new Vector3()));
+        rig.up();
+      }
+      return targets.length;
+    };
+    for (const kind of Object.keys(NOTICES) as NoticeKind[]) {
+      actions.length = 0;
+      ui.setNotice(kind);
+      expect(pressAll(), kind).toBe(NOTICES[kind].actions.length);
+      expect(actions, kind).toEqual(NOTICES[kind].actions);
+    }
+    // The onboarding line with its Skip button is the same card.
+    ui.setNotice(null);
+    actions.length = 0;
+    ui.status.showText('Pull the trigger and draw a box', '', null, [{ label: 'Skip', action: 'skip' }]);
+    expect(pressAll()).toBe(1);
+    expect(actions).toEqual(['skip']);
   });
 
   it('the_placement_prompt_names_the_action_for_the_input_in_use', () => {

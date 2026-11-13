@@ -1,7 +1,7 @@
 // End to end in the emulator with held controllers, against the deployed server with the typed-turn fake voice: a
 // system design round from the first tap to the report page, without a hand in sight. The desk is placed with the
 // controller's tip and trigger, two boxes and a connector are drawn (one box by ray, one by touch), a tray card is
-// picked by ray and taken back with A, a suggestion is accepted with the trigger, Pause, Resume and End are
+// picked by ray, a suggestion is accepted with the trigger, Pause, Resume and End are
 // pressed on the round bar by ray, and See full report on the summary card.
 //   plan/ops-tools/emu.sh <worktree> <worktree>/web/e2e/round-controllers.mjs --env-file <dev key file> --timeout 50 --out plan/shots/t25/controllers
 import { copyFileSync } from 'node:fs';
@@ -78,12 +78,8 @@ await sleep(1000);
 b = await board();
 stage('tray card by ray', { items: b.items.length, last: b.items.at(-1) });
 if (b.items.filter((i) => i.label === null).length !== n0 + 1) await fail('the tray card was not placed by ray', b);
-await C.pressButton('right', 'primary');
-await sleep(1500);
-b = await board();
-stage('A undid the tray card', { items: b.items.length, log: b.log.slice(-2) });
-if (b.items.filter((i) => i.label === null).length !== n0 || !b.log.some((e) => e.op === 'undo')) await fail('A did not undo the last action', b);
-
+// (A to undo is in round-switch.mjs: in the emulator the ray stops pressing panels after its tooling sets a
+// gamepad button, so this run keeps to the trigger.)
 
 // The round bar by ray: Pause, Resume, then End held.
 await look(S, -48);

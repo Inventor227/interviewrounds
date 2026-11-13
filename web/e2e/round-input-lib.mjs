@@ -137,12 +137,40 @@ export async function pressBar(hand, re, shotName = null) {
   const at = await barButton(re);
   await hold(hand, overBar(at), at);
   await sleep(1200);
-  const busy = await page((h) => globalThis.__xrApp.controllers().find((c) => c.hand === h)?.busy, hand);
-  stage(`ray on ${re}`, { busy });
+  stage(`ray on ${re}`, await rayInfo(hand));
   if (shotName) await shot(shotName);
-  await pull(hand, PULL_S);
-  await sleep(400);
+  await trigger(hand, 1);
+  await sleep(PULL_S * 1000);
+  const held = await rayInfo(hand);
+  await trigger(hand, 0);
+  await sleep(600);
+  stage(`pulled on ${re}`, { held, after: await rayInfo(hand) });
 }
+
+/** What the platform's pointers for a controller are on, and the panel actions seen so far. */
+export const rayInfo = (hand) =>
+  page((h) => {
+    const a = globalThis.__xrApp;
+    if (!globalThis.__acts) {
+      globalThis.__acts = [];
+      a.ui.onAction((x) => globalThis.__acts.push(x));
+    }
+    const mp = a.world.input.xr.multiPointers[h];
+    const hit = (k) => {
+      const i = mp[k].pointer.getIntersection();
+      if (!i || i.object.isVoidObject) return null;
+      let panel = null;
+      for (let q = i.object; q; q = q.parent) if (q.name) panel ??= q.name;
+      let label = '';
+      i.object.traverse?.((c) => {
+        const t = c.properties?.peek?.().text;
+        if (typeof t === 'string' && !label) label = t;
+      });
+      return { panel, label, dist: Math.round(i.distance * 1000) / 1000, down: [...mp[k].pointer.getButtonsDown()] };
+    };
+    const c = a.controllers().find((x) => x.hand === h);
+    return { active: mp.activeKind, ray: hit('ray'), touch: hit('touch'), states: { ray: mp.pointerStates.get('ray'), touch: mp.pointerStates.get('touch') }, busy: c?.busy, pressed: c?.pressed, acts: globalThis.__acts.slice(-4) };
+  }, hand);
 
 /** Holds the trigger on a round bar button (End needs a second). */
 export async function holdBar(hand, re, seconds) {
