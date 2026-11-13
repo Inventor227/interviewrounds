@@ -151,11 +151,46 @@ describe('HandAdapter', () => {
     expect(emitted[0]).toMatchObject({ op: 'item.move', args: { id: 'n1', x: 26, y: 17 } });
   });
 
-  it('tracking lost past the grace drops the gesture with no op, and the card stays', () => {
+  it('tracking lost past the grace drops a dragged card at the last good point', () => {
     const { port, emitted, at, store } = dragSetup();
     at(14, 12.5, 3);
     port.select('right', 'start');
-    for (const [x, y] of along([[14, 12.5], [24, 14]], 0.4)) at(x, y);
+    at(14, 12.5, 8);
+    for (const [x, y] of along([[14, 12.5], [24, 14.1]], 0.4)) at(x, y);
+    at(24, 14.1, 40);
+    const lostFrames = Math.ceil(TRACKING_GRACE_MS / 14) + 3;
+    for (let i = 0; i < lostFrames; i++) {
+      port.setHand('right', null);
+      port.frame();
+    }
+    // Tracking comes back far away with the pinch still held, then lets go: nothing more.
+    at(50, 30, 5);
+    port.select('right', 'end');
+    expect(emitted).toHaveLength(1);
+    expect(emitted[0]).toMatchObject({ op: 'item.move', args: { id: 'n1', x: 20, y: 12 } });
+    expect(store.board.items[0]).toMatchObject({ x: 20, y: 12 });
+  });
+
+  it('tracking lost past the grace over the bin or off the sheet never deletes or moves', () => {
+    const { port, emitted, at, store } = dragSetup();
+    at(14, 12.5, 3);
+    port.select('right', 'start');
+    at(14, 12.5, 8);
+    const bin = HLD_KIT.bin;
+    for (const [x, y] of along([[14, 12.5], [bin.x + 3, bin.y + 3]], 0.8)) at(x, y);
+    at(bin.x + 3, bin.y + 3, 30);
+    for (let i = 0; i < 30; i++) {
+      port.setHand('right', null);
+      port.frame();
+    }
+    expect(emitted).toEqual([]);
+    expect(store.board.items).toHaveLength(1);
+  });
+
+  it('tracking lost past the grace drops a stroke with no op', () => {
+    const { port, emitted, at, store } = dragSetup();
+    at(30, 30, 3);
+    port.select('right', 'start');
     const lostFrames = Math.ceil(TRACKING_GRACE_MS / 14) + 3;
     for (let i = 0; i < lostFrames; i++) {
       port.setHand('right', null);
@@ -165,7 +200,72 @@ describe('HandAdapter', () => {
     at(50, 30, 5);
     port.select('right', 'end');
     expect(emitted).toEqual([]);
-    expect(store.board.items[0]).toMatchObject({ x: 10, y: 10 });
+    expect(store.board.items).toHaveLength(1);
+  });
+
+  it('a pinch the system cancels (selectend without select) is a loss, not a release', () => {
+    const { port, emitted, at } = dragSetup();
+    // Mid stroke: no ink.
+    at(30, 30, 3);
+    port.select('right', 'start');
+    at(30, 30, 8);
+    for (const [x, y] of along([[30, 30], [40, 34]], 0.4)) at(x, y);
+    port.select('right', 'cancel');
+    expect(emitted).toEqual([]);
+    // Mid card drag: dropped where it was.
+    at(14, 12.5, 3);
+    port.select('right', 'start');
+    at(14, 12.5, 8);
+    for (const [x, y] of along([[14, 12.5], [24, 12.5]], 0.4)) at(x, y);
+    at(24, 12.5, 40);
+    port.select('right', 'cancel');
+    expect(emitted[0]).toMatchObject({ op: 'item.move', args: { id: 'n1', x: 20 } });
+  });
+
+  it('a fast line from one card edge to another connects and keeps up with the hand', () => {
+    const { port, emitted, at, store, hands } = dragSetup();
+    store.apply({ op_id: 's2', src: 'hand', op: 'item.create', args: { id: 'n2', kind: 'component', type: 'db', label: null, x: 34, y: 10, w: 8, h: 5 } });
+    const ev = collect(hands);
+    at(18.4, 12.5, 15);
+    port.select('right', 'start');
+    // 30 cm/s from the first frame: 0.42 cm per 14 ms frame.
+    for (const [x, y] of along([[18.4, 12.5], [35, 12.5]], 0.42)) at(x, y);
+    const lastMove = ev.filter((e) => e[0] === 'move').at(-1)![1];
+    for (let i = 0; i < 20; i++) at(35, 12.5);
+    port.select('right', 'end');
+    expect(emitted.at(-1)).toMatchObject({ op: 'edge.create', args: { from: 'n1', to: 'n2' } });
+    // The drift correction has faded: the stroke is where the hand is (filter lag aside, at rest).
+    const rest = ev.filter((e) => e[0] === 'move').at(-1)![1];
+    expect(Math.abs(rest.x_cm - 35)).toBeLessThan(0.5);
+    expect(lastMove.x_cm).toBeGreaterThan(30);
+  });
+
+  it('after a long frame hitch, a release uses the last points kept, not the start', () => {
+    const { port, emitted, at } = dragSetup();
+    at(14, 12.5, 3);
+    port.select('right', 'start');
+    at(14, 12.5, 8);
+    for (const [x, y] of along([[14, 12.5], [24, 12.5]], 0.4)) at(x, y);
+    at(24, 12.5, 40);
+    // Half a second with no frames, then the release.
+    port.now += 500;
+    port.select('right', 'end');
+    expect(emitted[0]).toMatchObject({ op: 'item.move', args: { id: 'n1', x: 20 } });
+  });
+
+  it('hovers only within 4 cm of the sheet, one card per hand', () => {
+    const { port, store, hands } = dragSetup();
+    store.apply({ op_id: 's2', src: 'hand', op: 'item.create', args: { id: 'n2', kind: 'component', type: 'db', label: null, x: 34, y: 10, w: 8, h: 5 } });
+    const input = new BoardInput(store, hands, HLD_KIT, () => {});
+    port.handAt('right', 14, 12.5, 6);
+    port.frame();
+    expect(input.hovers()).toEqual([]);
+    for (let i = 0; i < 20; i++) {
+      port.handAt('right', 14, 12.5, 2);
+      port.handAt('left', 38, 12.5, 2);
+      port.frame();
+    }
+    expect(input.hovers().sort()).toEqual(['n1', 'n2']);
   });
 
   it('a release while tracking is lost (within the grace) ends at the last good point', () => {

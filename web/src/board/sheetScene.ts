@@ -143,13 +143,21 @@ export async function createDevSheet(root: HTMLElement): Promise<DevSheetHandle>
   const onSessionStart = () => {
     const s = world.renderer.xr.getSession();
     if (!s) return;
-    const on = (phase: SelectPhase) => (e: XRInputSourceEvent) => {
+    // A selectend with no select before it is the system cancelling the pinch.
+    const selected = new WeakSet<XRInputSource>();
+    const fire = (e: XRInputSourceEvent, phase: SelectPhase) => {
       const h = e.inputSource.handedness;
       if (h !== 'left' && h !== 'right') return;
       for (const cb of [...selects]) cb(h, phase, performance.now());
     };
-    s.addEventListener('selectstart', on('start') as EventListener);
-    s.addEventListener('selectend', on('end') as EventListener);
+    s.addEventListener('selectstart', ((e: XRInputSourceEvent) => {
+      selected.delete(e.inputSource);
+      fire(e, 'start');
+    }) as EventListener);
+    s.addEventListener('select', ((e: XRInputSourceEvent) => {
+      selected.add(e.inputSource);
+    }) as EventListener);
+    s.addEventListener('selectend', ((e: XRInputSourceEvent) => fire(e, selected.has(e.inputSource) ? 'end' : 'cancel')) as EventListener);
   };
   world.renderer.xr.addEventListener('sessionstart', onSessionStart);
 

@@ -4,7 +4,7 @@
 // Tracking loss mid gesture: the gesture freezes at the last good point for 300 ms; if the
 // hand comes back with the pinch still held it carries on, otherwise it is cancelled (no op).
 import { OneEuroFilter } from './ink';
-import type { BoardPoint, PointerAdapter } from './input';
+import { DRAG_THRESHOLD_CM, type BoardPoint, type CancelReason, type PointerAdapter } from './input';
 import { SHEET, type Rect } from './model';
 import type { BoardXRPort, SelectPhase, Vec3, XRHandSample } from './port';
 
@@ -22,11 +22,15 @@ export const RELEASE_TRIM_MS = 80;
 export const ZONE_MARGIN_CM = 3;
 /** A pinch starts only this close above the sheet (cm), or slightly below it. */
 export const MAX_HEIGHT_CM = 12;
+/** A hand hovers over (highlights, touches) what is under it only this close above the sheet (research 06 §2.3). */
+export const HOVER_MAX_CM = 4;
+/** Once a gesture is a drag, the closing-drift correction fades to zero over this long. */
+export const DRIFT_FADE_MS = 150;
 const MIN_HEIGHT_CM = -3;
 
 type Side = 'left' | 'right';
 type Projected = { x_cm: number; y_cm: number; h_cm: number };
-type Cb = (p: BoardPoint) => void;
+type Cb = (p: BoardPoint, reason?: CancelReason) => void;
 
 export interface HandPointer extends Projected {
   hand: Side;
@@ -55,10 +59,12 @@ interface HandTrack {
   downAt: number;
   downPoint: Projected | null;
   drift: { x: number; y: number } | null;
+  /** When the gesture left tap range (the drift correction then fades out). */
+  dragSince: number | null;
   sent: { t: number; p: Projected }[];
 }
 
-const track = (): HandTrack => ({ fx: new OneEuroFilter(), fy: new OneEuroFilter(), fz: new OneEuroFilter(), last: null, raw: null, visible: false, active: false, lostAt: null, downAt: 0, downPoint: null, drift: null, sent: [] });
+const track = (): HandTrack => ({ fx: new OneEuroFilter(), fy: new OneEuroFilter(), fz: new OneEuroFilter(), last: null, raw: null, visible: false, active: false, lostAt: null, downAt: 0, downPoint: null, drift: null, dragSince: null, sent: [] });
 
 export class HandAdapter implements PointerAdapter {
   private readonly subs = { down: new Set<Cb>(), move: new Set<Cb>(), up: new Set<Cb>(), cancel: new Set<Cb>() };
@@ -94,7 +100,7 @@ export class HandAdapter implements PointerAdapter {
     this.subs.up.add(cb);
     return () => this.subs.up.delete(cb);
   }
-  onCancel(cb: Cb): () => void {
+  onCancel(cb: (p: BoardPoint, reason?: CancelReason) => void): () => void {
     this.subs.cancel.add(cb);
     return () => this.subs.cancel.delete(cb);
   }
@@ -109,9 +115,17 @@ export class HandAdapter implements PointerAdapter {
     return out;
   }
 
-  private emit(set: Set<Cb>, hand: Side, p: Projected, now: number): void {
+  private emit(set: Set<Cb>, hand: Side, p: Projected, now: number, reason?: CancelReason): void {
     const bp: BoardPoint = { x_cm: p.x_cm, y_cm: p.y_cm, t_ms: now, hand };
-    for (const cb of [...set]) cb(bp);
+    for (const cb of [...set]) cb(bp, reason);
+  }
+
+  /** End a gesture that was lost: tracking gone past the grace, or the pinch cancelled. */
+  private lose(t: HandTrack, hand: Side, now: number): void {
+    t.active = false;
+    t.lostAt = null;
+    const at = t.sent[t.sent.length - 1]?.p ?? t.downPoint ?? t.last;
+    if (at) this.emit(this.subs.cancel, hand, at, now, 'lost');
   }
 
   private inZone(p: Projected): boolean {
@@ -141,7 +155,7 @@ export class HandAdapter implements PointerAdapter {
         t.visible = true;
         t.lostAt = null;
         if (t.active) this.emit(this.subs.move, hand, this.gesturePoint(t, t.last, now), now);
-        else if (this.inZone(t.last)) this.emit(this.subs.move, hand, t.last, now);
+        else if (this.inZone(t.last) && t.last.h_cm < HOVER_MAX_CM) this.emit(this.subs.move, hand, t.last, now);
         continue;
       }
       // No joints this frame: hold the gesture at the last good point for the grace time.
@@ -152,12 +166,7 @@ export class HandAdapter implements PointerAdapter {
       t.fz.reset();
       if (!t.active) continue;
       t.lostAt ??= now;
-      if (now - t.lostAt > this.graceMs) {
-        t.active = false;
-        t.lostAt = null;
-        const at = t.sent[t.sent.length - 1]?.p ?? t.downPoint ?? t.last;
-        if (at) this.emit(this.subs.cancel, hand, at, now);
-      }
+      if (now - t.lostAt > this.graceMs) this.lose(t, hand, now);
     }
   }
 
@@ -181,16 +190,24 @@ export class HandAdapter implements PointerAdapter {
       t.downAt = now;
       t.downPoint = p;
       t.drift = null;
+      t.dragSince = null;
       t.sent = [];
       this.emit(this.subs.down, hand, p, now);
       return;
     }
     if (!t.active) return;
+    // A selectend with no select: the system cancelled the pinch (often the hand is going away).
+    if (phase === 'cancel') {
+      this.lose(t, hand, now);
+      return;
+    }
     t.active = false;
     t.lostAt = null;
-    // Release where the hand was before the fingers began to open.
-    let at = t.downPoint ?? t.last;
+    // Release where the hand was before the fingers began to open; after a long hitch with
+    // nothing that old, the oldest point kept, else the last.
+    let at: Projected | null = null;
     for (const s of t.sent) if (s.t <= now - RELEASE_TRIM_MS) at = s.p;
+    at ??= t.sent[0]?.p ?? t.last ?? t.downPoint;
     if (at) this.emit(this.subs.up, hand, at, now);
   }
 
@@ -207,7 +224,12 @@ export class HandAdapter implements PointerAdapter {
         // A bigger move this early is the hand setting off, not drift.
         t.drift = Math.hypot(dx, dy) < PINCH_DRIFT_MAX_CM ? { x: dx, y: dy } : { x: 0, y: 0 };
       }
-      out = { ...p, x_cm: p.x_cm - t.drift.x, y_cm: p.y_cm - t.drift.y };
+      // The correction is for taps: once the gesture is a drag it fades out, so strokes and
+      // drags catch up with the hand.
+      let k = 1;
+      if (t.dragSince === null && Math.hypot(p.x_cm - t.drift.x - d.x_cm, p.y_cm - t.drift.y - d.y_cm) >= DRAG_THRESHOLD_CM) t.dragSince = now;
+      if (t.dragSince !== null) k = Math.max(0, 1 - (now - t.dragSince) / DRIFT_FADE_MS);
+      out = { ...p, x_cm: p.x_cm - t.drift.x * k, y_cm: p.y_cm - t.drift.y * k };
     }
     t.sent.push({ t: now, p: out });
     while (t.sent.length && t.sent[0]!.t < now - 400) t.sent.shift();

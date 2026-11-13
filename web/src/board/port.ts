@@ -34,7 +34,8 @@ export interface XRHandSample {
   indexTip: Vec3 | null;
 }
 
-export type SelectPhase = 'start' | 'end';
+/** 'cancel': a selectend with no select before it (the system cancelled the pinch). */
+export type SelectPhase = 'start' | 'end' | 'cancel';
 
 export interface BoardXRPort {
   /**
@@ -42,10 +43,16 @@ export interface BoardXRPort {
    * edge, +Y the surface normal (web/src/xr Room.sheetAnchor). Board meshes are added under it.
    */
   readonly sheetAnchor: Object3D;
-  /** Per-frame callback after input is read; dt in seconds. Returns an unsubscribe. */
+  /**
+   * Per-frame callback after input is read; dt in seconds. Returns an unsubscribe. Frame and
+   * select timestamps share one timeline (performance.now()).
+   */
   onFrame(cb: (dt: number, nowMs: number) => void): () => void;
   hands(): XRHandSample[];
-  /** XR selectstart / selectend per hand (a pinch on hands, the trigger on controllers). */
+  /**
+   * XR selectstart / selectend per hand: the system pinch. Only hands with joint poses can
+   * start a gesture (controllers have no thumb and index tips).
+   */
   onSelect(cb: (hand: 'left' | 'right', phase: SelectPhase, nowMs: number) => void): () => void;
   headPose(): HeadPose;
   /** The placed desk, null until placement finishes. */

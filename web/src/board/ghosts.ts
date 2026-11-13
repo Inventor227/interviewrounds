@@ -7,7 +7,7 @@
 // GhostLayer sits between a pointer source and BoardInput: pinches that land on a ghost are
 // its own, everything else passes through unchanged.
 import type { Board, GhostOp } from '../shared/types';
-import type { BoardPoint, Hand, PointerAdapter } from './input';
+import type { BoardPoint, CancelReason, Hand, PointerAdapter } from './input';
 import { DRAG_THRESHOLD_CM } from './input';
 import type { Kit } from './kits';
 import { bounds, center, edgeMid, findItem, inRect, itemRect, type Pt, type Rect } from './model';
@@ -105,7 +105,7 @@ export interface GhostLayerOptions {
   isLocal?: (opId: string) => boolean;
 }
 
-type Cb = (p: BoardPoint) => void;
+type Cb = (p: BoardPoint, reason?: CancelReason) => void;
 
 interface Press {
   opId: string;
@@ -145,7 +145,7 @@ export class GhostLayer implements PointerAdapter {
       source.onUp((p) => this.up(p)),
       store.onChange(() => this.seen()),
     ];
-    if (source.onCancel) this.offs.push(source.onCancel((p) => this.cancel(p)));
+    if (source.onCancel) this.offs.push(source.onCancel((p, reason) => this.cancel(p, reason)));
     this.seen();
   }
 
@@ -170,8 +170,8 @@ export class GhostLayer implements PointerAdapter {
     return () => this.subs.cancel.delete(cb);
   }
 
-  private pass(set: Set<Cb>, p: BoardPoint): void {
-    for (const cb of [...set]) cb(p);
+  private pass(set: Set<Cb>, p: BoardPoint, reason?: CancelReason): void {
+    for (const cb of [...set]) cb(p, reason);
   }
 
   /** Starts the settle clock for ghosts that just showed; forgets ones that went away. */
@@ -236,10 +236,10 @@ export class GhostLayer implements PointerAdapter {
     this.opts.accept(g);
   }
 
-  private cancel(p: BoardPoint): void {
+  private cancel(p: BoardPoint, reason?: CancelReason): void {
     if (this.presses.delete(p.hand)) return;
     this.passing.delete(p.hand);
-    this.pass(this.subs.cancel, p);
+    this.pass(this.subs.cancel, p, reason);
   }
 
   private holdCheck(pr: Press, nowMs: number): void {

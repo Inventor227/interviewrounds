@@ -41,11 +41,16 @@ export interface PointerAdapter {
   onMove(cb: (p: BoardPoint) => void): () => void;
   onUp(cb: (p: BoardPoint) => void): () => void;
   /**
-   * The gesture was lost (pointer cancel, hand tracking lost past its grace time): drop it
-   * with no op. Optional; the point is the last good position.
+   * The gesture ended without a release. Optional; the point is the last good position.
+   * - no reason: aborted (a pointer cancel): drop it, no op.
+   * - 'lost': the hand was lost (tracking gone past its grace, or the pinch was cancelled by
+   *   the system). A card or tray card is dropped at the last good point unless that is over
+   *   the bin or off the sheet; ink, connectors and taps are dropped with no op.
    */
-  onCancel?(cb: (p: BoardPoint) => void): () => void;
+  onCancel?(cb: (p: BoardPoint, reason?: CancelReason) => void): () => void;
 }
+
+export type CancelReason = 'lost';
 
 /** Movement before a press becomes a drag (research 06 §1.1). */
 export const DRAG_THRESHOLD_CM = 1.5;
@@ -106,8 +111,8 @@ export class BoardInput {
   private offs: (() => void)[];
   private readonly ids: IdGen;
   private readonly now: () => number;
-  /** The card under an idle pointer (mouse hover), for highlighting. */
-  hover: string | null = null;
+  /** The card under each idle pointer (a hovering hand or the mouse), for highlighting. */
+  private readonly hoverBy = new Map<Hand, string>();
 
   constructor(
     private readonly store: BoardStore,
@@ -119,7 +124,7 @@ export class BoardInput {
     this.ids = opts.ids ?? new IdGen();
     this.now = opts.now ?? (() => (typeof performance !== 'undefined' ? performance.now() : Date.now()));
     this.offs = [adapter.onDown((p) => this.down(p)), adapter.onMove((p) => this.move(p)), adapter.onUp((p) => this.up(p))];
-    if (adapter.onCancel) this.offs.push(adapter.onCancel((p) => this.cancel(p)));
+    if (adapter.onCancel) this.offs.push(adapter.onCancel((p, reason) => this.cancel(p, reason)));
   }
 
   destroy(): void {
@@ -228,15 +233,25 @@ export class BoardInput {
     }
     if (!g) return;
     this.gestures.set(p.hand, g);
-    this.hover = null;
+    this.hoverBy.delete(p.hand);
     this.changed();
+  }
+
+  /** The first hovered card, if any. */
+  get hover(): string | null {
+    return this.hovers()[0] ?? null;
+  }
+
+  /** Every hovered card (one per idle hand). */
+  hovers(): string[] {
+    return [...new Set(this.hoverBy.values())];
   }
 
   private move(p: BoardPoint): void {
     const { x_cm: x, y_cm: y } = p;
     const g = this.gestures.get(p.hand);
     if (!g) {
-      this.hoverAt(x, y);
+      this.hoverAt(p.hand, x, y);
       return;
     }
     switch (g.kind) {
@@ -279,21 +294,30 @@ export class BoardInput {
     this.changed();
   }
 
-  private cancel(p: BoardPoint): void {
-    if (this.gestures.delete(p.hand)) this.changed();
+  private cancel(p: BoardPoint, reason?: CancelReason): void {
+    const g = this.gestures.get(p.hand);
+    if (!g) return;
+    this.gestures.delete(p.hand);
+    if (reason === 'lost') {
+      // Keep the user's work where they put it, but never delete or create off the sheet on a loss.
+      const safe = onSheet(this.board, p.x_cm, p.y_cm) && !inRect(this.kit.bin, p.x_cm, p.y_cm);
+      if (g.kind === 'drag' && g.target === 'item' && !g.ink && safe) this.drop({ ...g, overBin: false }, p);
+      else if (g.kind === 'tray' && safe) this.createCard(g.type, p.x_cm - this.kit.card.w / 2, p.y_cm - this.kit.card.h / 2, this.kit.card.w, this.kit.card.h);
+    }
+    this.changed();
   }
 
-  private hoverAt(x: number, y: number): void {
+  private hoverAt(hand: Hand, x: number, y: number): void {
     const b = this.board;
     let id: string | null = null;
     for (let i = b.items.length - 1; i >= 0 && !id; i--) {
       const it = b.items[i]!;
       if (isCard(it) && inRect(itemRect(it), x, y)) id = it.id;
     }
-    if (id !== this.hover) {
-      this.hover = id;
-      this.changed();
-    }
+    if (id === (this.hoverBy.get(hand) ?? null)) return;
+    if (id) this.hoverBy.set(hand, id);
+    else this.hoverBy.delete(hand);
+    this.changed();
   }
 
   private up(p: BoardPoint): void {
