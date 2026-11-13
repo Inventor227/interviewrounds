@@ -17,7 +17,7 @@ use super::state::SessionState;
 use super::tools;
 
 /// Appended to the live system prompt when the live call carries no tools.
-pub const SPEAK_ONLY_NOTE: &str = "How your tools work in this app: the app performs show_question, next_phase, point_at, give_hint, hand_over and end_round for you, based on the line you say. So never write a tool name, a call, an id or anything in brackets. Write only your spoken line, exactly as the rules above describe (your transition line, your hint, your hand-over line or your closing line).";
+pub const SPEAK_ONLY_NOTE: &str = "How actions work in this app: the app updates the brief card, moves to the next phase, points at board items, notes hints, passes the floor and ends the round for you, based on the line you say. So write only your spoken line, exactly as the rules above describe (your transition line, your hint, your hand-over line or your closing line), and never anything in brackets, a call or an id.";
 
 const DIRECTOR_RULES: &str = "You are the action director of a live practice interview app. You never speak to anyone. A speaker (an AI interviewer or meeting attendee) talks with a candidate. After each line the speaker says aloud, you perform the app actions that line calls for, with your tools, exactly as the speaker's own instructions below say the speaker should call them.
 
@@ -75,12 +75,8 @@ pub fn build_request(
         .panelist(panelist_id)
         .or_else(|| state.panelist(&state.floor))
         .unwrap_or(&state.panel[0]);
-    let speaker_system: String = panelist
-        .system
-        .iter()
-        .map(|b| b.text.as_str())
-        .collect::<Vec<_>>()
-        .join("\n\n");
+    // The speaker's instructions with the tool instructions the live call never sees.
+    let speaker_system = panelist.director_system.clone();
     let mut messages =
         super::prompt::perspective(state, &panelist.panelist_id, state.history.clone());
     // The history ends on the turn's user message (recorded at turn start); the line follows it as another user

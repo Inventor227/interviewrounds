@@ -19,7 +19,7 @@
       "id": "clarify",
       "title": "Clarify",
       "minutes": 1.5,
-      "goal": "Open in about twenty words: first name, round and length, the metric change in short, then ask where they would start, and call show_question. Answer clarifying questions with the facts."
+      "goal": "Open in about twenty words: first name, round and length, the metric change in short, then ask where they would start[[tool: , and call show_question]]. Answer clarifying questions with the facts."
     },
     {
       "id": "hypotheses",
@@ -32,7 +32,7 @@
       "id": "first_checks",
       "title": "First checks",
       "minutes": 1.5,
-      "goal": "Ask what they would check first and why that before the rest. Close and call end_round."
+      "goal": "Ask what they would check first and why that before the rest. Close[[tool:  and call end_round]]."
     }
   ],
   "rubric_id": "rubric.pm_execution",

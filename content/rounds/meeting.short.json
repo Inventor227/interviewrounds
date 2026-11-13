@@ -41,7 +41,7 @@
       "id": "close",
       "title": "Close",
       "minutes": 0.5,
-      "goal": "The chair reads back next steps with owners and dates in one or two sentences and calls end_round. When the user runs the meeting, it ends on the user's close; the decision maker says one short line and calls end_round."
+      "goal": "The chair reads back next steps with owners and dates in one or two sentences[[tool:  and calls end_round]]. When the user runs the meeting, it ends on the user's close; the decision maker says one short line[[tool:  and calls end_round]]."
     }
   ],
   "rubric_id": "rubric.meeting",

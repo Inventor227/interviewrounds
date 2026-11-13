@@ -131,7 +131,10 @@ pub struct Panelist {
     pub panelist_id: String,
     pub persona: Persona,
     pub seat: u8,
+    /// The live call's prompt: what to say. Tool instructions are not in it (`prompt::live_view`).
     pub system: Vec<SystemBlock>,
+    /// The same instructions with the tool instructions kept, for the director (`prompt::director_view`).
+    pub director_system: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -444,7 +447,8 @@ impl SessionState {
                 panelist_id: s.panelist_id.clone(),
                 persona: persona.clone(),
                 seat: seat as u8,
-                system: vec![SystemBlock::cached(text)],
+                system: vec![SystemBlock::cached(prompt::live_view(&text))],
+                director_system: prompt::director_view(&text),
             });
         }
         let turn_note_template = catalog

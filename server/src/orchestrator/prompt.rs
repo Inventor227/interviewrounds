@@ -177,11 +177,10 @@ pub fn turn_note(
         // Meetings: only the chair keeps time, and nobody does when the user chairs.
         line.clone()
     } else if round_left <= 0.0 {
-        "Time is up for the round. Close now in one line, then call end_round with that line."
-            .to_string()
+        "Time is up for the round. Close now in one line.".to_string()
     } else if phase_left <= 0.0 && !last_phase {
         format!(
-            "Time check: the {} phase is over. Say one short transition line and call next_phase.",
+            "Time check: the {} phase is over. Say one short transition line to the next phase.",
             phase.id
         )
     } else if round_left <= 2.0 && !state.two_minute_warned {
@@ -239,7 +238,7 @@ pub fn turn_note(
         ("phase.index", (state.phase_idx + 1).to_string()),
         ("phase.count", state.round.phases.len().to_string()),
         ("phase.minutes_left", minutes(phase_left)),
-        ("phase.goal", phase.goal.clone()),
+        ("phase.goal", live_view(&phase.goal)),
         ("round.minutes_left", minutes(round_left)),
         ("phases_done", phases_done),
         ("hints_given", state.hints_given.to_string()),
@@ -280,7 +279,7 @@ fn event_note(
             "The candidate's answer has run past about {} seconds and they may still be talking. Cut in politely now with one short line and one focused question that steers back to the phase goal, such as \"Let me pause you there.\" followed by your question.",
             state.round.interrupt_after_seconds
         ),
-        EventKind::Ending => "Time is up. Close now in one line, with no feedback, then call end_round with that line.".into(),
+        EventKind::Ending => "Time is up. Close now in one line, with no feedback.".into(),
     })
 }
 
@@ -594,6 +593,81 @@ fn tidy_blank_runs(text: &str) -> String {
         out.push('\n');
     }
     out.trim().to_string()
+}
+
+/// Director-only text in the content prompts is marked `[[tool: ...]]` (a span may run over several lines once its
+/// placeholders are filled). The live call gets the prompt without it (a line left empty by the removal is dropped),
+/// so it never reads about tools and never writes one out.
+pub fn live_view(text: &str) -> String {
+    const CUT: char = '\u{1}';
+    if !text.contains(TOOL_OPEN) {
+        return text.to_string();
+    }
+    let removed = tool_spans(text, Some(CUT));
+    let mut out: Vec<String> = Vec::new();
+    for line in removed.split('\n') {
+        if !line.contains(CUT) {
+            out.push(line.to_string());
+            continue;
+        }
+        let kept = collapse_spaces(&line.replace(CUT, ""));
+        let t = kept.trim();
+        if t.is_empty() || t == "-" {
+            continue;
+        }
+        out.push(kept.trim_end().to_string());
+    }
+    out.join("\n")
+}
+
+/// The prompt as the director reads it: the tool instructions kept, the markers removed.
+pub fn director_view(text: &str) -> String {
+    tool_spans(text, None)
+}
+
+const TOOL_OPEN: &str = "[[tool: ";
+const TOOL_CLOSE: &str = "]]";
+
+/// The text with its `[[tool: ...]]` spans kept (`cut: None`) or replaced by `cut`. An unclosed span is kept as
+/// plain text.
+fn tool_spans(text: &str, cut: Option<char>) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(start) = rest.find(TOOL_OPEN) {
+        out.push_str(&rest[..start]);
+        let inner = &rest[start + TOOL_OPEN.len()..];
+        match inner.find(TOOL_CLOSE) {
+            Some(end) => {
+                match cut {
+                    None => out.push_str(&inner[..end]),
+                    Some(c) => {
+                        // Lines inside a removed span disappear; the cut point stays on its line.
+                        out.push(c);
+                    }
+                }
+                rest = &inner[end + TOOL_CLOSE.len()..];
+            }
+            None => {
+                out.push_str(inner);
+                rest = "";
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+fn collapse_spaces(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut prev_space = false;
+    for c in s.chars() {
+        if c == ' ' && prev_space {
+            continue;
+        }
+        prev_space = c == ' ';
+        out.push(c);
+    }
+    out
 }
 
 #[cfg(test)]

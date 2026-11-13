@@ -25,7 +25,7 @@
       "id": "lesson",
       "title": "Lesson",
       "minutes": 1,
-      "goal": "Ask what they would do differently. Close and call end_round."
+      "goal": "Ask what they would do differently. Close[[tool:  and call end_round]]."
     }
   ],
   "rubric_id": "rubric.pm_leadership",

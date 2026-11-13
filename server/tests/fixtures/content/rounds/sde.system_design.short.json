@@ -11,7 +11,7 @@
   "interrupt_after_seconds": 90,
   "panel": { "lead": "persona.daniel", "second": null },
   "phases": [
-    { "id": "requirements", "title": "Requirements", "minutes": 2, "goal": "Give the prompt, call show_question, let them scope." },
+    { "id": "requirements", "title": "Requirements", "minutes": 2, "goal": "Give the prompt[[tool: , call show_question]], let them scope." },
     { "id": "hld", "title": "Design", "minutes": 4, "goal": "They draw. Ask for one request end to end, then probe one gap.", "uses_whiteboard": true },
     { "id": "probe", "title": "Probe", "minutes": 2, "goal": "Ask what breaks first at ten times the traffic, then close." }
   ],

@@ -540,7 +540,11 @@ fn time_check_after_a_boundary_asks_for_next_phase() {
     let req = build_live_request(&st, "p1", &UserInput::Event(EventKind::TimeCheck), now);
     let note = last_system_note(&req);
     assert!(note.contains("requirements phase is over"), "{note}");
-    assert!(note.contains("next_phase"), "{note}");
+    assert!(note.contains("transition line"), "{note}");
+    assert!(
+        !note.contains("next_phase"),
+        "the live note never names a tool: {note}"
+    );
 
     let late = st.started_at + Duration::from_secs(8 * 60 + 5);
     let note = last_system_note(&build_live_request(
@@ -549,7 +553,8 @@ fn time_check_after_a_boundary_asks_for_next_phase() {
         &UserInput::Event(EventKind::TimeCheck),
         late,
     ));
-    assert!(note.contains("end_round"), "{note}");
+    assert!(note.contains("Close now in one line"), "{note}");
+    assert!(!note.contains("end_round"), "{note}");
 }
 
 // ---------- endpoint ----------
@@ -2508,4 +2513,89 @@ fn the_round_starts_with_the_question_card_on_the_brief() {
         ["100M new links a month", "Reads far outnumber writes"]
     );
     assert!(ir_server::orchestrator::initial_brief(&Value::Null).is_none());
+}
+
+#[test]
+fn the_live_prompt_never_describes_tools_and_the_director_keeps_them() {
+    const TOOLS: [&str; 6] = [
+        "show_question",
+        "next_phase",
+        "point_at",
+        "give_hint",
+        "hand_over",
+        "end_round",
+    ];
+    let content = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../content");
+    let catalog = Catalog::load(&content).expect("content loads");
+    let mut checked = 0;
+    for (id, round) in &catalog.rounds {
+        if round.round_type == "meeting" {
+            continue;
+        }
+        let st = SessionState::new(
+            NewSession {
+                id: format!("s-{id}"),
+                identity_id: "guest-1".into(),
+                mode: Mode::Interview,
+                round_id: id.clone(),
+                settings: SessionSettings {
+                    level: Level::Mid,
+                    style: Style::Neutral,
+                    voice: VoiceKind::Fake,
+                },
+                panel: Vec::new(),
+                question_id: None,
+                meeting: None,
+            },
+            &catalog,
+            live(),
+            Instant::now(),
+        )
+        .expect("state builds");
+        for p in &st.panel {
+            let live_text: String = p.system.iter().map(|b| b.text.as_str()).collect();
+            for t in TOOLS {
+                assert!(
+                    !live_text.contains(t),
+                    "{id} {}: live prompt names {t}",
+                    p.panelist_id
+                );
+            }
+            assert!(!live_text.contains("[[tool:"), "{id}: a marker is left");
+            assert!(
+                p.director_system.contains("end_round") || p.director_system.contains("hand_over"),
+                "{id} {}: the director lost the tool rules",
+                p.panelist_id
+            );
+            assert!(
+                !p.director_system.contains("[[tool:"),
+                "{id}: a marker is left"
+            );
+        }
+        checked += 1;
+    }
+    assert!(checked >= 10, "{checked} rounds checked");
+    // The live request adds only the speak-only note, which names no tool either.
+    for t in TOOLS {
+        assert!(!ir_server::orchestrator::director::SPEAK_ONLY_NOTE.contains(t));
+    }
+    let text = "Open.[[tool:  Call show_question.]] Then stop.\n[[tool: - point_at: pulses an item.]]\nEnd.";
+    assert_eq!(
+        ir_server::orchestrator::prompt::live_view(text),
+        "Open. Then stop.\nEnd."
+    );
+    assert_eq!(
+        ir_server::orchestrator::prompt::director_view(text),
+        "Open. Call show_question. Then stop.\n- point_at: pulses an item.\nEnd."
+    );
+    // A span whose filled placeholder runs over several lines.
+    let text = "Script.\n[[tool: Brief card lines (for show_question): first\nsecond]]\nEnd.";
+    assert_eq!(
+        ir_server::orchestrator::prompt::live_view(text),
+        "Script.\nEnd."
+    );
+    assert_eq!(
+        ir_server::orchestrator::prompt::director_view(text),
+        "Script.\nBrief card lines (for show_question): first\nsecond\nEnd."
+    );
 }
