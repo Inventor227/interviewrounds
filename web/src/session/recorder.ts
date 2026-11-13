@@ -24,6 +24,8 @@ export interface AudioSegment {
   start_ms: number;
   end_ms: number | null;
   mime: string;
+  /** Size of the recorded file. */
+  bytes?: number;
 }
 
 interface LiveSegment extends AudioSegment {
@@ -207,7 +209,14 @@ export class RoundRecorder {
     await Promise.all(this.segments.map((s) => Promise.race([s.done, new Promise<void>((r) => setTimeout(r, 3000))])));
     const zero = this.roundStart ?? 0;
     const shift = (t: number | null) => (t === null ? null : Math.round((t - zero) * 10) / 10);
-    const audio = this.segments.map(({ id, file, start_ms, end_ms, mime }) => ({ id, file, start_ms: shift(start_ms)!, end_ms: shift(end_ms), mime }));
+    const audio = this.segments.map(({ id, file, start_ms, end_ms, mime, chunks }) => ({
+      id,
+      file,
+      start_ms: shift(start_ms)!,
+      end_ms: shift(end_ms),
+      mime,
+      bytes: chunks.reduce((n, c) => n + c.size, 0),
+    }));
     const timeline = {
       format: RECORDING_FORMAT,
       ...this.meta,
@@ -293,6 +302,8 @@ export function recordTransport(rec: RoundRecorder, t: TransportLike): void {
   };
   t.sendEvent = (marker: string) => {
     rec.event('voice.sent', { panelist: id, type: 'marker', text: marker });
+    // The round's clock zero: the start marker (the greeting is asked for now).
+    if (marker === '[event: start]') rec.markRoundStart();
     sendEvent(marker);
   };
 }
@@ -306,6 +317,8 @@ interface ControllerLike {
 /** Controller states, notices and errors; the round's clock zero is its first greeting. */
 export function recordController(rec: RoundRecorder, c: ControllerLike): () => void {
   rec.event('ui.state', { state: c.state });
+  // Attached after the round began (the page mounts late): the first time we see it running is the best zero left.
+  if (c.state === 'greeting' || c.state === 'live') rec.markRoundStart();
   const offs = [
     c.on('state', ((s: string) => {
       if (s === 'greeting' || s === 'live') rec.markRoundStart();
