@@ -58,12 +58,17 @@ async function request<T>(method: string, path: string, body?: Body): Promise<T>
 
   const text = await res.text();
   let data: unknown = undefined;
+  let parsed = true;
   if (text) {
     try {
       data = JSON.parse(text);
     } catch {
-      data = undefined;
+      parsed = false;
     }
+  }
+  if (res.ok && !parsed) {
+    // e.g. an HTML fallback page for a mistyped /api path: fail here, not later in a caller.
+    throw new ApiError(res.status, 'bad_response', `Expected JSON from ${method} ${path}`);
   }
 
   if (!res.ok) {

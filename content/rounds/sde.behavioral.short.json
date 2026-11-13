@@ -1,0 +1,36 @@
+{
+  "id": "sde.behavioral.short",
+  "title": "Behavioral",
+  "summary": "One real story from your work, a few sharp follow ups, and what you learned.",
+  "role": "sde",
+  "round_type": "behavioral",
+  "length": "short",
+  "target_minutes": 6,
+  "hard_stop_minutes": 7,
+  "silence_wait_seconds": 20,
+  "interrupt_after_seconds": 180,
+  "panel": {
+    "lead": "persona.sam",
+    "second": null,
+    "second_enters_phase": null
+  },
+  "phases": [
+    {
+      "id": "story",
+      "title": "Story",
+      "minutes": 5,
+      "goal": "Introduce yourself in one line and ask the card's question. Two or three probes on what they did, the stakes, and the result."
+    },
+    {
+      "id": "lesson",
+      "title": "Lesson",
+      "minutes": 1,
+      "goal": "Ask what they took away or would do differently. Close and call end_round."
+    }
+  ],
+  "rubric_id": "rubric.behavioral",
+  "question_pool": "bank.behavioral",
+  "hands": "none",
+  "board_kit": null,
+  "full_version": "sde.behavioral.full"
+}

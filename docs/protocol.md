@@ -35,7 +35,35 @@ JSON; cookie `ir_id` identifies the device/user; all under same origin.
 
 ## WebSocket
 
-`/ws/session/{id}`: envelope `{"t": type, "seq": n, "d": {...}}`, server acks with `seq`; ping every 20 s.
+`/ws/session/{id}`: envelope `{"t": type, "seq": n, "d": {...}}`, server acks with an `ack` field (rules below); ping every 20 s.
+
+Sequencing and acks:
+
+- `hello` and `ping` frames use `seq: 0`. Every other client frame carries its own `seq`, increasing from 1.
+- Client `seq` and the server's record of processed client frames are kept **per `client_token`**, not per session. A
+  reconnect with the same token continues the count. `POST /api/sessions/{id}/resume` issues a new `client_token`, and
+  a reloaded page opens a new socket under it that counts from 1 again; the server starts a fresh record for that token,
+  so those frames are never mistaken for duplicates.
+- Any server frame may carry `ack: n`: the highest client `seq` the server has processed for this connection's
+  `client_token`. The client drops every queued frame with `seq <= n`.
+- Server frames with `seq > 0` are numbered from 1 per session and buffered on the server. `hello {client_token,
+  last_seq}` gives the highest server `seq` the client has seen; the server replays every buffered frame after it.
+  Server frames with `seq: 0` (such as `pong`) are not buffered or replayed. Server `seq` stays per session across
+  tokens: a client that kept its state sends the highest `seq` it saw; a reloaded page has none, sends `last_seq: 0`, and
+  gets the whole buffer replayed, which is intended (it rebuilds its view from the replay).
+- Only reliable frames are queued for replay: `board.op`, `board.ghost_reject`, `transcript.mark`, `ui.event`. After a
+  reconnect the client sends `hello` first, then replays its unacked reliable frames with their original `seq`. It keeps
+  at most 1000; if it has to evict one, it reports it to the app instead of dropping it silently.
+- `head.samples` and `voice.state` are telemetry: sent only while the socket is open, never queued or replayed. They
+  still take the next `seq`, so `seq` only grows in send order.
+- Close codes. A server close with `1000` or `4001`-`4999` is final and the client does not reconnect: `4401` the
+  `client_token` is unknown or expired, `4404` no such session, `4409` the session has ended (also sent after
+  `round.ended`). Any other close (`1001`, `1006`, `1011`, `1012`, ...) is transient: the client reconnects with backoff
+  0.5, 1, 2, 4 s (then every 4 s), and resets the backoff only after a frame arrives on the new connection. `4000` is the
+  client's own close when no frame arrived for a whole ping interval (20 s).
+- Duplicates are ignored by `seq`: the server skips a client frame whose `seq` it already processed for that
+  `client_token`, and the client skips a server frame with `seq > 0` whose `seq` is not above the highest it has seen
+  (frames with `seq: 0` are never treated as duplicates).
 
 - Client → server: `hello {client_token, last_seq}` (first frame), `board.op {op_id, rev_base, src, op, args, at_ms}`,
   `transcript.mark {segment_id, panelist_id, first_at_ms, final_at_ms, text}`, `head.samples {samples:[{t_ms, yaw, pitch,
@@ -119,12 +147,15 @@ the same rules, pinned by `content/fixtures/board-ops/*.json`.
 
 1. **Duplicate**: if `op_id` is already in `board.op_ids`, nothing changes (no rev change, no error). Replays after a
    reconnect are safe.
-2. **Reject**: if the args do not match the schema, or the rules below reject the op, nothing changes: `rev` and `op_ids`
-   stay as they were. The only exception: a pending ghost with the same `op_id` is dropped (a ghost that cannot be applied
-   is never retried). The server logs the op with `accepted: false` (schema-invalid args and unknown op names included;
-   an op without a usable `op_id` or `src` is answered but not logged) and answers
-   `error {code: "op_rejected", message, op_id}`. The Rust apply returns `Err`; the TypeScript `applyOp` returns the board
-   unchanged.
+2. **Reject**: if the args do not match the schema, or the rules below reject the op, `rev`, `op_ids`, items, edges,
+   `code`, `meeting` and `focus` stay as they were. One thing does change: a pending ghost with the same `op_id` is
+   removed, so a ghost that cannot be applied is never retried.
+   - TypeScript: `applyOp` returns the board unchanged except that the ghost with that `op_id` (if any) is removed.
+   - Rust: `board::apply` returns `Err` and leaves the board unchanged; the session then removes the ghost with that
+     `op_id` itself.
+   - Server: logs the op with `accepted: false` (schema-invalid args and unknown op names included; an op without a
+     usable `op_id` or `src` is answered but not logged), answers `error {code: "op_rejected", message, op_id}`, and,
+     if a ghost was removed, sends the new `board.ghosts` list, so no client re-sends that ghost.
 3. **Commit**: apply the effect, then `rev += 1`, append `op_id` to `op_ids`, and remove the ghost with the same `op_id`
    if there is one. The server answers the sender with `board.ack {op_id, rev}` and sends `board.apply` to other clients.
 4. `rev_base` is informational: ops are applied in arrival order whatever their `rev_base`.

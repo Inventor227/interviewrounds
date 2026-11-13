@@ -1,0 +1,70 @@
+{
+  "id": "sde.system_design.full",
+  "title": "System design",
+  "summary": "Design a real service on the sheet while two engineers probe your numbers, choices and failure plans.",
+  "role": "sde",
+  "round_type": "system_design",
+  "length": "full",
+  "target_minutes": 30,
+  "hard_stop_minutes": 33,
+  "silence_wait_seconds": 45,
+  "interrupt_after_seconds": 120,
+  "panel": {
+    "lead": "persona.daniel",
+    "second": "persona.ana",
+    "second_enters_phase": "deep_dive"
+  },
+  "phases": [
+    {
+      "id": "intro",
+      "title": "Intro",
+      "minutes": 1,
+      "goal": "Introduce yourself, mention the second interviewer joins later, and give the format in under twenty seconds."
+    },
+    {
+      "id": "requirements",
+      "title": "Requirements",
+      "minutes": 5,
+      "goal": "Give the prompt and call show_question. Let them scope. Answer with exact numbers from the facts and add each to the brief. Push once for non functional needs if missing.",
+      "must_cover": [
+        "functional",
+        "non_functional",
+        "scale"
+      ]
+    },
+    {
+      "id": "api",
+      "title": "API",
+      "minutes": 4,
+      "goal": "Ask for the main calls and core entities. Accept rough signatures. Keep it short."
+    },
+    {
+      "id": "hld",
+      "title": "Design",
+      "minutes": 10,
+      "goal": "They draw. Ask for one request end to end. Then probe gaps on the board one at a time, by label, with point_at: a missing store, an unexplained arrow, a component they named but never drew.",
+      "uses_whiteboard": true
+    },
+    {
+      "id": "deep_dive",
+      "title": "Deep dive",
+      "minutes": 8,
+      "goal": "Failure modes and trade-offs: a node or region dies, a hot key, a slow dependency, retries that duplicate work. One failure at a time, built on their own design. The lead opens the phase (senior and above: 'Where would you go deeper?'); the second interviewer takes over only after the candidate has answered.",
+      "must_cover": [
+        "failure_mode",
+        "trade_off"
+      ]
+    },
+    {
+      "id": "wrap",
+      "title": "Wrap up",
+      "minutes": 2,
+      "goal": "Ask what they would change with another week, then take one question. Close in one line and call end_round."
+    }
+  ],
+  "rubric_id": "rubric.system_design",
+  "question_pool": "bank.system_design",
+  "hands": "whiteboard",
+  "board_kit": "hld",
+  "short_version": "sde.system_design.short"
+}

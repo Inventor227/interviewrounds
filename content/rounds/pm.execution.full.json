@@ -1,0 +1,68 @@
+{
+  "id": "pm.execution.full",
+  "title": "Metrics and execution",
+  "summary": "Define success for a feature, diagnose a metric drop with a data scientist, then make a hard ship call.",
+  "role": "pm",
+  "round_type": "pm_execution",
+  "length": "full",
+  "target_minutes": 25,
+  "hard_stop_minutes": 28,
+  "silence_wait_seconds": 30,
+  "interrupt_after_seconds": 120,
+  "panel": {
+    "lead": "persona.priya",
+    "second": "persona.leo",
+    "second_enters_phase": "diagnosis"
+  },
+  "phases": [
+    {
+      "id": "intro",
+      "title": "Intro",
+      "minutes": 1,
+      "goal": "Introduce yourself, mention the data scientist joins for the diagnosis, and give the format in under twenty seconds."
+    },
+    {
+      "id": "success_metrics",
+      "title": "Success",
+      "minutes": 7,
+      "goal": "Give the product context and part one, call show_question. Push for one north star, two supporting metrics, one guardrail, each with a precise definition.",
+      "uses_whiteboard": true,
+      "must_cover": [
+        "north_star",
+        "guardrail"
+      ]
+    },
+    {
+      "id": "diagnosis",
+      "title": "Diagnosis",
+      "minutes": 10,
+      "goal": "The lead gives part two and lets the candidate start; the data scientist takes over after their first answer and never hands them the first step. Probe metric definitions, time window, data quality, internal versus external causes, segment cuts and the funnel step, in a sensible order. Give data exactly when asked and keep it fixed. Ask whether a change could be noise.",
+      "uses_whiteboard": true,
+      "must_cover": [
+        "data_check",
+        "segments",
+        "order_of_checks"
+      ]
+    },
+    {
+      "id": "tradeoff",
+      "title": "Trade-off",
+      "minutes": 6,
+      "goal": "Give part three. Make them decide whether to ship. Probe one assumption: long term effects, who bears the cost, how they would test it.",
+      "must_cover": [
+        "decision"
+      ]
+    },
+    {
+      "id": "wrap",
+      "title": "Wrap up",
+      "minutes": 1,
+      "goal": "Take one question, close and call end_round."
+    }
+  ],
+  "rubric_id": "rubric.pm_execution",
+  "question_pool": "bank.pm_execution",
+  "hands": "stickies",
+  "board_kit": "pm",
+  "short_version": "pm.execution.short"
+}

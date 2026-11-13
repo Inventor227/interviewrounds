@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ClientMsgMap } from '../shared/types';
-import { SessionSocket } from './ws';
+import { SessionSocket, SocketClosedError } from './ws';
 
 /** In-memory stand-in for the browser WebSocket, driven by the test as "the server". */
 class FakeWebSocket {
@@ -32,10 +32,13 @@ class FakeWebSocket {
     this.sent.push(data);
   }
 
-  close(): void {
+  closedWith: number | null = null;
+
+  close(code = 1000): void {
     if (this.readyState === FakeWebSocket.CLOSED) return;
     this.readyState = FakeWebSocket.CLOSED;
-    this.onclose?.({ code: 1000 } as CloseEvent);
+    this.closedWith = code;
+    this.onclose?.({ code, reason: '' } as CloseEvent);
   }
 
   // ----- server side controls -----
@@ -49,8 +52,12 @@ class FakeWebSocket {
   }
 
   serverDrop(): void {
+    this.serverClose(1006);
+  }
+
+  serverClose(code: number, reason = ''): void {
     this.readyState = FakeWebSocket.CLOSED;
-    this.onclose?.({ code: 1006 } as CloseEvent);
+    this.onclose?.({ code, reason } as CloseEvent);
   }
 
   frames(): { t: string; seq: number; d: Record<string, unknown> }[] {
@@ -176,12 +183,144 @@ describe('SessionSocket', () => {
       await vi.advanceTimersByTimeAsync(1);
       expect(FakeWebSocket.instances.length).toBe(before + 1);
     }
-    // A successful open resets the backoff.
-    FakeWebSocket.last().serverOpen();
-    FakeWebSocket.last().serverDrop();
+    // A connection that delivers a frame resets the backoff.
+    const ws = FakeWebSocket.last();
+    ws.serverOpen();
+    ws.serverSend({ t: 'pong', seq: 0, d: {} });
+    ws.serverDrop();
     const before = FakeWebSocket.instances.length;
     await vi.advanceTimersByTimeAsync(500);
     expect(FakeWebSocket.instances.length).toBe(before + 1);
+    sock.close();
+  });
+
+  it('accept_then_drop_keeps_backing_off', async () => {
+    const sock = makeSocket();
+    sock.connect().catch(() => {});
+    for (const wait of [500, 1000, 2000, 4000]) {
+      // The server accepts the upgrade, says nothing, and drops us.
+      FakeWebSocket.last().serverOpen();
+      FakeWebSocket.last().serverDrop();
+      const before = FakeWebSocket.instances.length;
+      await vi.advanceTimersByTimeAsync(wait - 1);
+      expect(FakeWebSocket.instances.length).toBe(before);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(FakeWebSocket.instances.length).toBe(before + 1);
+    }
+    sock.close();
+  });
+
+  it.each([4401, 4404, 4409, 1000])('terminal_close_%i_stops_for_good', async (code) => {
+    const sock = makeSocket();
+    const statuses: string[] = [];
+    const terminal: unknown[] = [];
+    sock.onStatus((s) => statuses.push(s));
+    sock.onTerminal((info) => terminal.push(info));
+    const connected = sock.connect();
+    FakeWebSocket.last().serverOpen();
+    await connected;
+    FakeWebSocket.last().serverClose(code, 'nope');
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    expect(sock.state).toBe('closed');
+    expect(statuses.at(-1)).toBe('closed');
+    expect(terminal).toEqual([{ code, reason: 'nope' }]);
+    expect(sock.closeInfo).toEqual({ code, reason: 'nope' });
+    await expect(sock.connect()).rejects.toBeInstanceOf(SocketClosedError);
+    expect(sock.send('ui.event', { kind: 'pause' })).toBe(false);
+  });
+
+  it('terminal_close_before_first_open_rejects_connect', async () => {
+    const sock = makeSocket();
+    const connected = sock.connect();
+    FakeWebSocket.last().serverClose(4401, 'bad token');
+    await expect(connected).rejects.toMatchObject({ info: { code: 4401, reason: 'bad token' } });
+  });
+
+  it('transient_close_codes_reconnect', async () => {
+    const sock = makeSocket();
+    sock.connect().catch(() => {});
+    FakeWebSocket.last().serverClose(1012); // service restart
+    await vi.advanceTimersByTimeAsync(500);
+    expect(FakeWebSocket.instances).toHaveLength(2);
+    expect(sock.state).toBe('reconnecting');
+    sock.close();
+  });
+
+  it('telemetry_is_dropped_while_down_and_never_replayed', async () => {
+    const sock = makeSocket();
+    const connected = sock.connect();
+    FakeWebSocket.last().serverOpen();
+    await connected;
+    const ws1 = FakeWebSocket.last();
+    expect(sock.send('head.samples', { samples: [] })).toBe(true);
+    expect(ws1.frames().map((f) => f.t)).toEqual(['hello', 'head.samples']);
+    ws1.serverDrop();
+    expect(sock.send('head.samples', { samples: [] })).toBe(false);
+    expect(sock.send('voice.state', { panelist_id: 'p1', mode: 'listening', at_ms: 1 })).toBe(false);
+    expect(sock.send('ui.event', { kind: 'pause' })).toBe(true);
+    expect(sock.pending).toBe(1);
+    await vi.advanceTimersByTimeAsync(500);
+    FakeWebSocket.last().serverOpen();
+    expect(FakeWebSocket.last().frames().map((f) => f.t)).toEqual(['hello', 'ui.event']);
+    sock.close();
+  });
+
+  it('full_queue_reports_evicted_reliable_messages', async () => {
+    const sock = new SessionSocket('wss://example.test/ws/session/s1', 'tok-1', {
+      WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket,
+      maxQueue: 2,
+    });
+    const dropped: unknown[] = [];
+    sock.onDropped((env) => dropped.push(env.d));
+    sock.connect().catch(() => {});
+    sock.send('ui.event', { kind: 'pause' });
+    sock.send('ui.event', { kind: 'resume' });
+    sock.send('ui.event', { kind: 'end' });
+    expect(dropped).toEqual([{ kind: 'pause' }]);
+    expect(sock.pending).toBe(2);
+    sock.close();
+  });
+
+  it('dead_link_reconnects_after_a_silent_ping_interval', async () => {
+    const sock = makeSocket();
+    const connected = sock.connect();
+    const ws1 = FakeWebSocket.last();
+    ws1.serverOpen();
+    await connected;
+    await vi.advanceTimersByTimeAsync(20_000); // ping sent, nothing comes back
+    expect(ws1.frames().filter((f) => f.t === 'ping')).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(20_000); // still silent: link is dead
+    expect(ws1.closedWith).toBe(4000);
+    expect(sock.state).toBe('reconnecting');
+    await vi.advanceTimersByTimeAsync(500);
+    expect(FakeWebSocket.instances).toHaveLength(2);
+    sock.close();
+  });
+
+  it('connect_twice_returns_the_same_promise', async () => {
+    const sock = makeSocket();
+    const a = sock.connect();
+    const b = sock.connect();
+    expect(b).toBe(a);
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    FakeWebSocket.last().serverOpen();
+    await expect(Promise.all([a, b])).resolves.toBeDefined();
+    sock.close();
+  });
+
+  it('ignores_frames_from_a_replaced_socket', async () => {
+    const sock = makeSocket();
+    const got: number[] = [];
+    sock.on('round.state', (d) => got.push(d.elapsed_s));
+    sock.connect().catch(() => {});
+    const ws1 = FakeWebSocket.last();
+    ws1.serverOpen();
+    ws1.serverDrop();
+    await vi.advanceTimersByTimeAsync(500);
+    FakeWebSocket.last().serverOpen();
+    ws1.serverSend({ t: 'round.state', seq: 5, d: roundState }); // late frame on the old socket
+    expect(got).toEqual([]);
     sock.close();
   });
 

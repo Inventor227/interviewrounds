@@ -1,0 +1,216 @@
+{
+  "id": "bank.pm_product_sense",
+  "round_type": "pm_product_sense",
+  "title": "Product sense prompts",
+  "cards": [
+    {
+      "id": "pm_product_sense.first_renters",
+      "round_type": "pm_product_sense",
+      "title": "First time renters",
+      "levels": [
+        "junior",
+        "mid",
+        "senior",
+        "staff"
+      ],
+      "lengths": [
+        "short",
+        "full"
+      ],
+      "prompt": "Design a product that helps people renting their first apartment in a big city.",
+      "brief_lines": [
+        "Users: first time renters in a big city",
+        "Goal: help them rent their first place"
+      ],
+      "facts_if_asked": [
+        "You're a new team with no existing product.",
+        "The company's goal is to build trust with young adults who'll later buy other financial products.",
+        "Launch in one city first.",
+        "No constraint on platform."
+      ],
+      "follow_ups": [
+        "Who exactly is a first time renter?",
+        "Why that group first?",
+        "How would you know the problem is real?",
+        "What's the smallest version you'd build?",
+        "What would make you stop?"
+      ],
+      "twist": "A year later the product works in one city. What does version two look like, and what would you not build?",
+      "strong_answer_covers": [
+        "Segments such as students, relocating workers, people moving out of family homes; picks one with a reason",
+        "Real pains: deposits, scams, unknown neighbourhoods, credit history, paperwork",
+        "Prioritises pains by severity and frequency",
+        "A first version such as verified listings plus deposit protection, scoped to weeks",
+        "Success metric such as leases signed through the product, scam reports as a guardrail",
+        "Trust as the core risk, with a mitigation"
+      ],
+      "red_flags": []
+    },
+    {
+      "id": "pm_product_sense.library_teens",
+      "round_type": "pm_product_sense",
+      "title": "Library app for teens",
+      "levels": [
+        "junior",
+        "mid",
+        "senior",
+        "staff"
+      ],
+      "lengths": [
+        "short",
+        "full"
+      ],
+      "prompt": "Improve a public library's app for teenagers.",
+      "brief_lines": [
+        "Users: teenagers, 13 to 18",
+        "Product: a city library's app",
+        "Goal: more teens using the library"
+      ],
+      "facts_if_asked": [
+        "The current app is a catalogue search with accounts; teens rarely use it.",
+        "The library has study rooms, events, a makerspace and free wifi.",
+        "A small team: two engineers and a designer for six months."
+      ],
+      "follow_ups": [
+        "Why don't teens use the app today?",
+        "Which teens?",
+        "What would they open it for, once a week?",
+        "How would you measure success?"
+      ],
+      "twist": "The library's budget is cut and you can keep only one feature. Which, and why?",
+      "strong_answer_covers": [
+        "Understands why teens don't use it, beyond the catalogue",
+        "Ideas beyond books: study room booking, events, social reading, homework help",
+        "Picks one with reach and effort reasoning",
+        "Respects privacy and safety for minors",
+        "Metric such as weekly active teen members, with a guardrail"
+      ],
+      "red_flags": []
+    },
+    {
+      "id": "pm_product_sense.museum_glasses",
+      "round_type": "pm_product_sense",
+      "title": "Museum smart glasses",
+      "levels": [
+        "mid",
+        "senior",
+        "staff"
+      ],
+      "lengths": [
+        "short",
+        "full"
+      ],
+      "prompt": "Design an experience for museum visitors wearing smart glasses.",
+      "brief_lines": [
+        "Users: museum visitors",
+        "Device: smart glasses with a camera, display and audio",
+        "Goal: a better visit"
+      ],
+      "facts_if_asked": [
+        "Glasses can see what the wearer looks at and show short text or play audio.",
+        "The museum is large and has visitors from many countries.",
+        "Battery lasts about three hours.",
+        "The museum wants more repeat visits and more members."
+      ],
+      "follow_ups": [
+        "Which visitors, exactly?",
+        "What's different about using glasses versus a phone here?",
+        "What about other visitors being filmed?",
+        "What would you test first?"
+      ],
+      "twist": "Visitors love it, but the museum says crowds now stand still for too long in popular rooms. What do you change?",
+      "strong_answer_covers": [
+        "Segments: tourists, families, people with visual or hearing needs, regulars",
+        "Context of use: hands free, short attention, walking",
+        "Privacy of other visitors",
+        "First version such as look to learn labels in the visitor's language",
+        "Metric tied to the museum's goal, such as membership sign ups, with crowding or dwell time as a guardrail",
+        "Designs for glasses, not a phone app moved onto them"
+      ],
+      "red_flags": []
+    },
+    {
+      "id": "pm_product_sense.grocery_ai",
+      "round_type": "pm_product_sense",
+      "title": "AI in a grocery app",
+      "levels": [
+        "junior",
+        "mid",
+        "senior",
+        "staff"
+      ],
+      "lengths": [
+        "short",
+        "full"
+      ],
+      "prompt": "Build a feature for a grocery delivery app that uses AI.",
+      "brief_lines": [
+        "Product: a grocery delivery app",
+        "Ask: a feature that uses AI",
+        "You decide who it's for"
+      ],
+      "facts_if_asked": [
+        "The app has five million monthly users, most ordering weekly.",
+        "Average basket is about seventy dollars.",
+        "The company wants larger baskets and more weekly orders.",
+        "The app knows past orders, but not what's in the fridge."
+      ],
+      "follow_ups": [
+        "What user problem does this solve?",
+        "Why does it need AI?",
+        "What happens when the AI gets it wrong?",
+        "How would users come to trust it?"
+      ],
+      "twist": "Your feature swaps an out of stock item and a customer gets the wrong thing for an allergy. What do you change?",
+      "strong_answer_covers": [
+        "Starts from a user problem such as weekly meal planning, budget or substitutions, not from AI",
+        "Picks a segment with a reason",
+        "A first version with a clear role for AI",
+        "Risks: wrong substitutions, allergies, trust, with guardrails",
+        "Metric such as weekly order rate or basket size, with complaint or refund rate as a guardrail"
+      ],
+      "red_flags": []
+    },
+    {
+      "id": "pm_product_sense.restaurant_waste",
+      "round_type": "pm_product_sense",
+      "title": "Less food waste for small restaurants",
+      "levels": [
+        "mid",
+        "senior",
+        "staff"
+      ],
+      "lengths": [
+        "short",
+        "full"
+      ],
+      "prompt": "Design a product that helps small, independent restaurants waste less food.",
+      "brief_lines": [
+        "Users: small independent restaurants",
+        "Goal: less food waste"
+      ],
+      "facts_if_asked": [
+        "A typical restaurant throws away five to ten percent of what it buys.",
+        "Owners are busy and rarely at a desk.",
+        "Many use a basic point of sale system already.",
+        "Business model is open."
+      ],
+      "follow_ups": [
+        "Who in the restaurant would use it?",
+        "Where does the waste actually happen?",
+        "Why haven't they fixed this already?",
+        "How would you charge for it?"
+      ],
+      "twist": "A large chain wants to buy it. What would have to change, and would you do it?",
+      "strong_answer_covers": [
+        "Knows who the user is: owner, chef, or kitchen manager",
+        "Finds where waste happens: over ordering, prep, spoilage, unsold dishes",
+        "Picks one with a reason",
+        "A low effort first version that fits a busy kitchen",
+        "Metric such as waste as a share of purchases, with time spent per day as a guardrail",
+        "Does not assume busy owners will enter data by hand every day"
+      ],
+      "red_flags": []
+    }
+  ]
+}

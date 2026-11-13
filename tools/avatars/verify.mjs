@@ -1,7 +1,8 @@
 // Check the converted avatars and animation libraries against manifest.json.
 //   node verify.mjs [--dir <avatars dir>] [--manifest <manifest.json>] [--only f01,anims-f]
 // Exit code 0 when every check passes.
-import { readFileSync, statSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { existsSync, readFileSync, statSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { NodeIO, ImageUtils } from '@gltf-transform/core';
@@ -56,6 +57,15 @@ function check(scope, ok, message) {
 const wanted = (id) => only.length === 0 || only.includes(id);
 const file = (url) => join(dir, basename(url));
 const fileSize = (url) => statSync(file(url)).size;
+const sha256 = (url) => createHash('sha256').update(readFileSync(file(url))).digest('hex');
+function checkRecorded(scope, entry, size) {
+  check(scope, entry.bytes === size && entry.sha256 === sha256(entry.glb), 'bytes and sha256 match the manifest');
+}
+
+// The app fetches <dir>/manifest.json; the pipeline keeps tools/avatars/manifest.json. They must be identical.
+const webManifest = join(dir, 'manifest.json');
+const sameManifest = existsSync(webManifest) && readFileSync(webManifest).equals(readFileSync(manifestPath));
+check('manifest', sameManifest, `${webManifest} is byte-identical to ${manifestPath}`);
 
 const avatarNodes = new Map(); // id -> Map(name -> parent name)
 const avatarJoints = new Map();
@@ -66,6 +76,7 @@ for (const av of manifest.avatars) {
   const scope = av.id;
   const size = fileSize(av.glb);
   total += size;
+  checkRecorded(scope, av, size);
   check(scope, size <= MAX_AVATAR_BYTES, `size ${(size / MB).toFixed(2)} MB <= 5 MB`);
 
   const doc = await io.read(file(av.glb));
@@ -118,6 +129,7 @@ for (const lib of manifest.anim_libraries) {
   const scope = lib.id;
   const size = fileSize(lib.glb);
   total += size;
+  checkRecorded(scope, lib, size);
   check(scope, size <= MAX_AVATAR_BYTES, `size ${(size / MB).toFixed(2)} MB`);
   const doc = await io.read(file(lib.glb));
   const root = doc.getRoot();
