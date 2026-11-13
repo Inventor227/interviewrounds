@@ -86,9 +86,8 @@ JSON; cookie `ir_id` identifies the device/user; all under same origin. A new gu
   caller's.
   `POST /api/shares` is an upsert per session: a session has at most one live public link. A POST with the same
   `include_transcript` as the live link returns that link; one with a different value revokes it and makes a new one.
-  A new POST for a
-  session that already has one replaces it (the old slug stops working). The web app still deletes the old slug
-  before posting a change, so either side alone keeps a single live link.
+  The web app still deletes the old slug before posting a change, so either side alone keeps a single live link.
+  With the `X-Dev-Key` header, DELETE takes down any link (operator clean-up after smoke runs).
 - `GET /s/{slug}` server-rendered scorecard, public (no cookie needed), no script: round title, date, verdict and
   confidence (meetings: the outcome), competency bars (score of 4 and a one-line rationale), top 3 strengths, top 3
   things to work on, the weakest moment's question, next drills, and the transcript (with evidence quotes) only when
