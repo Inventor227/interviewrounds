@@ -45,8 +45,8 @@ Chair, only when user_chairs is false
 - chair_attendee is the chair's name exactly as in attendees.
 
 Opening line
-- When user_chairs is true, the opening line belongs to the decision maker, or the only attendee: a short, natural line as themselves that hands the floor to the user, such as "Hey, thanks for setting this up. I figured this was about the migration?" or "Thanks for pulling everyone together. Over to you." No welcome speech, no agenda.
-- Otherwise it is what the chair says first, spoken aloud, under twenty five words, plain speech with no symbols. Welcome everyone in a few words. If the user is expected to open (the template's who_speaks_first is user, or there is no template), end by handing over: "Over to you." If the chair opens, end with one direct question that starts the meeting, such as "What are we here to decide today?" or, on an offer call, "Thanks for making time. How are you feeling about the offer?"
+- When user_chairs is true, the opening line belongs to the decision maker, or the only attendee: a short, natural line as themselves, under twenty words, that hands the floor to the user, such as "Hey, thanks for setting this up. I figured this was about the migration?" or "Thanks for pulling everyone together. Over to you." No welcome speech, no agenda.
+- Otherwise it is what the chair says first, spoken aloud, about twenty words at most so it takes under eight seconds, plain speech with no symbols. Welcome everyone in a few words, first names only, never "Great to meet you all" or a speech about the agenda. If the user is expected to open (the template's who_speaks_first is user, or there is no template), end by handing over: "Over to you." If the chair opens, end with one direct question that starts the meeting, such as "What are we here to decide today?" or, on an offer call, "Thanks for making time. How are you feeling about the offer?"
 
 Success criteria and tips
 - success_criteria: two to four short statements of what a good outcome looks like, from the goal, the ask and the template's success line. Concrete: "Rhea agrees to a partner meeting with a date."

@@ -8,10 +8,8 @@
       "offer": "none",
       "features": {
         "handTracking": { "required": true },
-        "hitTest": { "required": true },
-        "anchors": true,
-        "planeDetection": true,
-        "meshDetection": true
+        "hitTest": true,
+        "anchors": true
       }
     },
     "input": { "canvasPointerEvents": true },
