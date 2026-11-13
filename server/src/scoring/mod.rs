@@ -1,3 +1,4 @@
-//! Scoring a finished session: delivery metrics and the report.
+//! Scoring a finished session: delivery metrics, the verdict and the report.
 
 pub mod metrics;
+pub mod verdict;
