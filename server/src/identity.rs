@@ -111,7 +111,12 @@ fn identity(row: Row) -> Identity {
 
 /// Finds the caller's identity from the `ir_id` cookie, following a claim into a signed-in user. Without a
 /// known cookie a new guest is created with a fresh random cookie (never one the client chose).
-pub async fn resolve(headers: &HeaderMap, db: &PgPool) -> Result<Resolved, sqlx::Error> {
+/// With `create: false` an unknown caller gets `Ok(None)` instead of a new guest.
+pub async fn resolve(
+    headers: &HeaderMap,
+    db: &PgPool,
+    create: bool,
+) -> Result<Option<Resolved>, sqlx::Error> {
     if let Some(value) = cookie_value(headers) {
         let found: Option<Row> = sqlx::query_as(
             "select id, kind, name, email, onboarding_done, claimed_into from identities where cookie_hash = $1",
@@ -133,11 +138,14 @@ pub async fn resolve(headers: &HeaderMap, db: &PgPool) -> Result<Resolved, sqlx:
             .bind(row.0)
             .execute(db)
             .await?;
-            return Ok(Resolved {
+            return Ok(Some(Resolved {
                 identity: identity(row),
                 set_cookie: None,
-            });
+            }));
         }
+    }
+    if !create {
+        return Ok(None);
     }
     let value = random_hex(16);
     let id: Uuid = sqlx::query_scalar(
@@ -146,7 +154,7 @@ pub async fn resolve(headers: &HeaderMap, db: &PgPool) -> Result<Resolved, sqlx:
     .bind(sha256(&value))
     .fetch_one(db)
     .await?;
-    Ok(Resolved {
+    Ok(Some(Resolved {
         identity: Identity {
             id,
             kind: IdentityKind::Guest,
@@ -155,14 +163,21 @@ pub async fn resolve(headers: &HeaderMap, db: &PgPool) -> Result<Resolved, sqlx:
             onboarding_done: false,
         },
         set_cookie: Some(set_cookie_header(&value)),
-    })
+    }))
 }
 
 /// Middleware for routes that need an identity: puts `Identity` in the request extensions and sets the cookie
 /// on the response when a guest was just created.
+/// A new guest is made only where a first visit lands (`GET /api/me`, `POST /api/sessions`); elsewhere an
+/// unknown caller gets 401 (it cannot own anything there anyway).
 pub async fn require(State(app): State<AppState>, mut req: Request, next: Next) -> Response {
-    let resolved = match resolve(req.headers(), &app.db).await {
-        Ok(r) => r,
+    let create = matches!(
+        (req.method().as_str(), req.uri().path()),
+        ("GET", "/api/me") | ("POST", "/api/sessions")
+    );
+    let resolved = match resolve(req.headers(), &app.db, create).await {
+        Ok(Some(r)) => r,
+        Ok(None) => return AppError::Unauthorized.into_response(),
         Err(err) => return AppError::from(err).into_response(),
     };
     req.extensions_mut().insert(resolved.identity);
