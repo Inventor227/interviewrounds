@@ -2329,3 +2329,123 @@ async fn a_new_utterance_never_overwrites_an_earlier_one() {
         vec!["yes", "that", "works", "then", "the", "cache"]
     );
 }
+
+// ---------- fix round 4: the turn log freezes on its own ----------
+
+#[tokio::test]
+async fn words_before_a_typed_event_are_logged_once_when_fish_resends_it() {
+    let llm = ScriptedLlm::new(vec![
+        reply("Let me pause you there."),
+        reply("Let me stop you there. Why Redis?"),
+    ]);
+    let (app, state) = test_app_with(llm.clone(), |o| o.confirm_speech_turns = true);
+    state
+        .registry
+        .insert(new_state("s1", "sde.system_design.short", VoiceKind::Fish));
+    // The app sends the event while the candidate talks; the draft reply is never played.
+    post_chat(
+        &app,
+        SECRET,
+        chat_body(
+            "s1",
+            "p1",
+            json!([
+                {"role": "user", "content": "So the cache holds every seat"},
+                {"role": "user", "content": "[event: long_answer]"}
+            ]),
+        ),
+    )
+    .await;
+    // Fish resends the event with more of the same answer.
+    post_chat(
+        &app,
+        SECRET,
+        chat_body(
+            "s1",
+            "p1",
+            json!([
+                {"role": "user", "content": "So the cache holds every seat and expires them."},
+                {"role": "user", "content": "[event: long_answer]"}
+            ]),
+        ),
+    )
+    .await;
+
+    let st = state.registry.get("s1").unwrap();
+    let st = st.lock().await;
+    let expected: Vec<String> = "so the cache holds every seat and expires them"
+        .split(' ')
+        .map(str::to_string)
+        .collect();
+    let (history, turns) = candidate_words(&st);
+    assert_eq!(history, expected, "history: {:?}", user_texts(&st.history));
+    assert_eq!(turns, expected, "turns: {:?}", st.turns);
+    let app_lines = st.turns.iter().filter(|t| t.speaker == "app").count();
+    assert_eq!(app_lines, 1, "turns: {:?}", st.turns);
+}
+
+#[tokio::test]
+async fn words_stay_in_the_turn_log_when_another_panelists_reply_is_committed_late() {
+    let llm = ScriptedLlm::new(vec![
+        reply("Okay. Why sections?"),
+        reply("Thanks, Ana. I'll take it from here."),
+        reply("Mm-hm."),
+        reply("Got it."),
+    ]);
+    let (app, state) = test_app_with(llm.clone(), |o| o.confirm_speech_turns = true);
+    state
+        .registry
+        .insert(new_state("s1", "sde.system_design.full", VoiceKind::Fish));
+    let send = |panelist: &'static str, messages: Value| {
+        let app = app.clone();
+        async move {
+            post_chat(&app, SECRET, chat_body("s1", panelist, messages)).await;
+        }
+    };
+
+    // Ana (p2) answers the candidate; her reply waits for playback.
+    send("p2", json!([{"role": "user", "content": "Hello there."}])).await;
+    tokio::time::sleep(Duration::from_millis(30)).await;
+    // Daniel (p1) takes over, and the candidate starts an answer to him.
+    send(
+        "p1",
+        json!([{"role": "user", "content": "[event: handover]"}]),
+    )
+    .await;
+    tokio::time::sleep(Duration::from_millis(30)).await;
+    send(
+        "p1",
+        json!([{"role": "user", "content": "I'd shard by section."}]),
+    )
+    .await;
+    // Ana's playback report arrives late: her reply goes into the turn log at the time she spoke, before the
+    // candidate's current line, and into the history after the candidate's current message.
+    state
+        .registry
+        .get("s1")
+        .unwrap()
+        .lock()
+        .await
+        .confirm_spoken("p2", "Okay. Why sections?");
+    // Daniel's draft was not played; Fish resends the answer with more words.
+    send(
+        "p1",
+        json!([{"role": "user", "content": "I'd shard by section. Because load spreads."}]),
+    )
+    .await;
+
+    let st = state.registry.get("s1").unwrap();
+    let st = st.lock().await;
+    let expected: Vec<String> = "hello there i'd shard by section because load spreads"
+        .split(' ')
+        .map(str::to_string)
+        .collect();
+    let (history, turns) = candidate_words(&st);
+    assert_eq!(history, expected, "history: {:?}", user_texts(&st.history));
+    assert_eq!(turns, expected, "turns: {:?}", st.turns);
+    assert!(
+        st.turns
+            .iter()
+            .any(|t| t.speaker == "p2" && t.text == "Okay. Why sections?")
+    );
+}
