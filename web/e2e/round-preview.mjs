@@ -12,8 +12,13 @@ const L = await import('./round-lib.mjs');
 const { answer, board, click, fail, go, page, play, recordRound, roughBox, roundState, save, setupTab, sleep, stage, until, waitState } = L;
 
 const shot = async (name) => {
-  await L.screenshot(name);
-  stage(`shot ${name}`);
+  // A capture can fail in the headless browser without anything being wrong with the page: note it and go on.
+  try {
+    await L.screenshot(name);
+    stage(`shot ${name}`);
+  } catch (e) {
+    stage(`shot ${name} failed`, String(e.message ?? e).slice(0, 200));
+  }
 };
 const scrollTo = (sel) => page((s) => (document.querySelector(s)?.scrollIntoView({ block: 'start' }), true), sel);
 
