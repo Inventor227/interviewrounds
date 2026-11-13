@@ -20,7 +20,7 @@ import {
   type ReadonlySignal,
   type WorldOptions,
 } from '@iwsdk/core';
-import { ACESFilmicToneMapping, Matrix4, Quaternion, Vector3, type Object3D, type Scene } from 'three';
+import { ACESFilmicToneMapping, Matrix4, Quaternion, Vector3, type Mesh, type Object3D, type Scene } from 'three';
 import { yawPitchFromQuat } from './math';
 import { DeskPlacement, type DeskPose, type HandState, type HeadPose } from './placement';
 import { PlacementView } from './placementView';
@@ -242,6 +242,7 @@ export async function createXRApp(root: HTMLElement, opts: XRAppOptions): Promis
 
   const build = (desk: DeskPose) => {
     const seats = room.place(desk, seatsN);
+    if (mode === 'preview') room.addFloorShadows(0);
     if (mode === 'preview') ui.layoutDesk(desk, ['roundBar', 'brief', 'captions']);
     else ui.layoutDesk(desk);
     for (const [i, s] of standins.entries()) {
@@ -308,13 +309,20 @@ export async function createXRApp(root: HTMLElement, opts: XRAppOptions): Promis
     ui.layoutHud(w / h, camera.fov);
   };
   const buildPreview = () => {
-    previewGroup?.removeFromParent();
+    if (previewGroup) {
+      previewGroup.removeFromParent();
+      previewGroup.traverse((o) => {
+        const m = o as Mesh;
+        if (!m.isMesh) return;
+        m.geometry.dispose();
+        for (const mat of Array.isArray(m.material) ? m.material : [m.material]) mat.dispose();
+      });
+    }
     const seats = room.seatPoses();
     const pr = buildPreviewRoom(PREVIEW_DESK, seatsN, seats);
     previewGroup = pr.group;
     world.activeLevel.value.object3D!.add(pr.group);
     previewRest = pr.rest;
-    room.addFloorShadows(0);
   };
 
   let resizeObs: ResizeObserver | null = null;
