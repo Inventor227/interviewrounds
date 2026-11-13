@@ -448,11 +448,13 @@ export class BoardInput {
     // Ink cannot move; a card released off the sheet goes back where it was.
     if (it.kind === 'ink' || !onSheet(this.board, p.x_cm, p.y_cm)) return;
     const r = itemRect(it);
-    const [x, y] = clampToSheet(this.board, snap(r.x + g.dx), snap(r.y + g.dy), r.w, r.h);
-    // The kit may file it somewhere (a sticky's lane or ladder rung), keyed on where it lands.
-    const placed = this.kit.place?.(it, p.x_cm, p.y_cm, this.board) ?? null;
-    const changed = placed && Object.entries(placed).some(([k, v]) => (it as unknown as Record<string, unknown>)[k] !== v);
-    if (x !== r.x || y !== r.y || changed) this.op({ op: 'item.move', args: { id: it.id, x, y, ...(placed ?? {}) } });
+    let [x, y] = clampToSheet(this.board, snap(r.x + g.dx), snap(r.y + g.dy), r.w, r.h);
+    // The kit may file it somewhere (a sticky's lane or ladder rung) and seat it in that slot.
+    const { x: px, y: py, ...filing } = this.kit.place?.(it, p.x_cm, p.y_cm, this.board) ?? {};
+    if (px !== undefined) x = px;
+    if (py !== undefined) y = py;
+    const changed = Object.entries(filing).some(([k, v]) => (it as unknown as Record<string, unknown>)[k] !== v);
+    if (x !== r.x || y !== r.y || changed) this.op({ op: 'item.move', args: { id: it.id, x, y, ...filing } });
     this.focus(it.id);
   }
 

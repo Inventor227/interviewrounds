@@ -22,6 +22,13 @@ import type {
 import type { Hand } from './input';
 import { CARD, COMPONENT_NAMES, SHEET, type Pt, type Rect } from './model';
 
+export interface Placement {
+  lane?: Lane | null;
+  rank?: number | null;
+  x?: number;
+  y?: number;
+}
+
 /** What a tray slot makes. */
 export type TrayMake =
   | { kind: 'component'; type: ComponentType }
@@ -96,8 +103,11 @@ export interface Kit {
   defaultRel?: EdgeRel;
   /** Makes a tray drop: an op (create an item, set a slot), or null when it does not land anywhere. */
   trayDrop?(slot: TraySlot, x: number, y: number, ctx: KitContext): KitOp | null;
-  /** Extra item.move fields for an item dropped at (x, y): a sticky's lane and ladder rung. */
-  place?(item: BoardItem, x: number, y: number, board: Board): { lane?: Lane | null; rank?: number | null } | null;
+  /**
+   * Filing for an item dropped at (x, y): a sticky's lane and ladder rung, and where it should
+   * sit (x, y: its top-left, snapped into its slot).
+   */
+  place?(item: BoardItem, x: number, y: number, board: Board): Placement | null;
   /** The kit's own parts take presses before the board. */
   handler?: KitHandler;
   /** Fixed parts drawn on the sheet under the items (lanes, ladder, agenda, slots, the panel). */

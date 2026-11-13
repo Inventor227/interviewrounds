@@ -67,6 +67,8 @@ describe('PM kit', () => {
     const { adapter, emitted } = setup([sticky('s1', { lane: 'pain', x: 13, y: 10 })]);
     adapter.stroke([[16.5, 13.5], [25, 14], [30, 14]]);
     expect(emitted[0]).toMatchObject({ op: 'item.move', args: { id: 's1', lane: 'idea' } });
+    // Centred in the lane.
+    expect((emitted[0]!.args as { x: number }).x).toBe(24 + 2.5);
   });
 
   it('ladder_reorder_is_one_op', () => {
@@ -80,9 +82,14 @@ describe('PM kit', () => {
     adapter.stroke([[r2.x + 4, r2.y + 3.5], [r2.x + 4, r1.y + 5], [r1.x + 8, r1.y + 3.5]]);
     expect(emitted).toHaveLength(1);
     expect(emitted[0]).toMatchObject({ op: 'item.move', args: { id: 's2', rank: 1 } });
+    // It sits in the rung's free slot (s1 holds the first), not wherever it was let go.
+    const a = emitted[0]!.args as { x: number; y: number };
+    expect(a.y).toBeGreaterThanOrEqual(r1.y);
+    expect(a.y + 7).toBeLessThanOrEqual(r1.y + r1.h);
+    expect(a.x).toBeGreaterThanOrEqual(r1.x + 7);
     expect((store.board.items[1] as StickyItem).rank).toBe(1);
     // Off the ladder into a lane: it leaves the ladder.
-    adapter.stroke([[r1.x + 8, r1.y + 3.5], [30, 20], [20, 20]]);
+    adapter.stroke([[a.x + 3.5, a.y + 3.5], [30, 20], [20, 20]]);
     expect(emitted[1]).toMatchObject({ op: 'item.move', args: { id: 's2', lane: 'pain', rank: null } });
   });
 });

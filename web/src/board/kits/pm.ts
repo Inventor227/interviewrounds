@@ -3,7 +3,7 @@
 // rung it takes that rank, in one item.move (a rung can hold two while you sort them out).
 // Text comes from voice (the Scribe); a box drawn on the sheet becomes a sticky.
 import type { Board, BoardItem, Lane } from '../../shared/types';
-import { HLD_KIT, traySlots, type Kit } from '../kits';
+import { HLD_KIT, traySlots, type Kit, type Placement } from '../kits';
 import { inRect, SHEET, type Rect } from '../model';
 import { ACCENT, font, roundRect, withAlpha } from '../render';
 
@@ -36,14 +36,22 @@ export function rungAt(x: number, y: number): number | null {
   return null;
 }
 
-function place(item: BoardItem, x: number, y: number, _board: Board): { lane?: Lane | null; rank?: number | null } | null {
+const STICKY = 7;
+
+function place(item: BoardItem, x: number, y: number, board: Board): Placement | null {
   if (item.kind !== 'sticky') return null;
   const rung = rungAt(x, y);
-  if (rung) return { rank: rung };
+  if (rung) {
+    // Two slots per rung: the left one unless another sticky already sits there.
+    const r = rungRect(rung);
+    const leftTaken = board.items.some((s) => s.kind === 'sticky' && s.id !== item.id && s.rank === rung && s.x < LADDER.x + STICKY / 2);
+    return { rank: rung, x: LADDER.x + (leftTaken ? 7.6 : 0.4), y: r.y + (r.h - STICKY) / 2 };
+  }
   const lane = laneAt(x);
   if (!lane) return null;
-  // Leaving the ladder clears the rank.
-  return item.rank != null ? { lane, rank: null } : { lane };
+  // Centred in its lane; leaving the ladder clears the rank.
+  const lx = LANES.findIndex((l) => l.lane === lane) * LANE_W + (LANE_W - STICKY) / 2;
+  return item.rank != null ? { lane, rank: null, x: lx } : { lane, x: lx };
 }
 
 function renderSheet(ctx: CanvasRenderingContext2D, _board: Board, k: number): void {
