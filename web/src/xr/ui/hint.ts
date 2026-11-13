@@ -12,6 +12,8 @@ export class Hint {
   private readonly doc: UIKitDocument;
   private readonly line;
   private hideAt = 0;
+  /** Every hint shown, for tooling and tests. */
+  readonly history: { line: string; atMs: number }[] = [];
 
   constructor() {
     this.group.name = 'hint';
@@ -25,6 +27,7 @@ export class Hint {
 
   show(line: string, nowMs: number, forMs = 6000): void {
     set(this.line, { text: line });
+    this.history.push({ line, atMs: Math.round(nowMs) });
     this.group.visible = true;
     this.hideAt = nowMs + forMs;
   }

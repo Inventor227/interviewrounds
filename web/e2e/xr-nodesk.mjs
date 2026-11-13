@@ -6,7 +6,7 @@
 import { copyFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { call, enterXR, screenshot, sleep, waitReady } from './emu-lib.mjs';
+import { call, enterXR, iwsdk, screenshot, sleep, waitReady } from './emu-lib.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 copyFileSync(path.join(process.env.EMU_APP_DIR, 'e2e', 'xr-lib.mjs'), path.join(here, 'xr-lib.mjs'));
@@ -31,7 +31,7 @@ await call('xr', 'set-input-mode', { mode: 'controller' });
 await call('xr', 'set-transform', { device: 'headset', position: HEAD, orientation: { pitch: -20, yaw: 0, roll: 0 } });
 await sleep(1500);
 await shot(`nodesk-1-controllers-hint`);
-log.hint1 = await page(() => globalThis.__xrApp.ui.hint.visible);
+log.hintsAfterEnter = await page(() => globalThis.__xrApp.ui.hint.history);
 
 await call('xr', 'set-input-mode', { mode: 'hand' });
 await call('xr', 'set-transform', { device: 'hand-left', position: { x: HEAD.x - 0.3, y: 0.9, z: HEAD.z - 0.1 }, orientation: 'auto' });
@@ -44,14 +44,27 @@ for (let i = 0; i < 40 && !desk; i++) {
 }
 log.desk = desk;
 log.headAtPlacement = desk?.head ?? null;
-log.hint2 = await page(() => globalThis.__xrApp.ui.hint.visible).catch(() => null);
+log.hints = await page(() => globalThis.__xrApp.ui.hint.history).catch(() => null);
 console.log('desk', JSON.stringify(desk));
 await sleep(800);
 await shot(`nodesk-2-fallback`);
 
 await call('xr', 'set-transform', { device: 'headset', position: HEAD, orientation: { pitch: -12, yaw: 0, roll: 0 } });
+// Hints last 6 to 7 s, shorter than one software-rendered screenshot: show each again, longer, just for its shot.
+for (const [i, h] of (log.hints ?? []).entries()) {
+  await page((line) => {
+    const app = globalThis.__xrApp;
+    app.ui.layoutHint(app.headPose());
+    app.ui.showHint(line, performance.now(), 120000);
+  }, h.line);
+  await sleep(1000);
+  await shot(`nodesk-3-hint-${i + 1}`);
+}
+await page(() => globalThis.__xrApp.ui.hint.show('', performance.now(), 0));
 await sleep(1200);
-await shot(`nodesk-3-room`);
+await shot(`nodesk-4-room`);
+const logs = await iwsdk('browser', 'logs', '--input-json', JSON.stringify({ count: 300 })).catch(() => null);
+log.frameRateLog = JSON.stringify(logs ?? '').match(/\[xr\] frame rate[^"\\]*/g) ?? [];
 
 writeFileSync(path.join(process.env.EMU_SHOTS, `nodesk-renderer-info.json`), JSON.stringify(log, null, 2));
 const ok = desk && desk.source === 'fallback' && desk.head && Math.abs(desk.deskY - (desk.head.y - 0.45)) < 1e-6;
