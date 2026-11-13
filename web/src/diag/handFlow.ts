@@ -1,7 +1,9 @@
 // The hands part of the device check, run on the desk sheet in passthrough: hold a pinch still, draw a 10 cm line,
-// tap five targets, then pinch Done. Fed with the board's hand pointer (web/src/board/hand.ts: filtered gesture
+// tap five targets, then pinch Done. Fed with the board's pointer (web/src/board/hand.ts: filtered gesture
 // points in board cm) plus the raw pinch point of the same hand each frame, so the filter's effect shows in the
-// numbers. Each stage has a Skip box. Pure logic: the scene (xrTest.ts) draws it and feeds it.
+// numbers. A held controller does the same steps with its trigger (its tip on the sheet, or its ray from a
+// distance); a line drawn that way is the controller draw test, kept next to the pinch one. Each stage has a Skip
+// box. Pure logic: the scene (xrTest.ts) draws it and feeds it.
 
 import { hitStats, jitter, straightness, type HitStats, type Jitter, type P2, type Straightness, type Tap } from './stats';
 
@@ -44,12 +46,36 @@ export interface HandResults {
   line: { filtered: Straightness | null; raw: Straightness | null; tries: number; skipped: boolean };
   /** Taps with how long each pinch was held (a ghost card is dismissed by a 600 ms hold). */
   targets: { stats: HitStats | null; taps: { target: P2; down: P2; up: P2; ms: number }[]; radius_cm: number; skipped: boolean };
+  /** The draw test done with a controller (the trigger held): how straight the line was, and whether by touch or by ray. */
+  controller_line: { filtered: Straightness | null; mode: 'touch' | 'ray' | null; tries: number };
+  /** What did each stage: a hand's pinch or a controller's trigger. */
+  by: { hold: Pointing | null; line: Pointing | null; targets: Pointing | null };
   /** Pinches the board saw start on the sheet, and the ones lost to tracking. */
   gestures: number;
   lost: number;
 }
 
-type Gesture = { kind: 'skip' | 'hold' | 'line' | 'tap' | 'done' | 'ignored'; start: number; down: P2; consumed: boolean };
+/** What made a gesture. */
+export type Pointing = 'hand' | 'controller';
+export type FlowInput = 'hands' | 'controllers';
+
+/** The line under the sheet's title, worded for the input in use. */
+export const FLOW_MESSAGES: Record<FlowInput, Record<HandStage, string>> = {
+  hands: {
+    hold: 'Pinch on the dot and hold still for 3 seconds.',
+    line: 'Pinch the left dot, draw a straight line to the right dot, let go.',
+    targets: 'Tap each ring as it lights up: a quick pinch on its centre.',
+    done: 'All done. Pinch Done to go back to the page.',
+  },
+  controllers: {
+    hold: 'Point at the dot, pull the trigger and hold still for 3 seconds.',
+    line: 'Pull the trigger on the left dot, draw a straight line to the right dot, let go.',
+    targets: 'Point at each ring as it lights up and pull the trigger.',
+    done: 'All done. Pull the trigger on Done to go back to the page.',
+  },
+};
+
+type Gesture = { kind: 'skip' | 'hold' | 'line' | 'tap' | 'done' | 'ignored'; start: number; down: P2; consumed: boolean; by: Pointing; ray: boolean };
 
 export class HandFlow {
   stage: HandStage = 'hold';
@@ -64,11 +90,21 @@ export class HandFlow {
     hold: { filtered: null, raw: null, tries: 0, skipped: false },
     line: { filtered: null, raw: null, tries: 0, skipped: false },
     targets: { stats: null, taps: [], radius_cm: TARGET_R, skipped: false },
+    controller_line: { filtered: null, mode: null, tries: 0 },
+    by: { hold: null, line: null, targets: null },
     gestures: 0,
     lost: 0,
   };
+  private input: FlowInput = 'hands';
 
   constructor(private readonly onExit: () => void = () => {}) {}
+
+  /** The input in use changed (controllers picked up or put down): the instructions follow. */
+  setInput(input: FlowInput): void {
+    if (input === this.input) return;
+    this.input = input;
+    this.say(FLOW_MESSAGES[input][this.stage]);
+  }
 
   results(): HandResults {
     return structuredClone(this.res);
@@ -90,7 +126,8 @@ export class HandFlow {
     this.version++;
   }
 
-  down(p: P2, t: number): void {
+  /** `by`: what pressed (default a hand); `ray`: a controller pointing from a distance, not touching. */
+  down(p: P2, t: number, by: Pointing = 'hand', ray = false): void {
     this.res.gestures++;
     let kind: Gesture['kind'];
     if (this.stage !== 'done' && inBox(p, SKIP_BOX, 1)) kind = 'skip';
@@ -98,10 +135,10 @@ export class HandFlow {
     else if (this.stage === 'line') kind = 'line';
     else if (this.stage === 'targets') kind = 'tap';
     else kind = inBox(p, DONE_BOX, 1) ? 'done' : 'ignored';
-    this.g = { kind, start: t, down: p, consumed: false };
+    this.g = { kind, start: t, down: p, consumed: false, by, ray };
     this.filtered = kind === 'line' ? [p] : [];
     this.raws = [];
-    if (kind === 'ignored' && this.stage === 'hold') this.say('Start the pinch on the dot.');
+    if (kind === 'ignored' && this.stage === 'hold') this.say(by === 'hand' ? 'Start the pinch on the dot.' : 'Pull the trigger on the dot.');
     this.version++;
   }
 
@@ -131,6 +168,7 @@ export class HandFlow {
     this.res.hold.tries++;
     this.res.hold.filtered = jitter(this.filtered);
     this.res.hold.raw = jitter(this.raws);
+    this.res.by.hold = g.by;
     this.next('line');
   }
 
@@ -144,24 +182,33 @@ export class HandFlow {
     }
     if (g.kind === 'hold') {
       this.res.hold.tries++;
-      this.say('You let go too early. Pinch the dot and hold for 3 seconds.');
+      this.say(g.by === 'hand' ? 'You let go too early. Pinch the dot and hold for 3 seconds.' : 'You let go too early. Hold the trigger on the dot for 3 seconds.');
       return;
     }
     if (g.kind === 'line') {
-      this.res.line.tries++;
+      const mine = g.by === 'controller' ? this.res.controller_line : this.res.line;
+      mine.tries++;
       const s = straightness(this.filtered, LINE_FROM, LINE_TO);
       if (!s || s.path_cm < LINE_MIN_CM) {
-        this.say('Too short. Pinch the left dot, draw to the right dot, let go.');
+        this.say(g.by === 'hand' ? 'Too short. Pinch the left dot, draw to the right dot, let go.' : 'Too short. Hold the trigger from the left dot to the right dot, then let go.');
         return;
       }
-      this.res.line.filtered = s;
-      this.res.line.raw = straightness(this.raws, LINE_FROM, LINE_TO);
+      // A controller's line is its own result, next to the pinch one; a controller has no raw pinch point.
+      if (g.by === 'controller') {
+        this.res.controller_line.filtered = s;
+        this.res.controller_line.mode = g.ray ? 'ray' : 'touch';
+      } else {
+        this.res.line.filtered = s;
+        this.res.line.raw = straightness(this.raws, LINE_FROM, LINE_TO);
+      }
+      this.res.by.line = g.by;
       this.next('targets');
       return;
     }
     if (g.kind === 'tap') {
       const target = TARGETS[this.target]!;
       this.res.targets.taps.push({ target, down: g.down, up: p, ms: Math.round(t - g.start) });
+      this.res.by.targets = g.by;
       this.target++;
       if (this.target >= TARGETS.length) {
         this.res.targets.stats = hitStats(this.taps(), TARGET_R);
@@ -179,8 +226,8 @@ export class HandFlow {
     this.g = null;
     if (!g || g.consumed || g.kind === 'ignored') return;
     if (g.kind === 'hold') this.res.hold.tries++;
-    if (g.kind === 'line') this.res.line.tries++;
-    this.say('Your hand was lost. Try again.');
+    if (g.kind === 'line') (g.by === 'controller' ? this.res.controller_line : this.res.line).tries++;
+    this.say(g.by === 'hand' ? 'Your hand was lost. Try again.' : 'The controller was lost. Try again.');
   }
 
   private taps(): Tap[] {
@@ -205,12 +252,6 @@ export class HandFlow {
     this.stage = stage;
     this.filtered = [];
     this.raws = [];
-    const msg: Record<HandStage, string> = {
-      hold: 'Pinch on the dot and hold still for 3 seconds.',
-      line: 'Pinch the left dot, draw a straight line to the right dot, let go.',
-      targets: 'Tap each ring as it lights up: a quick pinch on its centre.',
-      done: 'All done. Pinch Done to go back to the page.',
-    };
-    this.say(msg[stage]);
+    this.say(FLOW_MESSAGES[this.input][stage]);
   }
 }

@@ -140,4 +140,59 @@ describe('HandFlow', () => {
     expect(f.holdProgress(HOLD_SETTLE_MS + HOLD_MS / 2)).toBeCloseTo(0.5, 6);
     expect(f.holdProgress(10000)).toBe(1);
   });
+
+  it('a controller does the same steps, and its line is the controller draw test next to the pinch one', () => {
+    const f = new HandFlow();
+    f.setInput('controllers');
+    expect(f.message).toBe('Point at the dot, pull the trigger and hold still for 3 seconds.');
+    // Hold with the trigger.
+    f.down(HOLD_AT, 0, 'controller', true);
+    for (let t = 0; t <= HOLD_SETTLE_MS + HOLD_MS + 20; t += 14) {
+      f.move(HOLD_AT, t);
+      f.tick(t);
+    }
+    expect(f.stage).toBe('line');
+    expect(f.message).toMatch(/Pull the trigger on the left dot/);
+    // A line by ray: too short first, then a good one.
+    f.down(LINE_FROM, 5000, 'controller', true);
+    f.move({ x: LINE_FROM.x + 1, y: LINE_FROM.y }, 5014);
+    f.up({ x: LINE_FROM.x + 1, y: LINE_FROM.y }, 5100);
+    expect(f.message).toMatch(/Too short\. Hold the trigger/);
+    f.down(LINE_FROM, 6000, 'controller', true);
+    for (let i = 1; i <= 20; i++) f.move({ x: LINE_FROM.x + (LINE_TO.x - LINE_FROM.x) * (i / 20), y: LINE_FROM.y }, 6000 + i * 14);
+    f.up(LINE_TO, 6400);
+    expect(f.stage).toBe('targets');
+    const r = f.results();
+    expect(r.controller_line.mode).toBe('ray');
+    expect(r.controller_line.tries).toBe(2);
+    expect(r.controller_line.filtered!.length_cm).toBeCloseTo(10, 1);
+    expect(r.controller_line.filtered!.rms_cm).toBeLessThan(0.05);
+    // The pinch line is untouched: nobody pinched one.
+    expect(r.line).toMatchObject({ filtered: null, raw: null, tries: 0 });
+    expect(r.by).toEqual({ hold: 'controller', line: 'controller', targets: null });
+    // The user puts the controllers down: the next step is worded for hands, and a pinch does it.
+    f.setInput('hands');
+    expect(f.message).toMatch(/quick pinch/);
+    tapAll(f, 8000);
+    expect(f.results().by.targets).toBe('hand');
+    expect(f.message).toBe('All done. Pinch Done to go back to the page.');
+  });
+
+  it('a line drawn by touch with a controller is recorded as touch, and a lost controller says so', () => {
+    const f = new HandFlow();
+    f.down(skipPoint, 0, 'controller');
+    f.up(skipPoint, 100);
+    f.down(LINE_FROM, 1000, 'controller', false);
+    f.cancel();
+    expect(f.message).toBe('The controller was lost. Try again.');
+    expect(f.results().controller_line.tries).toBe(1);
+    drawLineBy(f, 2000);
+    expect(f.results().controller_line).toMatchObject({ mode: 'touch', tries: 2 });
+  });
 });
+
+function drawLineBy(f: HandFlow, t0: number) {
+  f.down(LINE_FROM, t0, 'controller', false);
+  for (let i = 1; i <= 20; i++) f.move({ x: LINE_FROM.x + (LINE_TO.x - LINE_FROM.x) * (i / 20), y: LINE_FROM.y }, t0 + i * 14);
+  f.up(LINE_TO, t0 + 400);
+}
