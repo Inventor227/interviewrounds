@@ -5,7 +5,9 @@
 import { Mesh, MeshBasicMaterial, Object3D, PlaneGeometry, Quaternion, SRGBColorSpace, Vector3, type Texture } from 'three';
 import type { BoardOp, GhostOp } from '../shared/types';
 import { createBoardXR, type BoardXR } from './boardXR';
-import { emptyBoard, IdGen } from './model';
+import type { BoardKit } from '../shared/types';
+import { sampleStartBoard } from './kits/samples';
+import { IdGen } from './model';
 import { BoardStore } from './ops';
 import type { BoardXRPort, DeskPose, HeadPose, SelectPhase, Vec3, XRHandSample } from './port';
 import { placeAnchor, sheetToWorld } from './sheetMath';
@@ -22,6 +24,8 @@ export interface DevSheetHandle {
   toWorld(points: [number, number][], hCm?: number): Vec3[];
   ghosts(list: GhostOp[]): void;
   say(text: string): string;
+  /** Applies an op as the Scribe would (src scribe), for scripted runs. */
+  scribe(op: { op: string; args: unknown }): boolean;
   /** The sheet's board texture as a PNG data URL (what the wall board shows). */
   snapshot(): string;
   sent: BoardOp[];
@@ -170,7 +174,9 @@ export async function createDevSheet(root: HTMLElement): Promise<DevSheetHandle>
   };
   world.renderer.xr.addEventListener('sessionend', onSessionEnd);
 
-  const store = new BoardStore(emptyBoard({ id: 'dev-xr', question: 'Design a URL shortener' }));
+  const kitParam = new URLSearchParams(location.search).get('kit');
+  const kitName: BoardKit = (['hld', 'lld', 'coding', 'pm', 'meeting'] as const).find((k) => k === kitParam) ?? 'hld';
+  const store = new BoardStore(sampleStartBoard(kitName));
   const sent: BoardOp[] = [];
   const xr = createBoardXR(port, {
     store,
@@ -202,6 +208,7 @@ export async function createDevSheet(root: HTMLElement): Promise<DevSheetHandle>
       const hit = xr.say(text, Math.min(performance.now(), store.focusAt + 1000));
       return `${hit ? `${hit.mode} ${hit.label}` : 'nothing'} (focus ${store.board.focus ?? 'none'}, ${age} ms old)`;
     },
+    scribe: (op) => store.apply({ op_id: `s${Math.random().toString(36).slice(2, 8)}`, src: 'scribe', ...op } as BoardOp).accepted,
     snapshot: () => {
       const img = xr.sheet.texture.image as HTMLCanvasElement | OffscreenCanvas;
       return 'toDataURL' in img ? img.toDataURL('image/png') : '';
