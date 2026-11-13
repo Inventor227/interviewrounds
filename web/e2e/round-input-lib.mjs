@@ -139,12 +139,35 @@ export async function pressBar(hand, re, shotName = null) {
   await sleep(1200);
   stage(`ray on ${re}`, await rayInfo(hand));
   if (shotName) await shot(shotName);
+  await page((h) => {
+    const a = globalThis.__xrApp;
+    const x = a.world.input.xr;
+    const L = (globalThis.__trace = []);
+    globalThis.__traceOff?.();
+    globalThis.__traceOff = a.onFrame(() => {
+      const mp = x.multiPointers[h];
+      const gp = x.gamepads[h];
+      const src = x.getPrimaryInputSource(h);
+      L.push([Math.round(performance.now()), src?.gamepad?.buttons[0]?.pressed ? 1 : 0, gp?.getSelecting() ? 1 : 0, gp?.getSelectStart() ? 1 : 0, gp?.getSelectEnd() ? 1 : 0, mp.activeKind, mp.pointerStates.get('ray'), [...mp.ray.pointer.getButtonsDown()].join(''), gp?.inputSource === src ? 1 : 0, mp.ray.pointer.getEnabled() ? 1 : 0, a.world.input.xr === x ? 1 : 0]);
+      if (L.length > 300) L.shift();
+    });
+  }, hand);
   await trigger(hand, 1);
   await sleep(PULL_S * 1000);
-  const held = await rayInfo(hand);
   await trigger(hand, 0);
-  await sleep(600);
-  stage(`pulled on ${re}`, { held, after: await rayInfo(hand) });
+  await sleep(900);
+  const trace = await page(() => {
+    globalThis.__traceOff?.();
+    const out = [];
+    let prev = '';
+    for (const r of globalThis.__trace) {
+      const k = r.slice(1).join(',');
+      if (k !== prev) out.push(r.join(' '));
+      prev = k;
+    }
+    return out;
+  });
+  stage(`pulled on ${re}`, { trace, after: await rayInfo(hand) });
 }
 
 /** What the platform's pointers for a controller are on, and the panel actions seen so far. */

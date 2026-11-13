@@ -24,6 +24,9 @@ await waitReady();
 await go('/');
 await until('the home page', () => !!document.querySelector('[data-test="try-quick"]'));
 await setupTab({ ghostSettle: 300 });
+// One world on the page: the emulator's small tooling world would run the room's input a second time each frame
+// without the session, which lets go of every press on a panel the moment it starts.
+await page(() => sessionStorage.setItem('ir_one_world', '1'));
 // One capture before the session: the emulator's room needs it to draw.
 await shot('s00-home');
 await click('try-quick');
