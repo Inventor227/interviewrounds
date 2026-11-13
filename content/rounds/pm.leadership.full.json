@@ -16,16 +16,10 @@
   },
   "phases": [
     {
-      "id": "intro",
-      "title": "Intro",
-      "minutes": 1,
-      "goal": "Open in about thirty words: first name, round and length, the director joins later, then ask for a product they drove and are proud of."
-    },
-    {
       "id": "opener",
       "title": "Your product",
-      "minutes": 5,
-      "goal": "Ask about a product or feature they drove. Probe what they decided, who they had to convince, and the result."
+      "minutes": 6,
+      "goal": "Open in about thirty words: first name, round and length, the director joins later, then ask for a product they drove and are proud of. Probe what they decided, who they had to convince, and the result."
     },
     {
       "id": "story_1",

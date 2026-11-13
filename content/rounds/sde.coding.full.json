@@ -16,16 +16,10 @@
   },
   "phases": [
     {
-      "id": "intro",
-      "title": "Intro",
-      "minutes": 1,
-      "goal": "Open in about thirty words: first name, round and length, ask them to think out loud, then ask how they would start, and call show_question."
-    },
-    {
       "id": "problem",
       "title": "Problem",
-      "minutes": 3,
-      "goal": "State the problem once and call show_question. Answer clarifying questions briefly and only what was asked. If none come within a minute, do not prompt."
+      "minutes": 4,
+      "goal": "Open in about thirty words: first name, round and length, the problem's name, ask them to think out loud, then ask how they would start, and call show_question. Answer clarifying questions briefly and only what was asked. If none come within a minute, do not prompt."
     },
     {
       "id": "approach",
