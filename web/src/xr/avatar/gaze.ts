@@ -43,11 +43,13 @@ export interface Angles {
 const clamp = (v: number, lo: number, hi: number) => (v < lo ? lo : v > hi ? hi : v);
 
 /** Yaw and pitch of the direction from `from` to `to`. */
-export function anglesTo(from: Vec3Like, to: Vec3Like): Angles {
+export function anglesTo(from: Vec3Like, to: Vec3Like, out: Angles = { yaw: 0, pitch: 0 }): Angles {
   const dx = to.x - from.x;
   const dy = to.y - from.y;
   const dz = to.z - from.z;
-  return { yaw: Math.atan2(dx, dz), pitch: Math.atan2(dy, Math.hypot(dx, dz)) };
+  out.yaw = Math.atan2(dx, dz);
+  out.pitch = Math.atan2(dy, Math.hypot(dx, dz));
+  return out;
 }
 
 /** Unit direction for a yaw and pitch. */
@@ -64,14 +66,18 @@ export function clampHead(a: Angles): Angles {
  * Where the head should aim to look at the user, in the avatar frame: the direction from the head to the user plus
  * a slow sway driven by `t` (seconds), clamped to ±35° yaw and ±20° pitch, at the user's distance.
  */
-export function gazeTarget(head: Vec3Like, user: Vec3Like, t: number): Vector3 {
-  const a = anglesTo(head, user);
-  a.yaw += SWAY_YAW * Math.sin(0.31 * t) * Math.sin(0.17 * t + 1.3);
-  a.pitch += SWAY_PITCH * Math.sin(0.23 * t + 0.7);
-  const c = clampHead(a);
+export function gazeTarget(head: Vec3Like, user: Vec3Like, t: number, out = new Vector3()): Vector3 {
+  const a = anglesTo(head, user, scratch);
+  const yaw = clamp(a.yaw + SWAY_YAW * Math.sin(0.31 * t) * Math.sin(0.17 * t + 1.3), -HEAD_YAW_MAX, HEAD_YAW_MAX);
+  const pitch = clamp(a.pitch + SWAY_PITCH * Math.sin(0.23 * t + 0.7), -HEAD_PITCH_MAX, HEAD_PITCH_MAX);
   const dist = Math.hypot(user.x - head.x, user.y - head.y, user.z - head.z);
-  return dirFromAngles(c.yaw, c.pitch).multiplyScalar(dist).add(new Vector3(head.x, head.y, head.z));
+  dirFromAngles(yaw, pitch, out).multiplyScalar(dist);
+  out.x += head.x;
+  out.y += head.y;
+  out.z += head.z;
+  return out;
 }
+const scratch: Angles = { yaw: 0, pitch: 0 };
 
 /** Wait before the next micro-saccade: uniform in [800, 2500] ms. */
 export function nextSaccadeMs(rng: Rng): number {
@@ -135,16 +141,20 @@ export class GazeController {
     this.glanceLeft = seconds;
   }
 
-  /** Advances by dt seconds toward `target` (direction from the eyes to what the avatar attends to). */
-  update(dt: number, target: Angles): void {
+  /**
+   * Advances by dt seconds toward `target` (direction from the eyes to what the avatar attends to). `head`, when
+   * given, is where the head should aim instead (for example the swaying aim from gazeTarget).
+   */
+  update(dt: number, target: Angles, head: Angles = target): void {
     this.schedule(dt);
     const gy = this.glanceLeft > 0 ? this.glanceYaw : 0;
     const gp = this.glanceLeft > 0 ? this.glancePitch : 0;
     const gh = this.glanceLeft > 0 ? this.glanceHead : 0;
 
-    const head = clampHead({ yaw: target.yaw + gy * gh, pitch: target.pitch + gp * gh });
-    this.headYaw = smoothDamp(this.headYaw, head.yaw, this.vel, 0, HEAD_SMOOTH_S, dt);
-    this.headPitch = smoothDamp(this.headPitch, head.pitch, this.vel, 1, HEAD_SMOOTH_S, dt);
+    const hy = clamp(head.yaw + gy * gh, -HEAD_YAW_MAX, HEAD_YAW_MAX);
+    const hp = clamp(head.pitch + gp * gh, -HEAD_PITCH_MAX, HEAD_PITCH_MAX);
+    this.headYaw = smoothDamp(this.headYaw, hy, this.vel, 0, HEAD_SMOOTH_S, dt);
+    this.headPitch = smoothDamp(this.headPitch, hp, this.vel, 1, HEAD_SMOOTH_S, dt);
 
     let eyeY = target.yaw + gy + this.sacYaw;
     let eyeP = target.pitch + gp + this.sacPitch;

@@ -77,7 +77,7 @@ const MODEL_TIMEOUT_MS = 5000;
 export interface VisemeSource {
   node: AudioNode;
   /** Active viseme id in HeadAudio order, or -1 for silence. */
-  readonly active: number;
+  active: number;
   update(dtMs: number): void;
   dispose(): void;
 }
