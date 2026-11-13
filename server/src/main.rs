@@ -2,7 +2,7 @@ use std::process::ExitCode;
 use std::time::Duration;
 
 use anyhow::Context;
-use ir_server::{AppState, Config, db, router};
+use ir_server::{AppState, Config, db, router, scoring};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
@@ -52,7 +52,10 @@ async fn serve() -> anyhow::Result<()> {
 
     let pool = connect_with_retry(&config).await?;
     let port = config.port;
-    let app = router(AppState::new(pool, config));
+    let state = AppState::new(pool, config);
+    let scoring = scoring::ScoringDeps::from_app(&state).context("setting up scoring")?;
+    scoring::spawn_worker(scoring, Duration::from_secs(2));
+    let app = router(state);
 
     let listener = TcpListener::bind(("0.0.0.0", port))
         .await
