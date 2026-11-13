@@ -517,8 +517,13 @@ async fn resume_after_long_paused_drop_stays_live() {
 
 #[tokio::test]
 async fn resume_of_paused_round_after_restart_stays_live() {
+    // A 3 s window: the drop is faked an hour back, and two process starts fit inside it even on a loaded runner.
+    let window = || SessionTiming {
+        offline_limit: Duration::from_secs(3),
+        ..roomy()
+    };
     let app = live::test_app(Options {
-        timing: roomy(),
+        timing: window(),
         ..Options::default()
     })
     .await;
@@ -534,7 +539,7 @@ async fn resume_of_paused_round_after_restart_stays_live() {
         .execute(&app.state.db)
         .await
         .unwrap();
-    let app2 = restarted(&app, roomy()).await;
+    let app2 = restarted(&app, window()).await;
     let base2 = app2.serve().await;
     let res = resume(&app2, &cookie, &id).await;
     assert_eq!(res.status, StatusCode::OK, "{}", res.body);
@@ -542,7 +547,7 @@ async fn resume_of_paused_round_after_restart_stays_live() {
     tokio::time::sleep(Duration::from_millis(500)).await;
     assert_eq!(status(&app2, &id).await, ("live".to_string(), None));
     // A further restart before the page connects: the janitor sees a fresh window too.
-    let app3 = restarted(&app, roomy()).await;
+    let app3 = restarted(&app, window()).await;
     persist::sweep_stale(&app3.state).await.unwrap();
     assert_eq!(status(&app2, &id).await, ("live".to_string(), None));
     let mut ws = hello(&base2, &id, &token, 0).await;

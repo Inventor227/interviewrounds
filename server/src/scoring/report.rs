@@ -1071,7 +1071,7 @@ fn side_request(
     user: String,
     schema: Value,
 ) -> MessagesRequest {
-    MessagesRequest {
+    let mut req = MessagesRequest {
         model: model.to_string(),
         max_tokens,
         system: vec![SystemBlock::cached(system)],
@@ -1084,7 +1084,10 @@ fn side_request(
         fallbacks: fallbacks_for(model),
         stream: true,
         ..MessagesRequest::default()
-    }
+    };
+    // A `SCORING_EFFORT` above high would make a thinking-off side call invalid.
+    crate::orchestrator::cap_effort_for_thinking_off(&mut req);
+    req
 }
 
 /// The headset card schema: a line, the top strength and the top fix, each pointing at a candidate quote.

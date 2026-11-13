@@ -98,7 +98,7 @@ pub fn request_for_draft(
     // after the cached block.
     let mut system = panelist.system.clone();
     system.push(SystemBlock::text(director::SPEAK_ONLY_NOTE));
-    MessagesRequest {
+    let mut req = MessagesRequest {
         thinking: thinking_for(&model),
         fallbacks: fallbacks_for(&model),
         model,
@@ -109,7 +109,10 @@ pub fn request_for_draft(
         tool_choice: None,
         output_config: Some(OutputConfig::effort(&state.live.effort)),
         stream: true,
-    }
+    };
+    // Thinking off allows effort `high` at most (config refuses more for the live model; this covers the rest).
+    super::cap_effort_for_thinking_off(&mut req);
+    req
 }
 
 /// The user message (the input) and the system note.

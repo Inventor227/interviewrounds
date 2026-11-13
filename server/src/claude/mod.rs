@@ -291,7 +291,7 @@ pub enum ClaudeError {
     /// HTTP 529, or an `overloaded_error` event in a stream.
     #[error("overloaded")]
     Overloaded,
-    /// Any other 5xx (or an `api_error` event in a stream, kept as 500).
+    /// Any other 5xx, a 408, or an `api_error` (kept as 500) or `timeout_error` (kept as 504) event in a stream.
     #[error("server error {status}")]
     ServerError { status: u16 },
     #[error("bad request: {0}")]

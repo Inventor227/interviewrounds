@@ -3100,3 +3100,46 @@ fn a_retarget_to_thinking_off_caps_the_effort_at_high() {
     assert_eq!(out.thinking, Some(ir_server::claude::Thinking::Disabled));
     assert_eq!(out.output_config.unwrap().effort.as_deref(), Some("high"));
 }
+
+#[tokio::test]
+async fn live_effort_above_high_is_capped_where_thinking_is_off() {
+    // Opus first (thinking on, effort max), overloaded; the Haiku retry has thinking off, so effort high.
+    let llm = ScriptedLlm::new(vec![Script::Fail(ClaudeError::Overloaded), reply("Okay.")]);
+    let (app, state) = test_app(llm.clone());
+    let mut st = new_state("s1", "sde.system_design.short", VoiceKind::Fish);
+    st.live = LiveSettings {
+        model: "claude-opus-5-5".into(),
+        fast_model: "claude-sonnet-5-5".into(),
+        fallback_model: "claude-haiku-5-5".into(),
+        effort: "max".into(),
+        max_tokens: 300,
+    };
+    state.registry.insert(st);
+    let res = post_chat(
+        &app,
+        SECRET,
+        chat_body("s1", "p1", json!([{"role": "user", "content": "Hi."}])),
+    )
+    .await;
+    assert_eq!(res.text(), "Okay.");
+    let effort = |r: MessagesRequest| r.output_config.unwrap().effort.unwrap();
+    assert_eq!(effort(llm.request(0)), "max");
+    let retry = llm.request(1);
+    assert_eq!(retry.model, "claude-haiku-5-5");
+    assert_eq!(retry.thinking, Some(ir_server::claude::Thinking::Disabled));
+    assert_eq!(effort(retry), "high");
+
+    // A Sonnet live model with effort max (config refuses it; the request is still made valid): high.
+    let llm = ScriptedLlm::new(vec![reply("Okay.")]);
+    let (app, state) = test_app(llm.clone());
+    let mut st = prod_state("s2");
+    st.live.effort = "max".into();
+    state.registry.insert(st);
+    post_chat(
+        &app,
+        SECRET,
+        chat_body("s2", "p1", json!([{"role": "user", "content": "Hi."}])),
+    )
+    .await;
+    assert_eq!(effort(llm.request(0)), "high");
+}
