@@ -78,13 +78,11 @@ await sleep(1000);
 b = await board();
 stage('tray card by ray', { items: b.items.length, last: b.items.at(-1) });
 if (b.items.filter((i) => i.label === null).length !== n0 + 1) await fail('the tray card was not placed by ray', b);
-await shot('c07-drawn-and-tray-card');
 await C.pressButton('right', 'primary');
 await sleep(1500);
 b = await board();
 stage('A undid the tray card', { items: b.items.length, log: b.log.slice(-2) });
 if (b.items.filter((i) => i.label === null).length !== n0 || !b.log.some((e) => e.op === 'undo')) await fail('A did not undo the last action', b);
-stage('pulses so far', await page(() => globalThis.__xrApp.hapticLog().map((p) => `${p.hand}:${p.name}`)));
 
 
 // The round bar by ray: Pause, Resume, then End held.
@@ -92,14 +90,15 @@ await look(S, -48);
 await R.pressBar('right', /Pause/, null);
 await waitState(['paused'], 30000);
 stage('paused by ray', await roundState());
-// Paused: the clock waits. The ray and its dot on the sheet, then the ray on the round bar.
+// Paused: the clock waits. One capture of what was drawn, with the ray and its dot on the sheet (kept short: a
+// long pause lets the voices go, and coming back from that is another task's test).
 await look(S, -52);
-await R.aim('right', from, [30, 24]);
-await sleep(1200);
-await shot('c08-ray-and-dot-on-the-sheet');
+await R.aim('right', from, [30, 33]);
+await sleep(1000);
+await shot('c08-drawn-with-ray-and-dot');
 stage('ray on the sheet', (await R.pointers()).over);
 await look(S, -48);
-await R.pressBar('right', /Resume/, 'c09-ray-on-resume');
+await R.pressBar('right', /Resume/, null);
 await waitState(['live'], 30000);
 stage('resumed by ray', await roundState());
 const endAt = Date.now();

@@ -4,6 +4,9 @@
 import { call, page, shot, sleep, stage, until, fail, look } from './round-lib.mjs';
 import { below, glide, hold, pull, stroke, trigger } from './input-lib.mjs';
 
+/** A trigger pull long enough to span a frame of the emulator's few frames a second. */
+const PULL_S = 0.7;
+
 const toWorld = (pts, h) => page((a) => globalThis.__round.room.debug.toWorld(a.pts, a.h), { pts, h });
 
 export const inputState = () =>
@@ -137,7 +140,7 @@ export async function pressBar(hand, re, shotName = null) {
   const busy = await page((h) => globalThis.__xrApp.controllers().find((c) => c.hand === h)?.busy, hand);
   stage(`ray on ${re}`, { busy });
   if (shotName) await shot(shotName);
-  await pull(hand, 0.25);
+  await pull(hand, PULL_S);
   await sleep(400);
 }
 
@@ -162,7 +165,7 @@ export async function pressCard(hand, S, panel, re, shotName = null) {
   await hold(hand, from, b.at);
   await sleep(1200);
   if (shotName) await shot(shotName);
-  await pull(hand, 0.25);
+  await pull(hand, PULL_S);
   await sleep(400);
 }
 
