@@ -24,6 +24,7 @@ import type { XRApp } from '../xr/world';
 import { syncBoard, type BoardSync } from './boardSync';
 import * as browser from './browser';
 import type { RoundControllerDeps } from './controller';
+import { wireCues, type Cues } from './cues';
 import { createHeadPort } from './headPort';
 import { People, type AvatarLike } from './people';
 import type { HeadSamplerPort, SocketPort, UiAction, XRPort } from './ports';
@@ -103,6 +104,7 @@ export function createRoundRuntime({ preview }: RuntimeOptions): RoundController
   let socket: SessionSocket | null = null;
   let settings: Settings | null = null;
   let relay: RelayPointer | null = null;
+  let cues: Cues | null = null;
   let sheetToWorld: ((x: number, y: number, h: number) => { x: number; y: number; z: number }) | null = null;
   const cleanups: (() => void)[] = [];
   const actionCbs = new Set<(a: UiAction) => void>();
@@ -143,6 +145,11 @@ export function createRoundRuntime({ preview }: RuntimeOptions): RoundController
     if (store && !sync) {
       sync = syncBoard(store, socket);
       cleanups.push(() => sync?.dispose());
+    }
+    if (!cues && app) {
+      const a = app;
+      cues = wireCues((name) => a.sounds.play(name), socket);
+      cleanups.push(() => cues?.dispose());
     }
     cleanups.push(
       socket.on('round.state', (d) => {
@@ -369,7 +376,12 @@ export function createRoundRuntime({ preview }: RuntimeOptions): RoundController
       if (!port) return Promise.reject(new Error('The room is not loaded'));
       return port.enter();
     },
-    place: () => (port ? port.place() : Promise.reject(new Error('The room is not loaded'))),
+    place: () =>
+      port
+        ? port.place().then(() => {
+            cues?.roundStarted(); // the desk is down: the round begins
+          })
+        : Promise.reject(new Error('The room is not loaded')),
     exit: () => port?.exit?.(),
     onGesture(cb) {
       gestureCbs.add(cb);

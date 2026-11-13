@@ -97,7 +97,13 @@ full licence text is in `vendor/basis/LICENSE`. https://github.com/BinomialLLC/b
 
 ## UI sounds
 
-The six sounds in `sfx/` (`click`, `flap`, `chime`, `snap`, `pen`, `erase`) are edited recordings by Kenney
+Six sounds in `sfx/` (`click`, `flap`, `chime`, `snap`, `pen`, `erase`) are edited recordings by Kenney
 (www.kenney.nl) from the packs Interface Sounds 1.0, Casino Audio and RPG Audio, released under Creative Commons
-Zero (CC0 1.0). https://creativecommons.org/publicdomain/zero/1.0/ The source file, pack and page of each sound
-are listed in `sfx/CREDITS.md`.
+Zero (CC0 1.0). https://creativecommons.org/publicdomain/zero/1.0/
+
+Six round cues in `sfx/` (`start`, `tick`, `ghost`, `handover`, `pause`, `resume`) were made with ElevenLabs sound
+generation on a paid plan in November 2026 and then edited. Under the ElevenLabs Terms of Use paid subscribers may
+use the output commercially and keep all rights in it.
+
+The source file, pack and page of each recording, and the prompt and take of each generated cue, are listed in
+`sfx/CREDITS.md`.
