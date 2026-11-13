@@ -88,14 +88,25 @@ pub enum SessionStatus {
     Abandoned,
 }
 
+/// Where the live interviewer's tool calls come from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ToolsMode {
+    /// The live call carries no tools and only speaks; after the reply, the director (a fast second call on
+    /// `fast_model`) turns the spoken line into tool actions. Fastest first token.
+    Director,
+    /// The live call carries the tools itself (calls continue after tool use).
+    Inline,
+}
+
 /// Model settings for the live voice turns.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LiveSettings {
     pub model: String,
-    /// Used once when the live model fails before saying anything.
+    /// Used once when the live model fails before saying anything, and for the director.
     pub fast_model: String,
     pub effort: String,
     pub max_tokens: u32,
+    pub tools: ToolsMode,
 }
 
 impl LiveSettings {
@@ -105,6 +116,11 @@ impl LiveSettings {
             fast_model: cfg.fast_model.clone(),
             effort: cfg.live_effort.clone(),
             max_tokens: 300,
+            tools: if cfg.live_tools == "inline" {
+                ToolsMode::Inline
+            } else {
+                ToolsMode::Director
+            },
         }
     }
 }
@@ -158,6 +174,18 @@ pub struct Turn {
     /// For an interrupted agent turn: the part the candidate heard.
     #[serde(default)]
     pub heard: Option<String>,
+}
+
+/// A turn whose reply was streamed but cut off before it was committed (Fish dropped the request), or the hold line
+/// spoken while another turn ran. Kept out of the history until a later request shows Fish played it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Provisional {
+    pub panelist_id: String,
+    pub input: UserInput,
+    /// The assistant content to record (the text so far).
+    pub reply: Vec<ContentBlock>,
+    /// What was streamed to the voice.
+    pub spoken: String,
 }
 
 /// Everything a finished turn adds.
@@ -218,6 +246,8 @@ pub struct SessionState {
     pub events: broadcast::Sender<ServerEvent>,
     /// Serialises turns of one session; held across a whole streamed turn, separately from the state lock.
     pub turn_lock: Arc<Mutex<()>>,
+    /// Cut-off turns waiting for the next request to confirm them (oldest first).
+    pub provisional: Vec<Provisional>,
 }
 
 impl SessionState {
@@ -322,6 +352,7 @@ impl SessionState {
             turn_note_template,
             events,
             turn_lock: Arc::new(Mutex::new(())),
+            provisional: Vec::new(),
         })
     }
 
@@ -453,6 +484,61 @@ impl SessionState {
         }
     }
 
+    /// Settles parked turns against Fish's transcript (`fish_last`: its newest assistant message). A parked turn
+    /// whose line Fish has (all of it, or the start of it, which means the candidate cut in) is committed now, marked
+    /// interrupted when only part was played. One Fish does not have was a draft it threw away: it is dropped, and
+    /// its words come back in Fish's newer user message anyway.
+    pub fn resolve_provisional(&mut self, fish_last: Option<&str>, now: Instant) {
+        let parked = std::mem::take(&mut self.provisional);
+        let Some(fish) = fish_last else {
+            return;
+        };
+        // Only the newest parked turn can be Fish's newest assistant message; earlier ones were superseded.
+        let Some(p) = parked.into_iter().last() else {
+            return;
+        };
+        let heard = compare_spoken(&p.spoken, fish);
+        if heard == Heard::Unknown {
+            tracing::info!(session_id = %self.id, panelist_id = %p.panelist_id, "parked turn was never played; dropped");
+            return;
+        }
+        let draft = prompt::draft_turn(self, &p.panelist_id, &p.input, now);
+        self.commit_turn(
+            TurnCommit {
+                draft,
+                extra: Vec::new(),
+                reply: p.reply,
+                spoken: p.spoken.clone(),
+                tool_calls: Vec::new(),
+                handover_line_used: false,
+            },
+            now,
+        );
+        if heard == Heard::Part
+            && let Some(turn) = self
+                .turns
+                .iter_mut()
+                .rev()
+                .find(|t| t.speaker == p.panelist_id)
+        {
+            turn.interrupted = true;
+            turn.heard = Some(fish.trim().to_string());
+        }
+        tracing::info!(session_id = %self.id, panelist_id = %p.panelist_id, interrupted = heard == Heard::Part, "parked turn committed");
+    }
+
+    /// Applies tool calls (from the director) and broadcasts their events.
+    pub fn apply_tool_calls(&mut self, calls: &[ToolCall]) -> Vec<ServerEvent> {
+        let mut events = Vec::new();
+        for call in calls {
+            events.extend(tools::apply(self, call));
+        }
+        for ev in &events {
+            let _ = self.events.send(ev.clone());
+        }
+        events
+    }
+
     /// Appends a finished turn to the history, applies its tool calls and broadcasts their events.
     pub fn commit_turn(&mut self, commit: TurnCommit, now: Instant) -> Vec<ServerEvent> {
         let TurnCommit {
@@ -491,17 +577,24 @@ impl SessionState {
             });
         }
 
-        let (speaker, said) = match &draft.input {
-            UserInput::Speech(s) => ("candidate", s.clone()),
-            UserInput::Event(kind) => ("app", kind.marker().to_string()),
-        };
-        self.turns.push(Turn {
-            speaker: speaker.into(),
-            text: said,
-            at_ms,
-            interrupted: false,
-            heard: None,
-        });
+        if let Some(said) = draft.input.speech() {
+            self.turns.push(Turn {
+                speaker: "candidate".into(),
+                text: said.to_string(),
+                at_ms,
+                interrupted: false,
+                heard: None,
+            });
+        }
+        if let Some(kind) = draft.input.event() {
+            self.turns.push(Turn {
+                speaker: "app".into(),
+                text: kind.marker().to_string(),
+                at_ms,
+                interrupted: false,
+                heard: None,
+            });
+        }
         self.turns.push(Turn {
             speaker: panelist.clone(),
             text: spoken.clone(),
@@ -521,15 +614,8 @@ impl SessionState {
             self.floor = panelist.clone();
         }
 
-        let mut events = Vec::new();
-        for call in &tool_calls {
-            events.extend(tools::apply(self, call));
-        }
-        for ev in &events {
-            // No subscriber (no socket yet) is fine.
-            let _ = self.events.send(ev.clone());
-        }
-        events
+        // No subscriber (no socket yet) is fine.
+        self.apply_tool_calls(&tool_calls)
     }
 }
 

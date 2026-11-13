@@ -1,5 +1,6 @@
 //! The live interviewer: session state, prompt building, tools, speech filtering and the Fish custom LLM endpoint.
 
+pub mod director;
 pub mod markers;
 pub mod oai;
 pub mod prompt;
@@ -16,8 +17,9 @@ use futures::stream::BoxStream;
 use serde::{Deserialize, Serialize};
 
 pub use state::{
-    Level, LiveSettings, MeetingState, Mode, NewSession, PanelSeat, Panelist, Registry,
-    SessionSettings, SessionState, SessionStatus, Style, Turn, TurnCommit, VoiceKind,
+    Level, LiveSettings, MeetingState, Mode, NewSession, PanelSeat, Panelist, Provisional,
+    Registry, SessionSettings, SessionState, SessionStatus, Style, ToolsMode, Turn, TurnCommit,
+    VoiceKind,
 };
 
 use crate::claude::{ClaudeClient, ClaudeError, MessagesRequest, MessagesResponse, StreamEvent};
@@ -103,6 +105,8 @@ pub struct OrchestratorOptions {
     pub idle_timeout: Duration,
     /// How long a turn waits for the previous turn of the same session to finish.
     pub turn_wait: Duration,
+    /// The whole turn, from request start: every call, continuation and retry shares it (Fish allows 10 s).
+    pub turn_deadline: Duration,
     /// Spoken when no model produced anything, so Fish never gets an empty reply.
     pub hold_line: String,
 }
@@ -114,6 +118,7 @@ impl Default for OrchestratorOptions {
             retry_first_text_timeout: Duration::from_millis(3500),
             idle_timeout: Duration::from_secs(8),
             turn_wait: Duration::from_secs(6),
+            turn_deadline: Duration::from_millis(8500),
             hold_line: "Sorry, give me a second.".into(),
         }
     }

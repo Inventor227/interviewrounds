@@ -18,17 +18,18 @@ use axum::response::{IntoResponse, Response};
 use futures::{Stream, StreamExt};
 use serde::Deserialize;
 use serde_json::{Value, json};
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, OwnedMutexGuard};
 
 use super::constant_time_eq;
-use super::markers::{EventKind, UserInput, parse_user_input};
+use super::director;
+use super::markers::{EventKind, UserInput, parse_user_turn};
 use super::prompt::prepare_live_turn;
 use super::speech_filter::SpeechFilter;
-use super::state::{SessionState, TurnCommit, VoiceKind};
+use super::state::{Provisional, SessionState, ToolsMode, TurnCommit, VoiceKind};
 use super::tools::ToolCall;
 use crate::app::AppState;
 use crate::claude::{
-    ContentBlock, Message, MessagesRequest, Role, StreamEvent, Usage, fallbacks_for,
+    ContentBlock, Message, MessagesRequest, Role, StreamEvent, Usage, fallbacks_for, thinking_for,
 };
 use crate::error::AppError;
 
@@ -116,19 +117,37 @@ pub async fn chat_completions(
     let Some(session) = session else {
         return AppError::NotFound.into_response();
     };
-    let Some(newest) = req.messages.iter().rposition(|m| m.role == "user") else {
+    if !req.messages.iter().any(|m| m.role == "user") {
         return AppError::BadRequest("no user message".into()).into_response();
-    };
-    let input = parse_user_input(&req.messages[newest].text());
-    let fish_last = req.messages[..newest]
+    }
+    // Everything the candidate (or the app) said since our last reply. Fish may hold more than one user message
+    // there: speech we never answered, or a typed event next to the speech.
+    let last_assistant = req.messages.iter().rposition(|m| m.role == "assistant");
+    let after = last_assistant.map(|i| i + 1).unwrap_or(0);
+    let parts: Vec<String> = req.messages[after..]
         .iter()
-        .rev()
-        .find(|m| m.role == "assistant")
-        .map(OaiMessage::text);
+        .filter(|m| m.role == "user")
+        .map(OaiMessage::text)
+        .collect();
+    let fish_last = last_assistant.map(|i| req.messages[i].text());
     let model_name = req
         .model
         .clone()
         .unwrap_or_else(|| "interview-rounds".into());
+
+    let Some(input) = parse_user_turn(&parts) else {
+        // The list ends with our own reply: there is nothing new to answer, and an older user message must never
+        // be answered (or recorded) twice. Fish still needs a non-empty reply.
+        tracing::warn!(session_id = %session_id, "request without a new user message; holding");
+        let hold = app.orchestrator.hold_line.clone();
+        let events = stream! {
+            let mut chunks = Chunks::new(model_name);
+            yield Ok::<_, Infallible>(chunks.content(&hold));
+            yield Ok(chunks.finish(&Usage::default()));
+            yield Ok(Chunks::done());
+        };
+        return sse(events);
+    };
 
     let events = turn_stream(
         app,
@@ -139,6 +158,10 @@ pub async fn chat_completions(
         fish_last,
         model_name,
     );
+    sse(events)
+}
+
+fn sse(events: impl Stream<Item = Result<Event, Infallible>> + Send + 'static) -> Response {
     let mut res = Sse::new(events)
         .keep_alive(KeepAlive::new().interval(Duration::from_secs(10)))
         .into_response();
@@ -259,14 +282,27 @@ impl Assembler {
 
 /// The one retry after a silent failure. Thinking is left adaptive (omitted) at the same low effort: with thinking
 /// turned off over a history written by another model, a fast model was seen speaking its reasoning aloud.
+/// Sonnet 5.5 is the exception: its `between_tools` (thinking off) is safe over its own or another model's history and
+/// keeps the retry fast.
 fn retarget_for_retry(req: &mut MessagesRequest, model: &str) {
     req.model = model.to_string();
-    req.thinking = None;
+    req.thinking = if model.starts_with("claude-sonnet-5-5") {
+        thinking_for(model)
+    } else {
+        None
+    };
     req.fallbacks = fallbacks_for(model);
 }
 
-/// Model calls per turn after tool use: the model gets its "ok" results and finishes what it was saying.
+/// Model calls per turn after tool use (inline tools only): the model gets its "ok" results and finishes what it
+/// was saying.
 const MAX_CONTINUATIONS: u8 = 2;
+
+/// A retry is only worth starting with at least this much of the turn deadline left.
+const MIN_RETRY_WINDOW: Duration = Duration::from_millis(1500);
+
+/// The director gets this long; it runs while the line is being spoken.
+const DIRECTOR_TIMEOUT: Duration = Duration::from_secs(8);
 
 fn add_usage(total: &mut Usage, u: &Usage) {
     total.input_tokens += u.input_tokens;
@@ -275,8 +311,58 @@ fn add_usage(total: &mut Usage, u: &Usage) {
     total.cache_creation_input_tokens += u.cache_creation_input_tokens;
 }
 
-/// One voice turn as an SSE stream. Runs inside the response stream, so if Fish drops the request (for example a
-/// discarded speculative draft) the model call is cancelled and nothing is committed to the history.
+fn is_thinking(b: &ContentBlock) -> bool {
+    matches!(
+        b,
+        ContentBlock::Thinking { .. } | ContentBlock::RedactedThinking { .. }
+    )
+}
+
+/// Keeps a turn that was cut off after some text was streamed. When the response is dropped before the commit
+/// (Fish cancelled it: a barge-in, its own timeout, or a speculative draft it threw away), the turn is parked as
+/// provisional instead of lost. The next request shows whether Fish played it: if its transcript has our line (or
+/// the start of it), the turn is committed then; if not, it was a discarded draft and is forgotten. Holding the
+/// turn lock until the turn is parked keeps the next request from reading the state too early.
+struct TurnGuard {
+    session: Arc<Mutex<SessionState>>,
+    turn: Option<OwnedMutexGuard<()>>,
+    session_id: String,
+    panelist: String,
+    input: UserInput,
+    /// What was streamed to the voice so far.
+    spoken: String,
+    /// The assistant text so far, unfiltered.
+    said: String,
+    done: bool,
+}
+
+impl Drop for TurnGuard {
+    fn drop(&mut self) {
+        if self.done || self.spoken.trim().is_empty() {
+            return;
+        }
+        let Ok(handle) = tokio::runtime::Handle::try_current() else {
+            return;
+        };
+        let session = self.session.clone();
+        let turn = self.turn.take();
+        let provisional = Provisional {
+            panelist_id: self.panelist.clone(),
+            input: self.input.clone(),
+            reply: vec![ContentBlock::text(self.said.trim().to_string())],
+            spoken: self.spoken.trim().to_string(),
+        };
+        tracing::info!(session_id = %self.session_id, panelist_id = %self.panelist, spoken_chars = provisional.spoken.len(), "turn cut off after speech; parked");
+        handle.spawn(async move {
+            let _turn = turn;
+            session.lock().await.provisional.push(provisional);
+        });
+    }
+}
+
+/// One voice turn as an SSE stream. Runs inside the response stream, so if Fish drops the request the model call is
+/// cancelled; what was already streamed is parked (see `TurnGuard`). Every call shares one deadline
+/// (`turn_deadline`, under Fish's 10 s cap); when it passes with nothing said, the hold line is spoken.
 fn turn_stream(
     app: AppState,
     session: Arc<Mutex<SessionState>>,
@@ -289,11 +375,24 @@ fn turn_stream(
     stream! {
         let started = Instant::now();
         let opts = app.orchestrator.clone();
+        let turn_deadline = tokio::time::Instant::now() + opts.turn_deadline;
         let mut chunks = Chunks::new(model_name);
 
         let turn_lock = session.lock().await.turn_lock.clone();
-        let Ok(_turn) = tokio::time::timeout(opts.turn_wait, turn_lock.lock_owned()).await else {
+        let wait = opts.turn_wait.min(opts.turn_deadline);
+        let Ok(turn) = tokio::time::timeout(wait, turn_lock.lock_owned()).await else {
             tracing::warn!(session_id = %session_id, "previous turn still running; holding");
+            // The candidate hears the hold line, so the turn is kept (parked until the next request confirms it).
+            {
+                let mut st = session.lock().await;
+                let panelist_id = st.resolve_panelist(panelist_req.as_deref());
+                st.provisional.push(Provisional {
+                    panelist_id,
+                    input: input.clone(),
+                    reply: vec![ContentBlock::text(opts.hold_line.clone())],
+                    spoken: opts.hold_line.clone(),
+                });
+            }
             yield Ok(chunks.content(&opts.hold_line));
             yield Ok(chunks.finish(&Usage::default()));
             yield Ok(Chunks::done());
@@ -302,6 +401,7 @@ fn turn_stream(
 
         let (panelist, handover_line, req, draft, live) = {
             let mut st = session.lock().await;
+            st.resolve_provisional(fish_last.as_deref(), Instant::now());
             let panelist = st.resolve_panelist(panelist_req.as_deref());
             st.observe_fish_transcript(&panelist, fish_last.as_deref());
             let handover_line = match input {
@@ -311,40 +411,54 @@ fn turn_stream(
             let (req, draft) = prepare_live_turn(&st, &panelist, &input, Instant::now());
             (panelist, handover_line, req, draft, st.live.clone())
         };
+        let mut guard = TurnGuard {
+            session: session.clone(),
+            turn: Some(turn),
+            session_id: session_id.clone(),
+            panelist: panelist.clone(),
+            input: input.clone(),
+            spoken: String::new(),
+            said: String::new(),
+            done: false,
+        };
 
-        // A colleague already wrote this panelist's first line: say it, no model call.
+        // A colleague already wrote this panelist's first line: say it, no model call. A line that filters to
+        // nothing falls through to the model.
         if let Some(line) = handover_line {
-            // Only the marker goes into the history; notes wait for this panelist's next real turn.
-            let mut draft = draft;
-            draft.messages.truncate(1);
-            draft.notes_used = 0;
-            draft.warned_two_minutes = false;
             let mut filter = SpeechFilter::new();
             let spoken = format!("{}{}", filter.push(&line), filter.finish());
-            {
-                let mut st = session.lock().await;
-                st.commit_turn(
-                    TurnCommit {
-                        draft,
-                        extra: Vec::new(),
-                        reply: vec![ContentBlock::text(line.clone())],
-                        spoken: spoken.clone(),
-                        tool_calls: Vec::new(),
-                        handover_line_used: true,
-                    },
-                    Instant::now(),
-                );
+            if !spoken.trim().is_empty() {
+                // Only the marker goes into the history; notes wait for this panelist's next real turn.
+                let mut draft = draft.clone();
+                draft.messages.truncate(1);
+                draft.notes_used = 0;
+                draft.warned_two_minutes = false;
+                {
+                    let mut st = session.lock().await;
+                    st.commit_turn(
+                        TurnCommit {
+                            draft,
+                            extra: Vec::new(),
+                            reply: vec![ContentBlock::text(line.clone())],
+                            spoken: spoken.clone(),
+                            tool_calls: Vec::new(),
+                            handover_line_used: true,
+                        },
+                        Instant::now(),
+                    );
+                }
+                guard.done = true;
+                tracing::info!(session_id = %session_id, panelist_id = %panelist, llm_ttft_ms = 0u64, total_ms = started.elapsed().as_millis() as u64, "handover line");
+                yield Ok(chunks.content(&spoken));
+                yield Ok(chunks.finish(&Usage::default()));
+                yield Ok(Chunks::done());
+                return;
             }
-            tracing::info!(session_id = %session_id, panelist_id = %panelist, llm_ttft_ms = 0u64, total_ms = started.elapsed().as_millis() as u64, "handover line");
-            yield Ok(chunks.content(&spoken));
-            yield Ok(chunks.finish(&Usage::default()));
-            yield Ok(Chunks::done());
-            return;
+            tracing::warn!(session_id = %session_id, panelist_id = %panelist, "hand-over line was empty after filtering; asking the model");
         }
 
         let mut req = req;
         let mut filter = SpeechFilter::new();
-        let mut spoken = String::new();
         let mut asm = Assembler::default();
         let mut extra: Vec<Message> = Vec::new();
         let mut earlier_calls: Vec<ToolCall> = Vec::new();
@@ -355,9 +469,9 @@ fn turn_stream(
         let mut last_error: Option<String> = None;
 
         loop {
-            let first_timeout = if retried { opts.retry_first_text_timeout } else { opts.first_text_timeout };
-            let deadline = tokio::time::Instant::now() + first_timeout;
-            let mut text_seen = !spoken.is_empty();
+            let per_call = if retried { opts.retry_first_text_timeout } else { opts.first_text_timeout };
+            let deadline = (tokio::time::Instant::now() + per_call).min(turn_deadline);
+            let mut text_seen = !guard.spoken.is_empty();
             let mut stop_reason: Option<String> = None;
             let mut error: Option<String> = None;
 
@@ -366,13 +480,14 @@ fn turn_stream(
                 Ok(Err(e)) => error = Some(e.to_string()),
                 Ok(Ok(mut events)) => loop {
                     let next = if text_seen {
-                        tokio::time::timeout(opts.idle_timeout, events.next()).await
+                        let idle = (tokio::time::Instant::now() + opts.idle_timeout).min(turn_deadline);
+                        tokio::time::timeout_at(idle, events.next()).await
                     } else {
                         tokio::time::timeout_at(deadline, events.next()).await
                     };
                     match next {
                         Err(_) => {
-                            error = Some(if text_seen { "stream stalled" } else { "no text before the first-text deadline" }.into());
+                            error = Some(if text_seen { "stream stalled or turn deadline" } else { "no text before the first-text deadline" }.into());
                             break;
                         }
                         Ok(None) => {
@@ -386,12 +501,13 @@ fn turn_stream(
                         Ok(Some(Ok(StreamEvent::TextDelta(t)))) => {
                             text_seen = true;
                             asm.text(&t);
+                            guard.said.push_str(&t);
                             let said = filter.push(&t);
                             if !said.is_empty() {
                                 if ttft_ms.is_none() {
                                     ttft_ms = Some(started.elapsed().as_millis() as u64);
                                 }
-                                spoken.push_str(&said);
+                                guard.spoken.push_str(&said);
                                 yield Ok(chunks.content(&said));
                             }
                         }
@@ -408,19 +524,20 @@ fn turn_stream(
                 },
             }
 
-            let silent = spoken.trim().is_empty();
+            let silent = guard.spoken.trim().is_empty();
             match (stop_reason.as_deref(), error) {
-                // The model stopped for its tool results: send "ok" for each and let it finish its turn
-                // (a reply can stop mid-turn, e.g. after "Hi, I'm Daniel." and show_question).
+                // Inline tools: the model stopped for its tool results; send "ok" for each and let it finish its
+                // turn (a reply can stop mid-turn, e.g. after "Hi, I'm Daniel." and show_question).
                 (Some("tool_use"), None) if continuations < MAX_CONTINUATIONS && !asm.calls.is_empty() => {
                     continuations += 1;
                     if !silent {
                         // Keeps a space between this text and the continuation's.
                         let said = filter.push(" ");
                         if !said.is_empty() {
-                            spoken.push_str(&said);
+                            guard.spoken.push_str(&said);
                             yield Ok(chunks.content(&said));
                         }
+                        guard.said.push(' ');
                     }
                     let ids = asm.tool_ids();
                     let (blocks, calls) = asm.take();
@@ -434,22 +551,36 @@ fn turn_stream(
                     extra.push(assistant);
                     extra.push(results);
                     earlier_calls.extend(calls);
+                    if tokio::time::Instant::now() >= turn_deadline {
+                        last_error = Some("turn deadline before the continuation".into());
+                        break;
+                    }
                     continue;
                 }
-                (Some("refusal"), None) if silent && !retried => {
+                (Some("refusal"), None) if silent => {
                     last_error = Some("refusal".into());
+                }
+                // Stopped with nothing to say and nothing to do (thinking used the budget, or all of it was
+                // filtered): a failure like any other, so the retry gets its chance.
+                (Some(reason), None) if silent && asm.calls.is_empty() && earlier_calls.is_empty() => {
+                    tracing::warn!(session_id = %session_id, panelist_id = %panelist, model = %req.model, stop = reason, "live model stopped without speech");
+                    last_error = Some(format!("stopped ({reason}) without speech"));
                 }
                 (Some(_), None) => break,
                 (_, Some(err)) => {
                     tracing::warn!(session_id = %session_id, panelist_id = %panelist, model = %req.model, error = %err, "live model call failed");
                     last_error = Some(err);
-                    if !silent || retried {
+                    if !silent {
                         break;
                     }
                 }
                 (None, None) => break,
             }
-            // Nothing was said yet: one retry on the fast model.
+            // Nothing was said yet: one retry on the fast model, if the turn deadline leaves room for it.
+            let left = turn_deadline.saturating_duration_since(tokio::time::Instant::now());
+            if retried || left < MIN_RETRY_WINDOW {
+                break;
+            }
             retried = true;
             asm = Assembler::default();
             retarget_for_retry(&mut req, &live.fast_model);
@@ -460,9 +591,10 @@ fn turn_stream(
             if ttft_ms.is_none() {
                 ttft_ms = Some(started.elapsed().as_millis() as u64);
             }
-            spoken.push_str(&tail);
+            guard.spoken.push_str(&tail);
             yield Ok(chunks.content(&tail));
         }
+        let mut spoken = guard.spoken.clone();
 
         let (mut reply, calls) = asm.take();
         let mut tool_calls = earlier_calls;
@@ -472,6 +604,10 @@ fn turn_stream(
             reply.clear();
         } else {
             tool_calls.extend(calls);
+        }
+        // A reply made only of thinking is no reply.
+        if reply.iter().all(is_thinking) {
+            reply.clear();
         }
         // The last call after tool results said nothing: end on the tool call itself and owe its results to the
         // next user message, so the history never has two user messages in a row.
@@ -483,10 +619,7 @@ fn turn_stream(
         }
         if spoken.trim().is_empty() {
             // Fish counts an empty reply as a failure: say the hold line instead.
-            let at = reply
-                .iter()
-                .position(|b| !matches!(b, ContentBlock::Thinking { .. } | ContentBlock::RedactedThinking { .. }))
-                .unwrap_or(reply.len());
+            let at = reply.iter().position(|b| !is_thinking(b)).unwrap_or(reply.len());
             reply.insert(at, ContentBlock::text(opts.hold_line.clone()));
             spoken = opts.hold_line.clone();
             ttft_ms.get_or_insert(started.elapsed().as_millis() as u64);
@@ -494,8 +627,11 @@ fn turn_stream(
         }
 
         // Commit before the final chunk, so a client that leaves right after the text still gets a history entry.
-        {
+        // The director request is built from the same state (history before this turn), then runs on its own.
+        let director_req = {
             let mut st = session.lock().await;
+            let director_req = (live.tools == ToolsMode::Director && !silent_failure)
+                .then(|| director::build_request(&st, &panelist, &draft, &spoken, &live.fast_model));
             st.commit_turn(
                 TurnCommit {
                     draft,
@@ -507,6 +643,12 @@ fn turn_stream(
                 },
                 Instant::now(),
             );
+            director_req
+        };
+        guard.done = true;
+        drop(guard);
+        if let Some(dreq) = director_req {
+            tokio::spawn(run_director(app.clone(), session.clone(), session_id.clone(), panelist.clone(), dreq));
         }
         tracing::info!(
             session_id = %session_id,
@@ -525,5 +667,57 @@ fn turn_stream(
         );
         yield Ok(chunks.finish(&usage));
         yield Ok(Chunks::done());
+    }
+}
+
+/// Runs the director for one spoken line and applies the tool calls it makes (they reach the browser as socket
+/// events). Its calls are not part of the model history: the live model only ever sees speech.
+async fn run_director(
+    app: AppState,
+    session: Arc<Mutex<SessionState>>,
+    session_id: String,
+    panelist: String,
+    req: MessagesRequest,
+) {
+    let started = Instant::now();
+    let res = tokio::time::timeout(DIRECTOR_TIMEOUT, app.llm.create(&req)).await;
+    let ms = started.elapsed().as_millis() as u64;
+    let resp = match res {
+        Ok(Ok(resp)) => resp,
+        Ok(Err(e)) => {
+            tracing::warn!(session_id = %session_id, panelist_id = %panelist, director_ms = ms, error = %e, "director call failed");
+            return;
+        }
+        Err(_) => {
+            tracing::warn!(session_id = %session_id, panelist_id = %panelist, director_ms = ms, "director timed out");
+            return;
+        }
+    };
+    let calls: Vec<ToolCall> = resp
+        .content
+        .iter()
+        .filter_map(|b| match b {
+            ContentBlock::ToolUse { id, name, input } => Some(ToolCall {
+                id: id.clone(),
+                name: name.clone(),
+                input: input.clone(),
+                panelist_id: panelist.clone(),
+            }),
+            _ => None,
+        })
+        .collect();
+    let names: Vec<&str> = calls.iter().map(|c| c.name.as_str()).collect();
+    tracing::info!(
+        session_id = %session_id,
+        panelist_id = %panelist,
+        model = %req.model,
+        director_ms = ms,
+        tools = ?names,
+        cache_read_input_tokens = resp.usage.cache_read_input_tokens,
+        input_tokens = resp.usage.input_tokens,
+        "director"
+    );
+    if !calls.is_empty() {
+        session.lock().await.apply_tool_calls(&calls);
     }
 }

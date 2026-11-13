@@ -18,12 +18,12 @@ use ir_server::claude::{
     ClaudeError, ContentBlock, Message, MessagesRequest, MessagesResponse, Role, StreamEvent, Usage,
 };
 use ir_server::content::Catalog;
-use ir_server::orchestrator::markers::{EventKind, UserInput, parse_user_input};
+use ir_server::orchestrator::markers::{EventKind, UserInput, parse_user_input, parse_user_turn};
 use ir_server::orchestrator::prompt::build_live_request;
 use ir_server::orchestrator::speech_filter::SpeechFilter;
 use ir_server::orchestrator::{
     Level, LiveSettings, LlmApi, MemorySessionAuth, Mode, NewSession, OrchestratorOptions,
-    ServerEvent, SessionSettings, SessionState, Style, VoiceKind,
+    ServerEvent, SessionSettings, SessionState, Style, ToolsMode, VoiceKind,
 };
 use ir_server::{AppState, router};
 use serde_json::{Value, json};
@@ -34,6 +34,8 @@ use tower::ServiceExt;
 
 enum Script {
     Reply(Vec<StreamEvent>),
+    /// Streams these events, then never ends.
+    ThenHang(Vec<StreamEvent>),
     Fail(ClaudeError),
     Hang,
 }
@@ -42,13 +44,23 @@ enum Script {
 struct ScriptedLlm {
     scripts: Mutex<VecDeque<Script>>,
     requests: Mutex<Vec<MessagesRequest>>,
+    /// Non-streamed (director) replies, and the requests they answered.
+    creates: Mutex<VecDeque<MessagesResponse>>,
+    created: Mutex<Vec<MessagesRequest>>,
 }
 
 impl ScriptedLlm {
     fn new(scripts: Vec<Script>) -> Arc<Self> {
         Arc::new(ScriptedLlm {
             scripts: Mutex::new(scripts.into()),
-            requests: Mutex::new(Vec::new()),
+            ..ScriptedLlm::default()
+        })
+    }
+    fn with_creates(scripts: Vec<Script>, creates: Vec<MessagesResponse>) -> Arc<Self> {
+        Arc::new(ScriptedLlm {
+            scripts: Mutex::new(scripts.into()),
+            creates: Mutex::new(creates.into()),
+            ..ScriptedLlm::default()
         })
     }
     fn calls(&self) -> usize {
@@ -62,8 +74,12 @@ impl ScriptedLlm {
 #[async_trait]
 impl LlmApi for ScriptedLlm {
     async fn create(&self, req: &MessagesRequest) -> Result<MessagesResponse, ClaudeError> {
-        self.requests.lock().unwrap().push(req.clone());
-        Err(ClaudeError::BadRequest("create is not scripted".into()))
+        self.created.lock().unwrap().push(req.clone());
+        self.creates
+            .lock()
+            .unwrap()
+            .pop_front()
+            .ok_or_else(|| ClaudeError::BadRequest("create is not scripted".into()))
     }
 
     async fn stream(
@@ -75,6 +91,9 @@ impl LlmApi for ScriptedLlm {
             Some(Script::Reply(events)) => Ok(stream::iter(events.into_iter().map(Ok)).boxed()),
             Some(Script::Fail(err)) => Err(err),
             Some(Script::Hang) => Ok(stream::pending().boxed()),
+            Some(Script::ThenHang(events)) => Ok(stream::iter(events.into_iter().map(Ok))
+                .chain(stream::pending())
+                .boxed()),
             None => Err(ClaudeError::BadRequest("no script left".into())),
         }
     }
@@ -105,6 +124,7 @@ fn live() -> LiveSettings {
         fast_model: "claude-haiku-5-5".into(),
         effort: "low".into(),
         max_tokens: 300,
+        tools: ToolsMode::Inline,
     }
 }
 
@@ -134,19 +154,28 @@ fn new_state(id: &str, round_id: &str, voice: VoiceKind) -> SessionState {
 const SECRET: &str = "test-llm-secret";
 
 fn test_app(llm: Arc<ScriptedLlm>) -> (Router, AppState) {
+    test_app_with(llm, |_| {})
+}
+
+fn test_app_with(
+    llm: Arc<ScriptedLlm>,
+    tune: impl FnOnce(&mut OrchestratorOptions),
+) -> (Router, AppState) {
     let url = "postgres://nobody:nothing@127.0.0.1:1/none";
     let pool = PgPoolOptions::new()
         .acquire_timeout(Duration::from_millis(200))
         .connect_lazy(url)
         .unwrap();
     let cfg = common::test_config(url, &common::temp_dir("public"));
+    let mut opts = OrchestratorOptions {
+        first_text_timeout: Duration::from_millis(300),
+        retry_first_text_timeout: Duration::from_millis(300),
+        ..OrchestratorOptions::default()
+    };
+    tune(&mut opts);
     let state = AppState::new(pool, cfg)
         .with_llm(llm)
-        .with_orchestrator_options(OrchestratorOptions {
-            first_text_timeout: Duration::from_millis(300),
-            retry_first_text_timeout: Duration::from_millis(300),
-            ..OrchestratorOptions::default()
-        });
+        .with_orchestrator_options(opts);
     (router(state.clone()), state)
 }
 
@@ -1112,4 +1141,451 @@ async fn live_turns_through_the_endpoint() {
             st.brief, st.phase_idx, st.pending_tool_results
         );
     }
+}
+
+// ---------- review fixes: dropped turns, turn deadline, long answers, empty replies ----------
+
+/// Sends one request and reads only the first SSE frame, then drops the response (Fish cancelling mid-stream).
+async fn post_chat_and_drop(app: &Router, body: Value) -> String {
+    use http_body_util::BodyExt;
+    let req = Request::post("/v1/chat/completions")
+        .header(header::AUTHORIZATION, format!("Bearer {SECRET}"))
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(body.to_string()))
+        .unwrap();
+    let res = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let mut body = res.into_body();
+    let frame = body.frame().await.expect("a frame").expect("frame ok");
+    let text = String::from_utf8(frame.into_data().unwrap().to_vec()).unwrap();
+    drop(body);
+    // The parked turn is written by a spawned task; give it a moment.
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    text
+}
+
+fn user_texts(history: &[Message]) -> Vec<String> {
+    history
+        .iter()
+        .filter(|m| m.role == Role::User)
+        .map(Message::text)
+        .collect()
+}
+
+#[tokio::test]
+async fn dropped_turn_after_speech_is_kept_when_fish_played_it() {
+    let llm = ScriptedLlm::new(vec![
+        Script::ThenHang(vec![StreamEvent::TextDelta(
+            "Okay. So walk me through".into(),
+        )]),
+        reply("Got it. And the write path?"),
+    ]);
+    let (app, state) = test_app(llm.clone());
+    state
+        .registry
+        .insert(new_state("s1", "sde.system_design.short", VoiceKind::Fish));
+
+    let first = post_chat_and_drop(
+        &app,
+        chat_body(
+            "s1",
+            "p1",
+            json!([{"role": "user", "content": "I'd put a cache in front."}]),
+        ),
+    )
+    .await;
+    assert!(first.contains("Okay. So walk me through"), "{first}");
+    assert!(
+        state
+            .registry
+            .get("s1")
+            .unwrap()
+            .lock()
+            .await
+            .history
+            .is_empty()
+    );
+
+    // Fish played part of the line, then the candidate spoke again.
+    let res = post_chat(
+        &app,
+        SECRET,
+        chat_body(
+            "s1",
+            "p1",
+            json!([
+                {"role": "user", "content": "I'd put a cache in front."},
+                {"role": "assistant", "content": "Okay. So"},
+                {"role": "user", "content": "Reads go to the cache first."}
+            ]),
+        ),
+    )
+    .await;
+    assert_eq!(res.text(), "Got it. And the write path?");
+    let st = state.registry.get("s1").unwrap();
+    let st = st.lock().await;
+    assert_eq!(
+        user_texts(&st.history),
+        vec!["I'd put a cache in front.", "Reads go to the cache first."]
+    );
+    assert!(
+        st.history
+            .iter()
+            .any(|m| m.role == Role::Assistant && m.text() == "Okay. So walk me through")
+    );
+    let cut = st
+        .turns
+        .iter()
+        .find(|t| t.speaker == "p1")
+        .expect("the parked turn is logged");
+    assert!(cut.interrupted);
+    assert_eq!(cut.heard.as_deref(), Some("Okay. So"));
+    // The second request saw the first turn in its history.
+    assert!(
+        user_texts(&llm.request(1).messages).contains(&"I'd put a cache in front.".to_string())
+    );
+}
+
+#[tokio::test]
+async fn dropped_draft_that_was_never_played_is_forgotten() {
+    let llm = ScriptedLlm::new(vec![
+        Script::ThenHang(vec![StreamEvent::TextDelta("Okay. And".into())]),
+        reply("Okay. Why a cache?"),
+    ]);
+    let (app, state) = test_app(llm.clone());
+    state
+        .registry
+        .insert(new_state("s1", "sde.system_design.short", VoiceKind::Fish));
+
+    post_chat_and_drop(
+        &app,
+        chat_body("s1", "p1", json!([{"role": "user", "content": "I'd put"}])),
+    )
+    .await;
+    // A speculative draft: Fish threw it away and sends the finished utterance instead.
+    let res = post_chat(
+        &app,
+        SECRET,
+        chat_body(
+            "s1",
+            "p1",
+            json!([{"role": "user", "content": "I'd put a cache in front."}]),
+        ),
+    )
+    .await;
+    assert_eq!(res.text(), "Okay. Why a cache?");
+    let st = state.registry.get("s1").unwrap();
+    let st = st.lock().await;
+    assert_eq!(user_texts(&st.history), vec!["I'd put a cache in front."]);
+    assert!(st.provisional.is_empty());
+}
+
+#[tokio::test]
+async fn hold_line_while_a_turn_runs_is_kept_once_fish_plays_it() {
+    let llm = ScriptedLlm::new(vec![reply("Okay. Go on.")]);
+    let (app, state) = test_app_with(llm.clone(), |o| o.turn_wait = Duration::from_millis(100));
+    state
+        .registry
+        .insert(new_state("s1", "sde.system_design.short", VoiceKind::Fish));
+    let lock = state
+        .registry
+        .get("s1")
+        .unwrap()
+        .lock()
+        .await
+        .turn_lock
+        .clone();
+    let busy = lock.lock_owned().await;
+    let res = post_chat(
+        &app,
+        SECRET,
+        chat_body("s1", "p1", json!([{"role": "user", "content": "Hello?"}])),
+    )
+    .await;
+    assert_eq!(res.text(), "Sorry, give me a second.");
+    assert_eq!(llm.calls(), 0);
+    drop(busy);
+
+    post_chat(
+        &app,
+        SECRET,
+        chat_body(
+            "s1",
+            "p1",
+            json!([
+                {"role": "user", "content": "Hello?"},
+                {"role": "assistant", "content": "Sorry, give me a second."},
+                {"role": "user", "content": "Sure."}
+            ]),
+        ),
+    )
+    .await;
+    let st = state.registry.get("s1").unwrap();
+    let st = st.lock().await;
+    assert_eq!(user_texts(&st.history), vec!["Hello?", "Sure."]);
+    assert_eq!(
+        st.history
+            .iter()
+            .filter(|m| m.role == Role::Assistant)
+            .map(Message::text)
+            .collect::<Vec<_>>(),
+        vec!["Sorry, give me a second.", "Okay. Go on."]
+    );
+}
+
+#[tokio::test]
+async fn one_turn_deadline_covers_continuations_and_retries() {
+    let llm = ScriptedLlm::new(vec![
+        Script::Reply(vec![
+            StreamEvent::ToolUse {
+                id: "toolu_1".into(),
+                name: "next_phase".into(),
+                input: json!({}),
+            },
+            stop("tool_use"),
+        ]),
+        Script::Hang,
+        Script::Hang,
+    ]);
+    let (app, state) = test_app_with(llm.clone(), |o| {
+        o.first_text_timeout = Duration::from_secs(5);
+        o.retry_first_text_timeout = Duration::from_secs(5);
+        o.turn_deadline = Duration::from_millis(800);
+    });
+    state
+        .registry
+        .insert(new_state("s1", "sde.system_design.short", VoiceKind::Fish));
+    let t = Instant::now();
+    let res = post_chat(
+        &app,
+        SECRET,
+        chat_body("s1", "p1", json!([{"role": "user", "content": "Hi."}])),
+    )
+    .await;
+    assert_eq!(res.text(), "Sorry, give me a second.");
+    assert!(
+        t.elapsed() < Duration::from_millis(1500),
+        "{:?}",
+        t.elapsed()
+    );
+    // The tool call and the hang ran inside the deadline; no retry was started without room for it.
+    assert_eq!(llm.calls(), 2);
+}
+
+#[test]
+fn long_answer_is_an_event_with_a_cut_in_note() {
+    assert_eq!(
+        parse_user_input("[event: long_answer]"),
+        UserInput::Event(EventKind::LongAnswer)
+    );
+    assert_eq!(EventKind::LongAnswer.marker(), "[event: long_answer]");
+    let st = new_state("s1", "sde.system_design.short", VoiceKind::Fish);
+    let req = build_live_request(
+        &st,
+        "p1",
+        &UserInput::Event(EventKind::LongAnswer),
+        Instant::now(),
+    );
+    let note = last_system_note(&req);
+    assert!(note.contains("Let me pause you there"), "{note}");
+    // Typed next to the candidate's speech, it joins the same turn.
+    assert_eq!(
+        parse_user_turn(&["So the cache holds", "[event: long_answer]", "every seat."]),
+        Some(UserInput::SpeechWithEvent(
+            "So the cache holds every seat.".into(),
+            EventKind::LongAnswer
+        ))
+    );
+    assert_eq!(parse_user_turn::<&str>(&[]), None);
+}
+
+#[tokio::test]
+async fn long_answer_marker_is_not_logged_as_candidate_speech() {
+    let llm = ScriptedLlm::new(vec![reply("Let me pause you there. Why Redis?")]);
+    let (app, state) = test_app(llm.clone());
+    state
+        .registry
+        .insert(new_state("s1", "sde.system_design.short", VoiceKind::Fish));
+    post_chat(
+        &app,
+        SECRET,
+        chat_body(
+            "s1",
+            "p1",
+            json!([
+                {"role": "user", "content": "So the cache holds every seat and"},
+                {"role": "user", "content": "[event: long_answer]"}
+            ]),
+        ),
+    )
+    .await;
+    let req = llm.request(0);
+    let note = last_system_note(&req);
+    assert!(note.contains("Let me pause you there"), "{note}");
+    let st = state.registry.get("s1").unwrap();
+    let st = st.lock().await;
+    let speakers: Vec<(&str, &str)> = st
+        .turns
+        .iter()
+        .map(|t| (t.speaker.as_str(), t.text.as_str()))
+        .collect();
+    assert_eq!(
+        speakers[..2],
+        [
+            ("candidate", "So the cache holds every seat and"),
+            ("app", "[event: long_answer]")
+        ]
+    );
+}
+
+#[tokio::test]
+async fn request_ending_with_our_reply_is_not_answered_again() {
+    let llm = ScriptedLlm::new(vec![reply("Should not be called.")]);
+    let (app, state) = test_app(llm.clone());
+    state
+        .registry
+        .insert(new_state("s1", "sde.system_design.short", VoiceKind::Fish));
+    let res = post_chat(
+        &app,
+        SECRET,
+        chat_body(
+            "s1",
+            "p1",
+            json!([
+                {"role": "user", "content": "Hi."},
+                {"role": "assistant", "content": "Hello."}
+            ]),
+        ),
+    )
+    .await;
+    assert_eq!(res.text(), "Sorry, give me a second.");
+    assert_eq!(llm.calls(), 0);
+    assert!(
+        state
+            .registry
+            .get("s1")
+            .unwrap()
+            .lock()
+            .await
+            .history
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn silent_stop_gets_the_retry_before_the_hold_line() {
+    let llm = ScriptedLlm::new(vec![Script::Reply(vec![stop("end_turn")]), reply("Hi.")]);
+    let (app, state) = test_app(llm.clone());
+    state
+        .registry
+        .insert(new_state("s1", "sde.system_design.short", VoiceKind::Fish));
+    let res = post_chat(
+        &app,
+        SECRET,
+        chat_body("s1", "p1", json!([{"role": "user", "content": "Hello."}])),
+    )
+    .await;
+    assert_eq!(res.text(), "Hi.");
+    assert_eq!(llm.calls(), 2);
+    assert_eq!(llm.request(1).model, "claude-haiku-5-5");
+}
+
+#[tokio::test]
+async fn empty_handover_line_falls_back_to_the_model() {
+    let llm = ScriptedLlm::new(vec![reply("Say a node dies. What happens?")]);
+    let (app, state) = test_app(llm.clone());
+    let mut st = new_state("s1", "sde.system_design.full", VoiceKind::Fish);
+    st.pending_handover.insert("p2".into(), "(nods)".into());
+    state.registry.insert(st);
+    let res = post_chat(
+        &app,
+        SECRET,
+        chat_body(
+            "s1",
+            "p2",
+            json!([{"role": "user", "content": "[event: handover]"}]),
+        ),
+    )
+    .await;
+    assert_eq!(res.text(), "Say a node dies. What happens?");
+    assert_eq!(llm.calls(), 1);
+}
+
+// ---------- director mode ----------
+
+fn director_reply(calls: Value) -> MessagesResponse {
+    serde_json::from_value(json!({
+        "id": "msg_d",
+        "model": "claude-haiku-5-5",
+        "content": calls,
+        "stop_reason": "tool_use",
+        "usage": {"input_tokens": 10, "output_tokens": 5}
+    }))
+    .unwrap()
+}
+
+#[tokio::test]
+async fn director_mode_speaks_without_tools_then_applies_the_directors_calls() {
+    let llm = ScriptedLlm::with_creates(
+        vec![reply("Okay. Let's move on to the design.")],
+        vec![director_reply(json!([
+            {"type": "tool_use", "id": "toolu_d1", "name": "next_phase", "input": {}}
+        ]))],
+    );
+    let (app, state) = test_app(llm.clone());
+    let mut st = new_state("s1", "sde.system_design.short", VoiceKind::Fish);
+    st.live.tools = ToolsMode::Director;
+    let mut events = st.events.subscribe();
+    state.registry.insert(st);
+
+    let res = post_chat(
+        &app,
+        SECRET,
+        chat_body(
+            "s1",
+            "p1",
+            json!([{"role": "user", "content": "The API is two calls."}]),
+        ),
+    )
+    .await;
+    assert_eq!(res.text(), "Okay. Let's move on to the design.");
+
+    // The live call carried no tools and told the speaker the app runs them.
+    let live = llm.request(0);
+    assert!(live.tools.is_empty());
+    assert_eq!(live.tool_choice, None);
+    assert_eq!(
+        live.system.last().unwrap().text,
+        ir_server::orchestrator::director::SPEAK_ONLY_NOTE
+    );
+
+    // The director ran on the fast model with the tools, saw the spoken line, and its call was applied.
+    let ev = tokio::time::timeout(Duration::from_secs(2), events.recv())
+        .await
+        .expect("director event")
+        .unwrap();
+    assert!(
+        matches!(ev, ServerEvent::RoundState(ref r) if r.phase_index == 1),
+        "{ev:?}"
+    );
+    let created = llm.created.lock().unwrap().clone();
+    assert_eq!(created.len(), 1);
+    let d = &created[0];
+    assert_eq!(d.model, "claude-haiku-5-5");
+    assert_eq!(d.tools.len(), 6);
+    let last = d.messages.last().unwrap();
+    assert_eq!(last.role, Role::User);
+    assert!(last.text().contains("Okay. Let's move on to the design."));
+    assert!(last.text().contains("The API is two calls."));
+
+    // The live history holds speech only: no tool calls, no owed results.
+    let st = state.registry.get("s1").unwrap();
+    let st = st.lock().await;
+    assert_eq!(st.phase_idx, 1);
+    assert!(st.pending_tool_results.is_empty());
+    assert!(st.history.iter().all(|m| {
+        m.content
+            .iter()
+            .all(|b| !matches!(b, ContentBlock::ToolUse { .. }))
+    }));
 }

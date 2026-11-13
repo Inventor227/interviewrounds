@@ -9,11 +9,11 @@ use anyhow::{Context, anyhow};
 use serde_json::Value;
 
 use super::markers::{EventKind, UserInput};
-use super::state::{SessionSettings, SessionState};
-use super::tools;
+use super::state::{SessionSettings, SessionState, ToolsMode};
+use super::{director, tools};
 use crate::claude::{
-    CacheControl, ContentBlock, Message, MessagesRequest, OutputConfig, Role, ToolChoice,
-    fallbacks_for, thinking_for,
+    CacheControl, ContentBlock, Message, MessagesRequest, OutputConfig, Role, SystemBlock,
+    ToolChoice, fallbacks_for, thinking_for,
 };
 use crate::content::{Catalog, Persona, RoundConfig, section};
 
@@ -75,15 +75,29 @@ pub fn prepare_live_turn(
     messages.extend(new);
 
     let model = state.live.model.clone();
+    let (system, tools, tool_choice) = match state.live.tools {
+        ToolsMode::Inline => (
+            panelist.system.clone(),
+            tools::definitions(),
+            Some(ToolChoice::Auto),
+        ),
+        // Speech only: the director turns the line into tool actions afterwards. The note sits after the cached
+        // block, so the cached prefix is the same text the director reads.
+        ToolsMode::Director => {
+            let mut system = panelist.system.clone();
+            system.push(SystemBlock::text(director::SPEAK_ONLY_NOTE));
+            (system, Vec::new(), None)
+        }
+    };
     let req = MessagesRequest {
         thinking: thinking_for(&model),
         fallbacks: fallbacks_for(&model),
         model,
         max_tokens: state.live.max_tokens,
-        system: panelist.system.clone(),
+        system,
         messages,
-        tools: tools::definitions(),
-        tool_choice: Some(ToolChoice::Auto),
+        tools,
+        tool_choice,
         output_config: Some(OutputConfig::effort(&state.live.effort)),
         stream: true,
     };
@@ -149,31 +163,10 @@ pub fn turn_note(
     };
 
     let mut notes: Vec<String> = Vec::new();
-    match input {
-        UserInput::Speech(_) => {}
-        UserInput::Event(EventKind::Start) => {
-            notes.push("The round starts now. Open as the round script says.".into())
+    if let Some(kind) = input.event() {
+        if let Some(note) = event_note(state, kind, time_line.is_empty()) {
+            notes.push(note);
         }
-        UserInput::Event(EventKind::TimeCheck) => {
-            if time_line.is_empty() {
-                notes.push("Time check from the app: no boundary has passed; carry on.".into());
-            }
-        }
-        UserInput::Event(EventKind::Handover) => notes.push(
-            "You now hold the floor. Your colleague just handed over to you; ask your first question in one or two sentences."
-                .into(),
-        ),
-        UserInput::Event(EventKind::Resume) => notes.push(
-            "The call dropped and the candidate is back. Say \"Welcome back.\", one line about where you were, then a question."
-                .into(),
-        ),
-        UserInput::Event(EventKind::SilenceCheck) => notes.push(format!(
-            "The candidate has been quiet for about {} seconds, so check in once with a short line such as \"Want to think out loud?\", then wait.",
-            state.round.silence_wait_seconds
-        )),
-        UserInput::Event(EventKind::Ending) => notes.push(
-            "Time is up. Close now in one line, with no feedback, then call end_round with that line.".into(),
-        ),
     }
     if let Some(heard) = state.heard_note.get(panelist_id) {
         notes.push(heard.clone());
@@ -235,6 +228,30 @@ pub fn turn_note(
         ("notes", notes.join("\n")),
     ]);
     (tidy(&fill(&state.turn_note_template, &vars)), warned)
+}
+
+/// The note an app event adds to the turn.
+fn event_note(state: &SessionState, kind: EventKind, no_time_line: bool) -> Option<String> {
+    Some(match kind {
+        EventKind::Start => "The round starts now. Open as the round script says.".into(),
+        EventKind::TimeCheck => {
+            if !no_time_line {
+                return None;
+            }
+            "Time check from the app: no boundary has passed; carry on.".into()
+        }
+        EventKind::Handover => "You now hold the floor. Your colleague just handed over to you; ask your first question in one or two sentences.".into(),
+        EventKind::Resume => "The call dropped and the candidate is back. Say \"Welcome back.\", one line about where you were, then a question.".into(),
+        EventKind::SilenceCheck => format!(
+            "The candidate has been quiet for about {} seconds, so check in once with a short line such as \"Want to think out loud?\", then wait.",
+            state.round.silence_wait_seconds
+        ),
+        EventKind::LongAnswer => format!(
+            "The candidate's answer has run past about {} seconds and they may still be talking. Cut in politely now with one short line and one focused question that steers back to the phase goal, such as \"Let me pause you there.\" followed by your question.",
+            state.round.interrupt_after_seconds
+        ),
+        EventKind::Ending => "Time is up. Close now in one line, with no feedback, then call end_round with that line.".into(),
+    })
 }
 
 /// Whole minutes for the note: 0 once time is up, at least 1 while any is left.
