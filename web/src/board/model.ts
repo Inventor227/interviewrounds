@@ -1,6 +1,6 @@
 // Board model helpers: an empty board, item geometry and hit testing, ids.
 // Units are board centimetres, origin top-left, x right, y down (board.v1.schema.json).
-import type { Board, BoardItem, BoardKit, ComponentType } from '../shared/types';
+import type { Board, BoardItem, BoardKit, ClassItem, ClassMember, ComponentType } from '../shared/types';
 
 export type Pt = [number, number];
 
@@ -39,9 +39,11 @@ export function emptyBoard(opts: { id?: string; kit?: BoardKit; question?: strin
 export function itemRect(item: BoardItem): Rect {
   switch (item.kind) {
     case 'component':
-    case 'class':
     case 'group':
       return { x: item.x, y: item.y, w: item.w, h: item.h };
+    case 'class':
+      // A class card grows with its members (research 06 §3.2).
+      return { x: item.x, y: item.y, w: item.w, h: Math.max(item.h, classLayout(item).h) };
     case 'sticky':
       return { x: item.x, y: item.y, w: item.w ?? 7, h: item.h ?? 7 };
     case 'metric':
@@ -207,6 +209,26 @@ export const COMPONENT_NAMES: Record<ComponentType, string> = {
   note: 'Note',
   blank: 'Box',
 };
+
+/** Class card layout (cm): a header, then a row per field and per method (at least one each). */
+export const CLASS_ROWS = { header: 2.6, row: 1.6, gap: 0.3, pad: 0.4 } as const;
+
+export interface MemberRow {
+  member: ClassMember;
+  section: 'fields' | 'methods';
+  rect: Rect;
+}
+
+export function classLayout(c: ClassItem): { h: number; rows: MemberRow[]; fieldsTop: number; methodsTop: number } {
+  const L = CLASS_ROWS;
+  const rows: MemberRow[] = [];
+  const fieldsTop = c.y + L.header + L.gap;
+  c.fields.forEach((m, i) => rows.push({ member: m, section: 'fields', rect: { x: c.x + 0.3, y: fieldsTop + i * L.row, w: c.w - 0.6, h: L.row } }));
+  const methodsTop = fieldsTop + Math.max(1, c.fields.length) * L.row + 2 * L.gap;
+  c.methods.forEach((m, i) => rows.push({ member: m, section: 'methods', rect: { x: c.x + 0.3, y: methodsTop + i * L.row, w: c.w - 0.6, h: L.row } }));
+  const h = methodsTop + Math.max(1, c.methods.length) * L.row + L.pad - c.y;
+  return { h, rows, fieldsTop, methodsTop };
+}
 
 /** Where an edge's chip and label sit: halfway between the centres of its two items. */
 export function edgeMid(board: Board, edge: { from: string; to: string }): Pt | null {

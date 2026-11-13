@@ -11,7 +11,13 @@ const mirror = (r: Rect): Rect => ({ ...r, x: SHEET.w - r.x - r.w });
 /** The kit for a hand: tray on the non-dominant side, bin on the dominant side. */
 export function kitFor(kit: Kit, dominant: 'left' | 'right'): Kit {
   if (dominant === 'right') return kit;
-  return { ...kit, tray: kit.tray.map((s) => ({ ...s, ...mirror(s) })), bin: mirror(kit.bin), view: mirror(kit.view) };
+  return {
+    ...kit,
+    tray: kit.tray.map((s) => ({ ...s, ...mirror(s) })),
+    bin: mirror(kit.bin),
+    view: mirror(kit.view),
+    ...(kit.panel ? { panel: mirror(kit.panel) } : {}),
+  };
 }
 
 export class Tray {

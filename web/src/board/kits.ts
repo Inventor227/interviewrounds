@@ -1,11 +1,97 @@
-// Board kits: the tray of cards and the bin around the sheet, in board cm. The tray sits
-// left of the sheet (negative x) and the bin right of it, so both stay off the drawing area.
-import type { BoardKit, ComponentType } from '../shared/types';
-import { CARD, COMPONENT_NAMES, SHEET, type Rect } from './model';
+// Board kits: what sits around and on the sheet for each round type, in board cm. The tray is
+// left of the sheet (negative x) and the bin right of it, so both stay off the drawing area
+// (kitFor mirrors them for left-handed users). A kit can also:
+// - make other things from its tray (class cards, stickies, metrics, chips dropped on slots),
+// - take presses on its own parts first (code lines, member rows, agenda rows, number cards),
+// - place dropped items (a sticky dropped in a lane or on a ladder rung),
+// - draw its fixed parts on the sheet (lanes, ladder, agenda, slots),
+// - pick what an edge chip does (cycle the arrow, or the class relation),
+// - have a code panel (a standing screen beside the sheet; a region in board cm here).
+import type {
+  Board,
+  BoardItem,
+  BoardKit,
+  BoardOpName,
+  ClassKind,
+  ComponentType,
+  EdgeRel,
+  Lane,
+  MetricRole,
+  OpArgsMap,
+} from '../shared/types';
+import type { Hand } from './input';
+import { CARD, COMPONENT_NAMES, SHEET, type Pt, type Rect } from './model';
+
+export interface Placement {
+  lane?: Lane | null;
+  rank?: number | null;
+  x?: number;
+  y?: number;
+}
+
+/** What a tray slot makes. */
+export type TrayMake =
+  | { kind: 'component'; type: ComponentType }
+  | { kind: 'class'; class_kind: ClassKind }
+  | { kind: 'sticky' }
+  | { kind: 'metric'; role: MetricRole }
+  /** A complexity chip, dropped on a Time or Space slot. */
+  | { kind: 'chip'; value: string };
 
 export interface TraySlot extends Rect {
-  type: ComponentType;
   name: string;
+  make: TrayMake;
+  /** Component slots only (kept for callers that look slots up by component type). */
+  type?: ComponentType;
+}
+
+/** An op without its envelope (the caller adds op_id and src). */
+export type KitOp = { [K in BoardOpName]: { op: K; args: OpArgsMap[K] } }[BoardOpName];
+
+/** A live press on a kit's own part (state is the kit's own). */
+export interface KitPress {
+  hand: Hand;
+  start: Pt;
+  x: number;
+  y: number;
+  /** Time of the latest sample (ms, the pointer's clock): dwell times. */
+  t_ms: number;
+  state: unknown;
+}
+
+export interface KitContext {
+  board: Board;
+  kit: Kit;
+  /** Seconds since round start (trace stamps, agenda ticks, what was shown when). */
+  now_s(): number;
+  /** A new item, edge or line id. */
+  newId(kind: 'item' | 'edge' | 'line'): string;
+}
+
+/** The look of a live kit gesture, for the renderer. */
+export interface KitDraw {
+  /** Changes when the drawing changes (the renderer redraws only then). */
+  key: string;
+  /** Board cm the drawing touches. */
+  bounds: Rect;
+  draw(ctx: CanvasRenderingContext2D, board: Board, pxPerCm: number): void;
+  /** Where it shows: on the sheet (default) or on the code panel (its own surface in XR). */
+  surface?: 'sheet' | 'panel';
+  /** Letting go here deletes what is held: the bin lights up. */
+  overBin?: boolean;
+}
+
+export interface KitHandler {
+  /** A press on one of the kit's parts, or null to let the board handle it. */
+  hit(x: number, y: number, ctx: KitContext): unknown | null;
+  /** The pointer moved; may return ops to send now (a trace marker stepping onto a line). */
+  move?(press: KitPress, ctx: KitContext): KitOp[];
+  /** The pointer let go: the ops to send, and the item to focus (undefined leaves focus). */
+  up(press: KitPress, ctx: KitContext): { ops: KitOp[]; focus?: string | null };
+  /** The press ended without a release (the pointer was cancelled or the hand lost). */
+  cancel?(press: KitPress, ctx: KitContext): void;
+  /** How the live press looks (kit: the kit as placed, mirrored for left-handed users). */
+  overlay?(press: KitPress, board: Board, kit: Kit): KitDraw | null;
 }
 
 export interface Kit {
@@ -15,27 +101,58 @@ export interface Kit {
   bin: Rect;
   /** Size of a card pulled from the tray. */
   card: { w: number; h: number };
-  /** Everything a view should show: tray, sheet and bin. */
+  /** Everything a view should show: tray, sheet, bin and any panel. */
   view: Rect;
+  /** Tapping an edge chip cycles the arrow ('dir', default) or the class relation ('rel'). */
+  edgeChip?: 'dir' | 'rel';
+  /** Relation for edges made by hand (class diagrams). */
+  defaultRel?: EdgeRel;
+  /** Makes a tray drop: an op (create an item, set a slot), or null when it does not land anywhere. */
+  trayDrop?(slot: TraySlot, x: number, y: number, ctx: KitContext): KitOp | null;
+  /**
+   * Filing for an item dropped at (x, y): a sticky's lane and ladder rung, and where it should
+   * sit (x, y: its top-left, snapped into its slot).
+   */
+  place?(item: BoardItem, x: number, y: number, board: Board): Placement | null;
+  /** The kit's own parts take presses before the board. */
+  handler?: KitHandler;
+  /** Fixed parts drawn on the sheet under the items (lanes, ladder, agenda, slots, the panel). */
+  renderSheet?(ctx: CanvasRenderingContext2D, board: Board, pxPerCm: number): void;
+  /** The code panel's region in board cm (coding only). In XR it stands beside the sheet. */
+  panel?: Rect;
+  /** Draws the code panel at `panel` (board cm; the 2D view, and the XR panel's own canvas). */
+  renderPanel?(ctx: CanvasRenderingContext2D, board: Board, pxPerCm: number): void;
+  /**
+   * What the panel shows for this board, as a key: changes when it scrolls (by hand, or to
+   * follow a new line). Surfaces call it before deciding whether to repaint.
+   */
+  panelKey?(board: Board): string;
+  /** What a drawn box or circle becomes (default: a service card, a client card); null keeps it ink. */
+  drawn?: { rect?: TrayMake | null; circle?: TrayMake | null };
+}
+
+export const SLOT = { x: -12, w: 10, h: 2.6, pitch: 3.0, top: 0.5 } as const;
+
+/** Tray slots down the left of the sheet. */
+export function traySlots(entries: { name: string; make: TrayMake }[], pitch: number = SLOT.pitch, h: number = SLOT.h): TraySlot[] {
+  return entries.map((e, i) => ({
+    ...e,
+    ...(e.make.kind === 'component' ? { type: e.make.type } : {}),
+    x: SLOT.x,
+    y: SLOT.top + i * pitch,
+    w: SLOT.w,
+    h,
+  }));
 }
 
 const HLD_TYPES: ComponentType[] = [
   'client', 'lb', 'api_gateway', 'service', 'db', 'kv', 'cache', 'queue', 'cdn', 'object_store', 'search', 'worker', 'external',
 ];
 
-const SLOT = { x: -12, w: 10, h: 2.6, pitch: 3.0, top: 0.5 } as const;
-
 /** System design: 13 component cards. */
 export const HLD_KIT: Kit = {
   id: 'hld',
-  tray: HLD_TYPES.map((type, i) => ({
-    type,
-    name: COMPONENT_NAMES[type],
-    x: SLOT.x,
-    y: SLOT.top + i * SLOT.pitch,
-    w: SLOT.w,
-    h: SLOT.h,
-  })),
+  tray: traySlots(HLD_TYPES.map((type) => ({ name: COMPONENT_NAMES[type], make: { kind: 'component', type } }))),
   bin: { x: SHEET.w + 2, y: SHEET.h - 7, w: 7, h: 7 },
   card: { w: CARD.w, h: CARD.h },
   view: { x: -13, y: -1, w: SHEET.w + 24, h: SHEET.h + 2 },

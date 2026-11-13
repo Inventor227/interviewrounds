@@ -3,9 +3,9 @@
 // a new card, on empty sheet draws ink that the recognizer may turn into a card or an
 // edge. Input never applies ops itself: it emits them, and the caller applies them
 // locally (optimistically) and sends them on.
-import type { Board, BoardEdge, BoardItem, BoardOp, ComponentType } from '../shared/types';
+import type { Board, BoardEdge, BoardItem, BoardOp, EdgeRel } from '../shared/types';
 import { StrokeBuilder } from './ink';
-import { traySlotAt, type Kit } from './kits';
+import { traySlotAt, type Kit, type KitContext, type KitDraw, type KitOp, type KitPress, type TrayMake, type TraySlot } from './kits';
 import {
   clampToSheet,
   distToPolyline,
@@ -83,6 +83,34 @@ export const INK_HOLD_STILL_CM = 0.8;
 export const RIM_CM = 0.8;
 
 const DIR_CYCLE: BoardEdge['dir'][] = ['->', '<->', '--'];
+/** Class diagram relations, in the order a tap on the chip steps through them. */
+export const REL_CYCLE: EdgeRel[] = ['uses', 'has_a', 'is_a', 'implements'];
+
+/** Default sizes (cm) of what a tray slot or a drawn shape makes. */
+const MAKE_SIZE = { class: { w: 14, h: 7 }, sticky: { w: 7, h: 7 }, metric: { w: 10, h: 4 } } as const;
+
+/** The item a tray slot (or a recognized shape) makes; null for chips. */
+export function itemFor(make: TrayMake, id: string, x: number, y: number, w: number, h: number): BoardItem | null {
+  switch (make.kind) {
+    case 'component':
+      return { id, kind: 'component', type: make.type, label: null, x, y, w, h };
+    case 'class':
+      return { id, kind: 'class', label: null, class_kind: make.class_kind, fields: [], methods: [], x, y, w, h };
+    case 'sticky':
+      return { id, kind: 'sticky', lane: null, text: '', votes: 0, quad: null, x, y };
+    case 'metric':
+      return { id, kind: 'metric', role: make.role, label: null, x, y };
+    case 'chip':
+      return null;
+  }
+}
+
+/** Footprint of what a make produces, given the kit's card size for components. */
+export function makeSize(make: TrayMake, kit: Kit): { w: number; h: number } {
+  if (make.kind === 'component') return kit.card;
+  if (make.kind === 'chip') return { w: 6, h: 2.4 };
+  return MAKE_SIZE[make.kind];
+}
 
 /** What the live gesture looks like, for the renderer. */
 export type Overlay =
@@ -90,13 +118,16 @@ export type Overlay =
   | { kind: 'ink'; hand: Hand; points: Pt[] }
   | { kind: 'drag'; hand: Hand; id: string; dx: number; dy: number; overBin: boolean; ink: boolean }
   | { kind: 'connect'; hand: Hand; from: string; x: number; y: number; target: string | null }
-  | { kind: 'tray'; hand: Hand; type: ComponentType; x: number; y: number; onSheet: boolean; overBin: boolean };
+  | { kind: 'tray'; hand: Hand; slot: TraySlot; x: number; y: number; onSheet: boolean; overBin: boolean }
+  /** A kit's own gesture (a code line, a member row, a number card), drawn by the kit. */
+  | { kind: 'kit'; hand: Hand; draw: KitDraw };
 
 type Gesture =
   | { kind: 'press'; id: string; start: Pt; target: 'item' | 'edge' }
   | { kind: 'drag'; id: string; start: Pt; target: 'item' | 'edge'; dx: number; dy: number; overBin: boolean; ink?: boolean }
   | { kind: 'connect'; from: string; x: number; y: number; target: string | null }
-  | { kind: 'tray'; type: ComponentType; x: number; y: number; onSheet: boolean; overBin: boolean }
+  | { kind: 'tray'; slot: TraySlot; x: number; y: number; onSheet: boolean; overBin: boolean }
+  | { kind: 'kit'; press: KitPress }
   | { kind: 'ink'; stroke: StrokeBuilder; grab: { id: string; start: Pt; t0: number } | null };
 
 export interface BoardInputOptions {
@@ -105,6 +136,8 @@ export interface BoardInputOptions {
   now?: () => number;
   /** One Euro filter ink from hands here (off when the hand adapter filters upstream). */
   filterHands?: boolean;
+  /** Seconds since round start, for ops that carry a time (trace, agenda, shown). Default: since this input started. */
+  now_s?: () => number;
 }
 
 export class BoardInput {
@@ -113,6 +146,7 @@ export class BoardInput {
   private offs: (() => void)[];
   private readonly ids: IdGen;
   private readonly now: () => number;
+  private readonly now_s: () => number;
   /** The card under each idle pointer (a hovering hand or the mouse), for highlighting. */
   private readonly hoverBy = new Map<Hand, string>();
 
@@ -125,6 +159,8 @@ export class BoardInput {
   ) {
     this.ids = opts.ids ?? new IdGen();
     this.now = opts.now ?? (() => (typeof performance !== 'undefined' ? performance.now() : Date.now()));
+    const t0 = this.now();
+    this.now_s = opts.now_s ?? (() => Math.round((this.now() - t0) / 100) / 10);
     this.offs = [adapter.onDown((p) => this.down(p)), adapter.onMove((p) => this.move(p)), adapter.onUp((p) => this.up(p))];
     if (adapter.onCancel) this.offs.push(adapter.onCancel((p, reason) => this.cancel(p, reason)));
     if (adapter.onLeave) this.offs.push(adapter.onLeave((hand) => this.leave(hand)));
@@ -133,12 +169,14 @@ export class BoardInput {
   destroy(): void {
     this.offs.forEach((off) => off());
     this.offs = [];
+    for (const g of this.gestures.values()) if (g.kind === 'kit') this.kit.handler?.cancel?.(g.press, this.ctx());
     this.gestures.clear();
   }
 
   /** Live overlays, one per active hand. */
   get overlays(): Overlay[] {
-    return [...this.gestures.entries()].map(([hand, g]) => toOverlay(hand, g)).filter((o) => o.kind !== 'none');
+    const kitOverlay = this.kit.handler?.overlay ? (p: KitPress) => this.kit.handler!.overlay!(p, this.board, this.kit) : undefined;
+    return [...this.gestures.entries()].map(([hand, g]) => toOverlay(hand, g, kitOverlay)).filter((o) => o.kind !== 'none');
   }
 
   /** The first live overlay, or none. */
@@ -160,8 +198,17 @@ export class BoardInput {
     return this.store.board;
   }
 
-  private op(op: Omit<BoardOp, 'op_id' | 'src'>): void {
+  private op(op: Omit<BoardOp, 'op_id' | 'src'> | KitOp): void {
     this.emit({ op_id: this.ids.next('op'), src: 'hand', ...op } as BoardOp);
+  }
+
+  private ctx(): KitContext {
+    return {
+      board: this.board,
+      kit: this.kit,
+      now_s: this.now_s,
+      newId: (kind) => this.ids.next(kind === 'line' ? 'item' : kind),
+    };
   }
 
   private focus(id: string | null): void {
@@ -173,7 +220,11 @@ export class BoardInput {
   private hit(x: number, y: number): Gesture | null {
     const b = this.board;
     const slot = traySlotAt(this.kit, x, y);
-    if (slot) return { kind: 'tray', type: slot.type, x, y, onSheet: false, overBin: false };
+    if (slot) return { kind: 'tray', slot, x, y, onSheet: false, overBin: false };
+
+    // The kit's own parts (code lines, member rows, agenda rows, number cards) come first.
+    const kstate = this.kit.handler?.hit(x, y, this.ctx());
+    if (kstate != null) return { kind: 'kit', press: { hand: 'mouse', start: [x, y], x, y, t_ms: 0, state: kstate } };
 
     // The card under the point: its core drags it, its rim draws (so lines from a card's edge connect).
     let core: BoardItem | null = null;
@@ -204,7 +255,7 @@ export class BoardInput {
       const m = edgeMid(b, e);
       if (!m) continue;
       // A labelled edge shows a pill instead of a chip: the pill is the target.
-      const hitChip = e.label
+      const hitChip = e.label || e.rel
         ? Math.abs(m[0] - x) <= LABEL_PILL_HALF_W_CM && Math.abs(m[1] - y) <= LABEL_PILL_HALF_H_CM
         : Math.hypot(m[0] - x, m[1] - y) <= (core ? CHIP_DRAWN_CM : CHIP_HIT_CM);
       if (hitChip) return { kind: 'press', id: e.id, start: [x, y], target: 'edge' };
@@ -227,6 +278,9 @@ export class BoardInput {
 
   private down(p: BoardPoint): void {
     const { x_cm: x, y_cm: y } = p;
+    // A second down without an up: the old press is over.
+    const old = this.gestures.get(p.hand);
+    if (old?.kind === 'kit') this.kit.handler?.cancel?.(old.press, this.ctx());
     let g = this.hit(x, y);
     if (!g && onSheet(this.board, x, y)) {
       const stroke = new StrokeBuilder(p.hand, { filter: this.opts.filterHands && p.hand !== 'mouse' });
@@ -235,6 +289,10 @@ export class BoardInput {
       g = { kind: 'ink', stroke, grab: ink ? { id: ink, start: [x, y], t0: p.t_ms } : null };
     }
     if (!g) return;
+    if (g.kind === 'kit') {
+      g.press.hand = p.hand;
+      g.press.t_ms = p.t_ms;
+    }
     this.gestures.set(p.hand, g);
     this.hoverBy.delete(p.hand);
     this.changed();
@@ -279,6 +337,13 @@ export class BoardInput {
         g.onSheet = onSheet(this.board, x, y);
         g.overBin = inRect(this.kit.bin, x, y);
         break;
+      case 'kit': {
+        g.press.x = x;
+        g.press.y = y;
+        g.press.t_ms = p.t_ms;
+        for (const op of this.kit.handler?.move?.(g.press, this.ctx()) ?? []) this.op(op);
+        break;
+      }
       case 'ink': {
         const grab = g.grab;
         if (grab && Math.hypot(x - grab.start[0], y - grab.start[1]) > INK_HOLD_STILL_CM) {
@@ -301,11 +366,12 @@ export class BoardInput {
     const g = this.gestures.get(p.hand);
     if (!g) return;
     this.gestures.delete(p.hand);
+    if (g.kind === 'kit') this.kit.handler?.cancel?.(g.press, this.ctx());
     if (reason === 'lost') {
       // Keep the user's work where they put it, but never delete or create off the sheet on a loss.
       const safe = onSheet(this.board, p.x_cm, p.y_cm) && !inRect(this.kit.bin, p.x_cm, p.y_cm);
       if (g.kind === 'drag' && g.target === 'item' && !g.ink && safe) this.drop({ ...g, overBin: false }, p);
-      else if (g.kind === 'tray' && safe) this.createCard(g.type, p.x_cm - this.kit.card.w / 2, p.y_cm - this.kit.card.h / 2, this.kit.card.w, this.kit.card.h);
+      else if (g.kind === 'tray' && safe) this.trayDrop(g.slot, p.x_cm, p.y_cm);
     }
     this.changed();
   }
@@ -342,11 +408,17 @@ export class BoardInput {
         this.drop(fin, p);
         break;
       case 'connect':
-        if (fin.target) this.op({ op: 'edge.create', args: { id: this.ids.next('edge'), from: fin.from, to: fin.target, dir: '->' } });
+        if (fin.target) this.connect(fin.from, fin.target);
         break;
       case 'tray':
-        if (fin.onSheet) this.createCard(fin.type, fin.x - this.kit.card.w / 2, fin.y - this.kit.card.h / 2, this.kit.card.w, this.kit.card.h);
+        this.trayDrop(fin.slot, fin.x, fin.y);
         break;
+      case 'kit': {
+        const res = this.kit.handler?.up(fin.press, this.ctx());
+        for (const op of res?.ops ?? []) this.op(op);
+        if (res?.focus !== undefined) this.focus(res.focus);
+        break;
+      }
       case 'ink':
         this.finishStroke(fin.stroke);
         break;
@@ -358,6 +430,11 @@ export class BoardInput {
     if (g.target === 'edge') {
       const e = this.board.edges.find((x) => x.id === g.id);
       if (!e) return;
+      if (this.kit.edgeChip === 'rel') {
+        const next = e.rel ? REL_CYCLE[(REL_CYCLE.indexOf(e.rel) + 1) % REL_CYCLE.length]! : 'uses';
+        this.op({ op: 'edge.set_rel', args: { id: e.id, rel: next } });
+        return;
+      }
       const next = DIR_CYCLE[(DIR_CYCLE.indexOf(e.dir) + 1) % DIR_CYCLE.length]!;
       this.op({ op: 'edge.set_dir', args: { id: e.id, dir: next } });
       return;
@@ -380,15 +457,45 @@ export class BoardInput {
     // Ink cannot move; a card released off the sheet goes back where it was.
     if (it.kind === 'ink' || !onSheet(this.board, p.x_cm, p.y_cm)) return;
     const r = itemRect(it);
-    const [x, y] = clampToSheet(this.board, snap(r.x + g.dx), snap(r.y + g.dy), r.w, r.h);
-    if (x !== r.x || y !== r.y) this.op({ op: 'item.move', args: { id: it.id, x, y } });
+    let [x, y] = clampToSheet(this.board, snap(r.x + g.dx), snap(r.y + g.dy), r.w, r.h);
+    // The kit may file it somewhere (a sticky's lane or ladder rung) and seat it in that slot.
+    const { x: px, y: py, ...filing } = this.kit.place?.(it, p.x_cm, p.y_cm, this.board) ?? {};
+    if (px !== undefined) x = px;
+    if (py !== undefined) y = py;
+    const changed = Object.entries(filing).some(([k, v]) => (it as unknown as Record<string, unknown>)[k] !== v);
+    if (x !== r.x || y !== r.y || changed) this.op({ op: 'item.move', args: { id: it.id, x, y, ...filing } });
     this.focus(it.id);
   }
 
-  private createCard(type: ComponentType, x: number, y: number, w: number, h: number): void {
+  private connect(from: string, to: string): void {
+    const rel = this.kit.defaultRel;
+    this.op({ op: 'edge.create', args: { id: this.ids.next('edge'), from, to, dir: '->', ...(rel ? { rel } : {}) } });
+  }
+
+  /** A tray card let go at (x, y): the kit's own drop, or the item it makes, centred there. */
+  private trayDrop(slot: TraySlot, x: number, y: number): void {
+    if (this.kit.trayDrop) {
+      const op = this.kit.trayDrop(slot, x, y, this.ctx());
+      if (op) {
+        this.op(op);
+        if (op.op === 'item.create') this.focus(op.args.id);
+      }
+      return;
+    }
+    if (!onSheet(this.board, x, y)) return;
+    const { w, h } = makeSize(slot.make, this.kit);
+    this.createItem(slot.make, x - w / 2, y - h / 2, w, h, [x, y]);
+  }
+
+  /** Creates what a make produces at a snapped, on-sheet spot, filed by the kit; focuses it. */
+  private createItem(make: TrayMake, x: number, y: number, w: number, h: number, at?: Pt): void {
     const [cx, cy] = clampToSheet(this.board, snap(x), snap(y), w, h);
     const id = this.ids.next('item');
-    const item: BoardItem = { id, kind: 'component', type, label: null, x: cx, y: cy, w, h };
+    let item = itemFor(make, id, cx, cy, w, h);
+    if (!item) return;
+    const [px, py] = at ?? [cx + w / 2, cy + h / 2];
+    const placed = this.kit.place?.(item, px, py, this.board);
+    if (placed) item = { ...item, ...placed } as BoardItem;
     this.op({ op: 'item.create', args: item });
     this.focus(id);
   }
@@ -408,27 +515,38 @@ export class BoardInput {
       return;
     }
     switch (r.kind) {
-      case 'rect':
-        this.createCard('service', r.x, r.y, r.w, r.h);
-        return;
+      case 'rect': {
+        // A drawn box makes the kit's box: a service card, a class card, a sticky.
+        const make = this.kit.drawn?.rect === undefined ? ({ kind: 'component', type: 'service' } as TrayMake) : this.kit.drawn.rect;
+        if (make) {
+          const size = make.kind === 'component' || make.kind === 'class' ? { w: Math.max(r.w, make.kind === 'class' ? 10 : r.w), h: Math.max(r.h, make.kind === 'class' ? 6 : r.h) } : makeSize(make, this.kit);
+          this.createItem(make, r.x, r.y, size.w, size.h);
+          return;
+        }
+        break;
+      }
       case 'circle': {
-        const d = snap(2 * r.r);
-        const w = Math.max(3, d);
-        const h = Math.max(2, d);
-        this.createCard('client', r.cx - w / 2, r.cy - h / 2, w, h);
-        return;
+        const make = this.kit.drawn?.circle === undefined ? ({ kind: 'component', type: 'client' } as TrayMake) : this.kit.drawn.circle;
+        if (make) {
+          const d = snap(2 * r.r);
+          const w = Math.max(3, d);
+          const h = Math.max(2, d);
+          this.createItem(make, r.cx - w / 2, r.cy - h / 2, w, h);
+          return;
+        }
+        break;
       }
       case 'connector':
-        this.op({ op: 'edge.create', args: { id: this.ids.next('edge'), from: r.from, to: r.to, dir: '->' } });
+        this.connect(r.from, r.to);
         return;
       case 'ink':
-        this.op({ op: 'item.create', args: { id: this.ids.next('item'), kind: 'ink', points: stroke.inkPoints(), recognized: null } });
-        return;
+        break;
     }
+    this.op({ op: 'item.create', args: { id: this.ids.next('item'), kind: 'ink', points: stroke.inkPoints(), recognized: null } });
   }
 }
 
-function toOverlay(hand: Hand, g: Gesture): Overlay {
+function toOverlay(hand: Hand, g: Gesture, kitOverlay?: (p: KitPress) => KitDraw | null): Overlay {
   switch (g.kind) {
     case 'press':
       return { kind: 'none' };
@@ -437,7 +555,11 @@ function toOverlay(hand: Hand, g: Gesture): Overlay {
     case 'connect':
       return { kind: 'connect', hand, from: g.from, x: g.x, y: g.y, target: g.target };
     case 'tray':
-      return { kind: 'tray', hand, type: g.type, x: g.x, y: g.y, onSheet: g.onSheet, overBin: g.overBin };
+      return { kind: 'tray', hand, slot: g.slot, x: g.x, y: g.y, onSheet: g.onSheet, overBin: g.overBin };
+    case 'kit': {
+      const draw = kitOverlay?.(g.press);
+      return draw ? { kind: 'kit', hand, draw } : { kind: 'none' };
+    }
     case 'ink':
       return { kind: 'ink', hand, points: g.stroke.live() };
   }
