@@ -330,6 +330,22 @@ describe('controllers on the board', () => {
     expect(Math.abs(up.x_cm - 26)).toBeLessThan(0.6);
   });
 
+  it('a tip that is touching stays the pointer a little above the band, then the ray takes over', () => {
+    const { port, xr } = setup();
+    const at = (h: number) => {
+      port.controllerAt('right', 30, 20, h);
+      port.frame();
+      return !!xr.hands!.pointers()[0]?.ray;
+    };
+    // Coming down from above: the ray until the tip is within 3 cm.
+    expect(at(3.6)).toBe(true);
+    expect(at(2.5)).toBe(false);
+    // Lifting a little past 3 cm keeps the touch; past the slack it is the ray again.
+    expect(at(4)).toBe(false);
+    expect(at(5)).toBe(true);
+    expect(at(4)).toBe(true);
+  });
+
   it('a controller is smoothed less than a pinch: it follows a fast move sooner, and a held ray still sits still', () => {
     // The profiles: a steadier pointer gets a higher cutoff (less lag) and a shorter settle.
     expect(CONTROLLER_NEAR_PROFILE.minCutoff).toBeGreaterThan(CONTROLLER_FAR_PROFILE.minCutoff);

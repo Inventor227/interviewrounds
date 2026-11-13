@@ -45,6 +45,8 @@ export const CONTROLLER_FAR_PROFILE: PointerProfile = { minCutoff: 2.0, beta: 14
 
 /** A controller's tip draws directly when it is this close above the sheet (cm), or slightly below it. */
 export const CONTROLLER_NEAR_CM = 3;
+/** Once touching, the tip stays the pointer up to this much higher (cm). */
+export const CONTROLLER_NEAR_SLACK_CM = 1.5;
 /** The aim ray reaches the sheet from at most this far (m): the sheet is on the desk in front of the user. */
 export const CONTROLLER_RAY_MAX_M = 1.5;
 

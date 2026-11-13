@@ -10,7 +10,7 @@
 import { OneEuroFilter } from './ink';
 import { DRAG_THRESHOLD_CM, type BoardPoint, type CancelReason, type PointerAdapter } from './input';
 import { SHEET, type Rect } from './model';
-import { CONTROLLER_NEAR_CM, CONTROLLER_RAY_MAX_M, HAND_PROFILE, profileFor, type BoardPointer, type PointerKind, type PointerProfile } from './pointer';
+import { CONTROLLER_NEAR_CM, CONTROLLER_NEAR_SLACK_CM, CONTROLLER_RAY_MAX_M, HAND_PROFILE, profileFor, type BoardPointer, type PointerKind, type PointerProfile } from './pointer';
 import type { BoardXRPort, SelectPhase, Vec3, XRControllerSample, XRHandSample } from './port';
 
 export const TRACKING_GRACE_MS = 300;
@@ -256,7 +256,9 @@ export class HandAdapter implements PointerAdapter {
       return { ...base, far: true, raw: hit ? hit.point : null };
     }
     const near = this.project(c.tip);
-    if (this.inZone(near) && near.h_cm <= CONTROLLER_NEAR_CM) return { ...base, far: false, raw: c.tip };
+    // A tip already on the sheet stays the pointer a little higher, so it does not flip to the ray at the edge of the band.
+    const touching = t.kind === 'controller' && !t.far && t.visible;
+    if (this.inZone(near) && near.h_cm <= CONTROLLER_NEAR_CM + (touching ? CONTROLLER_NEAR_SLACK_CM : 0)) return { ...base, far: false, raw: c.tip };
     if (!c.busy && this.cast) {
       const hit = this.cast(c.tip, c.dir);
       if (hit && hit.dist <= CONTROLLER_RAY_MAX_M && this.inZone({ ...this.project(hit.point), h_cm: 0 })) return { ...base, far: true, raw: hit.point };
