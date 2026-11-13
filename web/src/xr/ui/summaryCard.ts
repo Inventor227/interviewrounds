@@ -25,7 +25,7 @@ import {
 import type { RoundAction, SummaryView } from './types';
 
 // Sized for direct touch at about 0.44 m: 1 cm type is 1.3°, buttons 5 cm tall with 1.5 cm between them.
-export const SUMMARY_WIDTH_CM = 40;
+export const SUMMARY_WIDTH_CM = 42;
 const BODY_CM = 1.25;
 const SMALL_CM = 1.0;
 export const SUMMARY_MIN_FONT_CM = SMALL_CM;
@@ -110,8 +110,8 @@ export class SummaryCard {
     this.fixBox = f.box;
 
     const actions = row({ gap: SUMMARY_BUTTON_GAP_CM, marginTop: 0.4 });
-    this.retry = button('Retry this answer', { width: 17.4, height: 5, fontSize: 1.3, primary: true, onClick: () => emit('retry') });
-    const report = button('See full report', { width: 17.4, height: 5, fontSize: 1.3, onClick: () => emit('report') });
+    this.retry = button('Retry this answer', { width: 18.6, height: 5, fontSize: 1.3, primary: true, onClick: () => emit('retry') });
+    const report = button('See full report', { width: 18.6, height: 5, fontSize: 1.3, onClick: () => emit('report') });
     actions.add(this.retry.root, report.root);
     root.add(actions);
 
