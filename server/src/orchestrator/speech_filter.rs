@@ -368,6 +368,11 @@ mod tests {
         );
         assert_eq!(run(&["Let's move on. next_phase"]), "Let's move on.");
         assert_eq!(
+            run(&["end_round: That's time."]),
+            "",
+            "nothing before the tool name"
+        );
+        assert_eq!(
             run(&["That's our time. end_round(\"That's our time.\")"]),
             "That's our time."
         );

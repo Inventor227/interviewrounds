@@ -88,16 +88,6 @@ pub enum SessionStatus {
     Abandoned,
 }
 
-/// Where the live interviewer's tool calls come from.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ToolsMode {
-    /// The live call carries no tools and only speaks; after the reply, the director (a fast second call on
-    /// `fast_model`) turns the spoken line into tool actions. Fastest first token.
-    Director,
-    /// The live call carries the tools itself (calls continue after tool use).
-    Inline,
-}
-
 /// Model settings for the live voice turns.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LiveSettings {
@@ -106,7 +96,6 @@ pub struct LiveSettings {
     pub fast_model: String,
     pub effort: String,
     pub max_tokens: u32,
-    pub tools: ToolsMode,
 }
 
 impl LiveSettings {
@@ -116,11 +105,6 @@ impl LiveSettings {
             fast_model: cfg.fast_model.clone(),
             effort: cfg.live_effort.clone(),
             max_tokens: 300,
-            tools: if cfg.live_tools == "inline" {
-                ToolsMode::Inline
-            } else {
-                ToolsMode::Director
-            },
         }
     }
 }

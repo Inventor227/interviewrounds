@@ -25,11 +25,11 @@ use super::director;
 use super::markers::{EventKind, UserInput, parse_user_turn};
 use super::prompt::{TurnDraft, draft_turn, request_for_draft};
 use super::speech_filter::SpeechFilter;
-use super::state::{DirectorJob, Provisional, SessionState, ToolsMode, TurnCommit, VoiceKind};
+use super::state::{DirectorJob, Provisional, SessionState, TurnCommit, VoiceKind};
 use super::tools::ToolCall;
 use crate::app::AppState;
 use crate::claude::{
-    ContentBlock, Message, MessagesRequest, Role, StreamEvent, Usage, fallbacks_for, thinking_for,
+    ContentBlock, MessagesRequest, StreamEvent, Usage, fallbacks_for, thinking_for,
 };
 use crate::error::AppError;
 
@@ -240,7 +240,6 @@ impl Chunks {
 #[derive(Default)]
 struct Assembler {
     blocks: Vec<ContentBlock>,
-    calls: Vec<ToolCall>,
 }
 
 impl Assembler {
@@ -252,40 +251,18 @@ impl Assembler {
         }
     }
 
-    fn tool(&mut self, panelist_id: &str, id: String, name: String, input: Value) {
-        self.blocks.push(ContentBlock::ToolUse {
-            id: id.clone(),
-            name: name.clone(),
-            input: input.clone(),
-        });
-        self.calls.push(ToolCall {
-            id,
-            name,
-            input,
-            panelist_id: panelist_id.to_string(),
-        });
-    }
-
     fn block(&mut self, block: ContentBlock) {
         // After a server-side fallback, model-internal blocks from before the switch are not sent back.
         let is_fallback = matches!(&block, ContentBlock::Other(v) if v.get("type").and_then(Value::as_str) == Some("fallback"));
         if is_fallback {
             self.blocks
                 .retain(|b| matches!(b, ContentBlock::Text { .. }) || matches!(b, ContentBlock::Other(v) if v.get("type").and_then(Value::as_str) == Some("fallback")));
-            self.calls.clear();
         }
         self.blocks.push(block);
     }
 
-    fn tool_ids(&self) -> Vec<String> {
-        self.calls.iter().map(|c| c.id.clone()).collect()
-    }
-
-    fn take(&mut self) -> (Vec<ContentBlock>, Vec<ToolCall>) {
-        (
-            std::mem::take(&mut self.blocks),
-            std::mem::take(&mut self.calls),
-        )
+    fn take(&mut self) -> Vec<ContentBlock> {
+        std::mem::take(&mut self.blocks)
     }
 }
 
@@ -302,10 +279,6 @@ fn retarget_for_retry(req: &mut MessagesRequest, model: &str) {
     };
     req.fallbacks = fallbacks_for(model);
 }
-
-/// Model calls per turn after tool use (inline tools only): the model gets its "ok" results and finishes what it
-/// was saying.
-const MAX_CONTINUATIONS: u8 = 2;
 
 /// A retry is only worth starting with at least this much of the turn deadline left.
 const MIN_RETRY_WINDOW: Duration = Duration::from_millis(1500);
@@ -546,12 +519,9 @@ fn turn_stream(
         guard.draft = Some(draft.clone());
         let mut filter = SpeechFilter::new();
         let mut asm = Assembler::default();
-        let mut extra: Vec<Message> = Vec::new();
-        let mut earlier_calls: Vec<ToolCall> = Vec::new();
         let mut usage = Usage::default();
         let mut ttft_ms: Option<u64> = None;
         let mut retried = false;
-        let mut continuations: u8 = 0;
         let mut last_error: Option<String> = None;
 
         loop {
@@ -597,8 +567,9 @@ fn turn_stream(
                                 yield Ok(chunks.content(&said));
                             }
                         }
-                        Ok(Some(Ok(StreamEvent::ToolUse { id, name, input }))) => {
-                            asm.tool(&panelist, id, name, input);
+                        // The live call carries no tools; a tool call cannot come back, and is ignored if it does.
+                        Ok(Some(Ok(StreamEvent::ToolUse { name, .. }))) => {
+                            tracing::warn!(session_id = %session_id, tool = %name, "tool call in a speech-only reply ignored");
                         }
                         Ok(Some(Ok(StreamEvent::Block(block)))) => asm.block(block),
                         Ok(Some(Ok(StreamEvent::Stop { reason, usage: u }))) => {
@@ -612,43 +583,12 @@ fn turn_stream(
 
             let silent = guard.spoken.trim().is_empty();
             match (stop_reason.as_deref(), error) {
-                // Inline tools: the model stopped for its tool results; send "ok" for each and let it finish its
-                // turn (a reply can stop mid-turn, e.g. after "Hi, I'm Daniel." and show_question).
-                (Some("tool_use"), None) if continuations < MAX_CONTINUATIONS && !asm.calls.is_empty() => {
-                    continuations += 1;
-                    if !silent {
-                        // Keeps a space between this text and the continuation's.
-                        let said = filter.push(" ");
-                        if !said.is_empty() {
-                            guard.spoken.push_str(&said);
-                            yield Ok(chunks.content(&said));
-                        }
-                        guard.said.push(' ');
-                    }
-                    let ids = asm.tool_ids();
-                    let (blocks, calls) = asm.take();
-                    let assistant = Message { role: Role::Assistant, content: blocks };
-                    let results = Message {
-                        role: Role::User,
-                        content: ids.iter().map(ContentBlock::tool_result_ok).collect(),
-                    };
-                    req.messages.push(assistant.clone());
-                    req.messages.push(results.clone());
-                    extra.push(assistant);
-                    extra.push(results);
-                    earlier_calls.extend(calls);
-                    if tokio::time::Instant::now() >= turn_deadline {
-                        last_error = Some("turn deadline before the continuation".into());
-                        break;
-                    }
-                    continue;
-                }
                 (Some("refusal"), None) if silent => {
                     last_error = Some("refusal".into());
                 }
                 // Stopped with nothing to say and nothing to do (thinking used the budget, or all of it was
                 // filtered): a failure like any other, so the retry gets its chance.
-                (Some(reason), None) if silent && asm.calls.is_empty() && earlier_calls.is_empty() => {
+                (Some(reason), None) if silent => {
                     tracing::warn!(session_id = %session_id, panelist_id = %panelist, model = %req.model, stop = reason, "live model stopped without speech");
                     last_error = Some(format!("stopped ({reason}) without speech"));
                 }
@@ -669,6 +609,9 @@ fn turn_stream(
             }
             retried = true;
             asm = Assembler::default();
+            // Nothing was spoken, so the filter starts over (a tool name cut from the first attempt must not
+            // silence the retry).
+            filter = SpeechFilter::new();
             retarget_for_retry(&mut req, &live.fast_model);
         }
 
@@ -682,41 +625,32 @@ fn turn_stream(
         }
         let mut spoken = guard.spoken.clone();
 
-        let (mut reply, calls) = asm.take();
+        let mut reply = asm.take();
         if filter.cut_tool_text() {
             tracing::warn!(session_id = %session_id, panelist_id = %panelist, "tool text cut from the reply");
             // A tool written out as text never enters the history: the model would see its own text-form call on
             // every later turn. The recorded text is what was spoken.
+            // Nothing spoken before the tool name: no text block at all (the hold line below becomes the reply).
+            let said = spoken.trim().to_string();
             let mut first = true;
             reply.retain_mut(|b| match b {
                 ContentBlock::Text { text, .. } => {
-                    let keep = first;
+                    let keep = first && !said.is_empty();
                     first = false;
-                    *text = spoken.trim().to_string();
+                    *text = said.clone();
                     keep
                 }
                 _ => true,
             });
         }
-        let mut tool_calls = earlier_calls;
         let silent_failure = spoken.trim().is_empty() && last_error.is_some();
         if silent_failure {
             // Whatever the failed call left half-done is dropped.
             reply.clear();
-        } else {
-            tool_calls.extend(calls);
         }
         // A reply made only of thinking is no reply.
         if reply.iter().all(is_thinking) {
             reply.clear();
-        }
-        // The last call after tool results said nothing: end on the tool call itself and owe its results to the
-        // next user message, so the history never has two user messages in a row.
-        if reply.is_empty() && extra.last().is_some_and(|m| m.role == Role::User) {
-            extra.pop();
-            if let Some(assistant) = extra.pop() {
-                reply = assistant.content;
-            }
         }
         if spoken.trim().is_empty() {
             // Fish counts an empty reply as a failure: say the hold line instead.
@@ -741,7 +675,7 @@ fn turn_stream(
         let jobs = {
             let mut st = session.lock().await;
             let id = st.new_turn_id();
-            let director_req = (live.tools == ToolsMode::Director && !silent_failure)
+            let director_req = (!silent_failure)
                 .then(|| director::build_request(&st, &panelist, &draft, &spoken, &live.fast_model));
             if speech && opts.confirm_speech_turns {
                 st.park(Provisional {
@@ -749,10 +683,10 @@ fn turn_stream(
                     panelist_id: panelist.clone(),
                     input: input.clone(),
                     draft: Some(draft),
-                    extra,
+                    extra: Vec::new(),
                     reply,
                     spoken: spoken.clone(),
-                    tool_calls,
+                    tool_calls: Vec::new(),
                     parked_at: Instant::now(),
                     director: director_req,
                 });
@@ -761,10 +695,10 @@ fn turn_stream(
                     id,
                     TurnCommit {
                         draft,
-                        extra,
+                        extra: Vec::new(),
                         reply,
                         spoken: spoken.clone(),
-                        tool_calls,
+                        tool_calls: Vec::new(),
                         handover_line_used: false,
                     },
                     Instant::now(),
@@ -785,7 +719,6 @@ fn turn_stream(
             llm_ttft_ms = ttft_ms.unwrap_or_default(),
             total_ms = started.elapsed().as_millis() as u64,
             retried,
-            continuations,
             failed = silent_failure,
             input_tokens = usage.input_tokens,
             cache_read_input_tokens = usage.cache_read_input_tokens,

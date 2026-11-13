@@ -30,7 +30,7 @@ use ir_server::orchestrator::markers::UserInput;
 use ir_server::orchestrator::prompt::{build_live_request, turn_note};
 use ir_server::orchestrator::{
     Level, LiveSettings, LlmApi, Mode, NewSession, OrchestratorOptions, SessionSettings,
-    SessionState, Style, ToolsMode, Turn, VoiceKind,
+    SessionState, Style, Turn, VoiceKind,
 };
 use ir_server::{AppState, router};
 use serde_json::{Value, json};
@@ -241,7 +241,6 @@ fn live() -> LiveSettings {
         fast_model: "claude-sonnet-5-5".into(),
         effort: "low".into(),
         max_tokens: 300,
-        tools: ToolsMode::Inline,
     }
 }
 

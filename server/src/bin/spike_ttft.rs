@@ -21,8 +21,8 @@ use ir_server::orchestrator::markers::{EventKind, UserInput};
 use ir_server::orchestrator::prompt::{draft_turn, prepare_live_turn};
 use ir_server::orchestrator::tools;
 use ir_server::orchestrator::{
-    Level, LiveSettings, Mode, NewSession, SessionSettings, SessionState, Style, ToolsMode,
-    TurnCommit, VoiceKind,
+    Level, LiveSettings, Mode, NewSession, SessionSettings, SessionState, Style, TurnCommit,
+    VoiceKind,
 };
 
 const HISTORY: [(&str, &str); 20] = [
@@ -242,7 +242,6 @@ fn new_state(catalog: &Catalog, round: &str, model: &str) -> anyhow::Result<Sess
             fast_model: model.into(),
             effort: "low".into(),
             max_tokens: 300,
-            tools: ToolsMode::Inline,
         },
         Instant::now(),
     )?;

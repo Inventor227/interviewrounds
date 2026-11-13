@@ -18,8 +18,8 @@ use serde::{Deserialize, Serialize};
 
 pub use state::{
     DirectorJob, Level, LiveSettings, MeetingState, Mode, NewSession, PanelSeat, Panelist,
-    Provisional, Registry, SessionSettings, SessionState, SessionStatus, Style, ToolsMode, Turn,
-    TurnCommit, VoiceKind,
+    Provisional, Registry, SessionSettings, SessionState, SessionStatus, Style, Turn, TurnCommit,
+    VoiceKind,
 };
 
 use crate::claude::{ClaudeClient, ClaudeError, MessagesRequest, MessagesResponse, StreamEvent};

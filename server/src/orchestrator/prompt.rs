@@ -8,12 +8,12 @@ use std::time::Instant;
 use anyhow::{Context, anyhow};
 use serde_json::Value;
 
+use super::director;
 use super::markers::{EventKind, UserInput};
-use super::state::{SessionSettings, SessionState, ToolsMode};
-use super::{director, tools};
+use super::state::{SessionSettings, SessionState};
 use crate::claude::{
     CacheControl, ContentBlock, Message, MessagesRequest, OutputConfig, Role, SystemBlock,
-    ToolChoice, fallbacks_for, thinking_for,
+    fallbacks_for, thinking_for,
 };
 use crate::content::{Catalog, Persona, RoundConfig, section};
 
@@ -82,6 +82,7 @@ pub fn request_for_draft(
     let mut messages = state.history.clone();
     messages.extend(draft.messages.clone());
     let mut messages = perspective(state, panelist_id, messages);
+    strip_empty_text(&mut messages);
     // Second cache breakpoint on the newest user turn (in the history when it was recorded at turn start), so the
     // growing history is read from cache next turn. It exists only in the request; the stored history carries none.
     if let Some(block) = messages
@@ -94,20 +95,10 @@ pub fn request_for_draft(
     }
 
     let model = state.live.model.clone();
-    let (system, tools, tool_choice) = match state.live.tools {
-        ToolsMode::Inline => (
-            panelist.system.clone(),
-            tools::definitions(),
-            Some(ToolChoice::Auto),
-        ),
-        // Speech only: the director turns the line into tool actions afterwards. The note sits after the cached
-        // block, so the cached speaker prompt stays the same with or without it.
-        ToolsMode::Director => {
-            let mut system = panelist.system.clone();
-            system.push(SystemBlock::text(director::SPEAK_ONLY_NOTE));
-            (system, Vec::new(), None)
-        }
-    };
+    // Speech only, never tools: the director turns the spoken line into tool actions afterwards. The note sits
+    // after the cached block.
+    let mut system = panelist.system.clone();
+    system.push(SystemBlock::text(director::SPEAK_ONLY_NOTE));
     MessagesRequest {
         thinking: thinking_for(&model),
         fallbacks: fallbacks_for(&model),
@@ -115,8 +106,8 @@ pub fn request_for_draft(
         max_tokens: state.live.max_tokens,
         system,
         messages,
-        tools,
-        tool_choice,
+        tools: Vec::new(),
+        tool_choice: None,
         output_config: Some(OutputConfig::effort(&state.live.effort)),
         stream: true,
     }
@@ -593,6 +584,16 @@ fn tidy_blank_runs(text: &str) -> String {
         out.push('\n');
     }
     out.trim().to_string()
+}
+
+/// Removes text blocks with no text (the API refuses them) and then messages left with no content. Run on every live
+/// and director request, so one bad history entry can never fail every later call.
+pub fn strip_empty_text(messages: &mut Vec<Message>) {
+    for m in messages.iter_mut() {
+        m.content
+            .retain(|b| !matches!(b, ContentBlock::Text { text, .. } if text.trim().is_empty()));
+    }
+    messages.retain(|m| !m.content.is_empty());
 }
 
 /// Director-only text in the content prompts is marked `[[tool: ...]]` (a span may run over several lines once its
