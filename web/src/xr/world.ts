@@ -26,6 +26,7 @@ import {
 } from '@iwsdk/core';
 import { ACESFilmicToneMapping, Matrix4, Quaternion, Vector3, type Material, type Mesh, type Object3D, type Scene, type Texture } from 'three';
 import { FrameRateGovernor } from './framerate';
+import { HANDS_LOST_LINE, HandsLostWatch } from './handsLost';
 import { AnchorTracker, PlacementLifecycle } from './lifecycle';
 import { yawPitchFromQuat } from './math';
 import { DeskPlacement, type DeskPose, type HandState, type HeadPose } from './placement';
@@ -126,6 +127,9 @@ export interface XRApp {
   standins(): StandIn[];
   stats(): RenderStats;
 }
+
+/** Shown once per session when controllers are seen (Meta hands onboarding: tell users to put them away). */
+export const CONTROLLERS_LINE = 'Put your controllers down: your hands do everything';
 
 const TIPS = ['thumb-tip', 'index-finger-tip', 'middle-finger-tip', 'ring-finger-tip', 'pinky-finger-tip'] as const;
 
@@ -248,6 +252,7 @@ export async function createXRApp(root: HTMLElement, opts: XRAppOptions): Promis
   const right = newHand('right');
   const handStates: HandState[] = [left, right];
   let controllersHinted = false;
+  const handsLost = new HandsLostWatch();
   let lastXRFrameAt: number | null = null;
   let lastInterval = 0;
 
@@ -257,6 +262,8 @@ export async function createXRApp(root: HTMLElement, opts: XRAppOptions): Promis
   world.onXRFrame((frame) => {
     const now = performance.now();
     lastInterval = lastXRFrameAt === null ? 0 : now - lastXRFrameAt;
+    // Frames stopped for a while (headset off, system menu): the hands were not lost, nobody was looking.
+    if (lastInterval > 1000) handsLost.reset();
     lastXRFrameAt = now;
     const ref = world.xrReferenceSpace;
     const session = world.session;
@@ -299,7 +306,12 @@ export async function createXRApp(root: HTMLElement, opts: XRAppOptions): Promis
     if (controllers && !controllersHinted) {
       controllersHinted = true;
       ui.layoutHint(headPose());
-      ui.showHint('Put your controllers down; use your hands', now, 7000);
+      ui.showHint(CONTROLLERS_LINE, now, 7000);
+    }
+    // In a placed room with no hand and no controller in view for 5 s: one calm line, once.
+    if (handsLost.update(now, left.tracked || right.tracked || controllers) && desk$.value) {
+      ui.layoutHint(headPose());
+      ui.showHint(HANDS_LOST_LINE, now, 6000);
     }
     anchors.update(frame, ref);
   });
@@ -584,6 +596,7 @@ export async function createXRApp(root: HTMLElement, opts: XRAppOptions): Promis
     renderer.xr.setFoveation(0.5);
     exitByApp = false;
     controllersHinted = false;
+    handsLost.reset();
     lastXRFrameAt = null;
     s?.addEventListener('visibilitychange', () => {
       // The round controller pauses on anything but `visible`, in every active state, and never resumes by itself.
