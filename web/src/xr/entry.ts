@@ -3,7 +3,8 @@
 // browser's user activation (requestSession needs it).
 //
 // Dev query flags (ignored in production builds): view=preview forces the preview, seats=1|2|3, standins=1 seats
-// converted avatars in passthrough too, offer=1 offers the session so emulator tooling can accept it.
+// converted avatars in passthrough too, offer=1 offers the session so emulator tooling can accept it,
+// fallback=<s> waits longer for the desk touch (slow software rendering in the emulator).
 
 import type { XRApp, XRMode } from './world';
 
@@ -42,6 +43,7 @@ export async function createImmersive(container: HTMLElement, opts: { seats?: 1 
     offer: dev && q.get('offer') === '1',
     // The preview always seats people; in passthrough the avatar runtime does (stand-ins on request in dev).
     standins: mode === 'preview' || (dev && q.get('standins') === '1'),
+    placementFallbackMs: dev && Number(q.get('fallback')) > 0 ? Number(q.get('fallback')) * 1000 : undefined,
   });
   if (dev) (globalThis as { __xrApp?: XRApp }).__xrApp = app;
   return {

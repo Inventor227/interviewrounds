@@ -52,7 +52,9 @@ export default defineConfig({
     dedupe: ['three', '@pmndrs/uikit', 'preact'],
   },
   optimizeDeps: {
-    exclude: ['@babylonjs/havok'],
+    // KTX2Loader finds its Basis transcoder next to itself (new URL(..., import.meta.url)); pre-bundling moves it
+    // into .vite/deps and the transcoder 404s in dev. Builds resolve it fine.
+    exclude: ['@babylonjs/havok', 'three/examples/jsm/loaders/KTX2Loader.js'],
     esbuildOptions: { target: 'esnext' },
   },
 });

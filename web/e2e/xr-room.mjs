@@ -31,7 +31,7 @@ const shot = async (name) => {
 };
 
 await waitReady();
-await go(`/session/emu?offer=1&standins=1&seats=${S.seats}`);
+await go(`/session/emu?offer=1&standins=1&fallback=120&seats=${S.seats}`);
 await waitApp();
 await enterXR();
 await sleep(1500);

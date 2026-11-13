@@ -43,6 +43,8 @@ export interface XRAppOptions {
   standins?: boolean | string[];
   /** Base world options (from iwsdk.config.json via virtual:iwsdk-project). */
   base?: WorldOptions;
+  /** How long placement waits for a touch before the head-height fallback (default 6 s; tooling raises it). */
+  placementFallbackMs?: number;
 }
 
 export interface RenderStats {
@@ -54,6 +56,11 @@ export interface RenderStats {
   textures: number;
   programs: number;
   fps: number;
+  /** Views rendered per frame (2 in a stereo session) and whether they share draw calls (multiview). */
+  views: number;
+  multiview: boolean;
+  /** Draw calls per eye: calls / views without multiview. */
+  callsPerView: number;
 }
 
 export interface XRApp {
@@ -270,7 +277,7 @@ export async function createXRApp(root: HTMLElement, opts: XRAppOptions): Promis
       return Promise.resolve(PREVIEW_DESK);
     }
     return new Promise<DeskPose>((resolve) => {
-      placing = { p: new DeskPlacement(performance.now()), resolve, laidOut: false };
+      placing = { p: new DeskPlacement(performance.now(), opts.placementFallbackMs), resolve, laidOut: false };
       placementView.reset();
       placementView.group.visible = true;
       ui.setStatus('placing');
@@ -457,7 +464,13 @@ export async function createXRApp(root: HTMLElement, opts: XRAppOptions): Promis
     standins: () => standins,
     stats() {
       const i = renderer.info;
+      const xrCam = renderer.xr.isPresenting ? renderer.xr.getCamera() : null;
+      const views = xrCam ? Math.max(1, xrCam.cameras.length) : 1;
+      const multiview = !!(renderer.xr as unknown as { isMultiview?: boolean }).isMultiview;
       return {
+        views,
+        multiview,
+        callsPerView: multiview ? i.render.calls : Math.round(i.render.calls / views),
         calls: i.render.calls,
         triangles: i.render.triangles,
         points: i.render.points,
