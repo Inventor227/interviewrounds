@@ -64,6 +64,8 @@ export interface Mic {
   /** Hands the live stream over (the caller now owns it) and stops metering. */
   take(): MediaStream | null;
   meter: (el: HTMLElement | null) => void;
+  /** The page still holds a live stream (not handed over or stopped). */
+  live: boolean;
 }
 
 export function useMic(): Mic {
@@ -158,6 +160,7 @@ export function useMic(): Mic {
     ask,
     take: () => release(),
     meter: (el) => (meterEl.current = el),
+    live: !!stream.current,
   };
 }
 
@@ -187,12 +190,12 @@ export function MicStep(props: { mic: Mic; action?: ComponentChildren; handedOve
       <StepMark ok={ok} bad={blocked} n={1} />
       <div class="step-body" ref={ref} tabIndex={-1} aria-live="polite">
         <h3 class="step-title">{t.title}</h3>
-        {props.handedOver && s === 'on' ? (
-          <p class="step-text">The round has your mic now.</p>
+        {s === 'on' && !mic.live ? (
+          <p class="step-text">{props.handedOver ? 'The round has your mic now.' : 'The microphone is allowed.'}</p>
         ) : (
           t.body && <p class="step-text">{t.body}</p>
         )}
-        {s === 'on' && !props.handedOver && (
+        {s === 'on' && mic.live && (
           <div class="meter" ref={mic.meter} data-test="mic-meter" aria-hidden="true">
             <span />
           </div>
