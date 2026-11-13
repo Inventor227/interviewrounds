@@ -19,7 +19,7 @@
       "id": "requirements",
       "title": "Requirements",
       "minutes": 2,
-      "goal": "Introduce yourself in one line, give the prompt and call show_question. Answer scope questions with numbers; ask once what matters most if they skip non functional needs.",
+      "goal": "Open in about twenty words: first name, round and length, then ask where they would start, and call show_question. Answer scope questions with numbers; ask once what matters most if they skip non functional needs.",
       "must_cover": [
         "functional",
         "non_functional"

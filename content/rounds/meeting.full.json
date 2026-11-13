@@ -16,16 +16,10 @@
   },
   "phases": [
     {
-      "id": "welcome",
-      "title": "Welcome",
-      "minutes": 1,
-      "goal": "The chair welcomes everyone and asks what we are here to decide, or hands straight to the user if they open. When the user runs the meeting, the opening line has been spoken and the user opens; nobody else welcomes."
-    },
-    {
       "id": "opening",
       "title": "Your opening",
-      "minutes": 4,
-      "goal": "The user's opening or pitch. At most one or two interruptions from impatient attendees, only on the long answer marker. The chair cuts in once if no ask has appeared; when the user runs the meeting, nobody does."
+      "minutes": 5,
+      "goal": "The opening line has been spoken; if not, the chair welcomes everyone in under twenty words and asks what we are here to decide, or hands straight to the user. When the user runs the meeting, nobody else welcomes. Then the user's opening or pitch. At most one or two interruptions from impatient attendees, only on the long answer marker. The chair cuts in once if no ask has appeared; when the user runs the meeting, nobody does."
     },
     {
       "id": "questions",
