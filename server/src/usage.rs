@@ -156,6 +156,16 @@ tokio::task_local! {
     pub static LLM_SESSION: Uuid;
 }
 
+tokio::task_local! {
+    /// Set around a model call whose caller records its own ledger row (meeting prepare), so the metered client
+    /// does not record it a second time.
+    pub static LLM_UNMETERED: ();
+}
+
+fn unmetered() -> bool {
+    LLM_UNMETERED.try_with(|_| ()).is_ok()
+}
+
 fn current_session() -> Option<Uuid> {
     LLM_SESSION.try_with(|id| *id).ok()
 }
@@ -212,6 +222,9 @@ impl MeteredLlm {
 #[async_trait]
 impl LlmApi for MeteredLlm {
     async fn create(&self, req: &MessagesRequest) -> Result<MessagesResponse, ClaudeError> {
+        if unmetered() {
+            return self.inner.create(req).await;
+        }
         let session = current_session();
         let res = self.inner.create(req).await;
         if let Ok(r) = &res {
@@ -241,6 +254,9 @@ impl LlmApi for MeteredLlm {
         &self,
         req: &MessagesRequest,
     ) -> Result<BoxStream<'static, Result<StreamEvent, ClaudeError>>, ClaudeError> {
+        if unmetered() {
+            return self.inner.stream(req).await;
+        }
         let session = current_session();
         let inner = self.inner.stream(req).await?;
         Ok(Box::pin(MeteredStream {

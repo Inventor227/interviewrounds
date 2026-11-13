@@ -81,7 +81,8 @@ pub fn build_request(
         .map(|b| b.text.as_str())
         .collect::<Vec<_>>()
         .join("\n\n");
-    let mut messages = state.history.clone();
+    let mut messages =
+        super::prompt::perspective(state, &panelist.panelist_id, state.history.clone());
     // The history ends on the turn's user message (recorded at turn start); the line follows it as another user
     // message, which the API joins with it.
     if let Some(block) = messages

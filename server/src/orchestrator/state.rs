@@ -140,11 +140,8 @@ pub struct PanelSeat {
     pub persona_id: String,
 }
 
-/// Hidden meeting state the attendee prompts see in their per-turn note (filled by the meeting tasks).
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-pub struct MeetingState {
-    pub hidden: String,
-}
+/// Hidden meeting state; each attendee sees its own part in the per-turn note (`crate::meeting`).
+pub use crate::meeting::MeetingState;
 
 /// What is needed to start a session.
 #[derive(Clone, Debug)]
@@ -344,6 +341,12 @@ pub struct SessionState {
     /// Replies to the candidate's speech committed so far: each one closes a candidate utterance (the board
     /// Scribe runs after it).
     pub speech_commits: u64,
+    /// Which panelist each assistant message and system note of `history` belongs to (by index). With two or more
+    /// panelists, each one sees the others' lines as "Name said: ..." user-side notes, never as its own turns, and
+    /// never sees their notes.
+    pub message_owners: HashMap<usize, String>,
+    /// Background meeting state updates: one per confirmed user turn, one at a time.
+    pub meeting_updates: crate::meeting::live::Updates,
 }
 
 impl SessionState {
@@ -357,7 +360,19 @@ impl SessionState {
             .round(&spec.round_id)
             .ok_or_else(|| anyhow!("unknown round {}", spec.round_id))?
             .clone();
-        let seats = if spec.panel.is_empty() {
+        let mut meeting = spec.meeting.clone();
+        let seats = if let (Mode::Meeting, Some(m), true) =
+            (spec.mode, meeting.as_ref(), spec.panel.is_empty())
+        {
+            // A meeting's panel is its attendees, in plan order.
+            m.attendees
+                .iter()
+                .map(|a| PanelSeat {
+                    panelist_id: a.panelist_id.clone(),
+                    persona_id: a.persona_id.clone(),
+                })
+                .collect()
+        } else if spec.panel.is_empty() {
             let mut seats = vec![PanelSeat {
                 panelist_id: "p1".into(),
                 persona_id: round.panel.lead.clone(),
@@ -372,7 +387,11 @@ impl SessionState {
         } else {
             spec.panel.clone()
         };
-        let personas: Vec<Persona> = seats
+        if let Some(m) = meeting.as_mut() {
+            let ids: Vec<String> = seats.iter().map(|s| s.panelist_id.clone()).collect();
+            m.set_panelists(&ids);
+        }
+        let voices: Vec<Persona> = seats
             .iter()
             .map(|s| {
                 catalog
@@ -381,6 +400,19 @@ impl SessionState {
                     .ok_or_else(|| anyhow!("unknown persona {}", s.persona_id))
             })
             .collect::<anyhow::Result<_>>()?;
+        // Meeting attendees borrow a persona's voice and look but keep their own name and role.
+        let personas: Vec<Persona> = match meeting.as_ref().filter(|_| spec.mode == Mode::Meeting) {
+            Some(m) => voices
+                .iter()
+                .zip(&m.attendees)
+                .map(|(p, a)| Persona {
+                    display_name: a.name.clone(),
+                    title: a.role.clone(),
+                    ..p.clone()
+                })
+                .collect(),
+            None => voices.clone(),
+        };
         let question = catalog
             .bank_card(&round.question_pool, spec.question_id.as_deref())
             .cloned()
@@ -393,15 +425,20 @@ impl SessionState {
             .collect();
         let mut panel = Vec::with_capacity(seats.len());
         for (seat, (s, persona)) in seats.iter().zip(&personas).enumerate() {
-            let text = prompt::render_system(
-                catalog,
-                &round,
-                persona,
-                seat,
-                &panel_view,
-                &question,
-                &spec.settings,
-            )
+            let text = match meeting.as_ref().filter(|_| spec.mode == Mode::Meeting) {
+                Some(m) => {
+                    crate::meeting::live::render_system(catalog, &round, m, seat, &voices[seat])
+                }
+                None => prompt::render_system(
+                    catalog,
+                    &round,
+                    persona,
+                    seat,
+                    &panel_view,
+                    &question,
+                    &spec.settings,
+                ),
+            }
             .with_context(|| format!("rendering the prompt for {}", s.panelist_id))?;
             panel.push(Panelist {
                 panelist_id: s.panelist_id.clone(),
@@ -415,11 +452,29 @@ impl SessionState {
             .unwrap_or(prompt::DEFAULT_TURN_NOTE)
             .to_string();
         let (events, _) = broadcast::channel(64);
+        // A meeting opens with the plan's line, spoken word for word by the chair (or, when the user chairs, the
+        // decision maker) on [event: start], with no model call.
+        let mut pending_handover = HashMap::new();
+        let mut floor = panel[0].panelist_id.clone();
+        if let Some(opener) = meeting
+            .as_ref()
+            .filter(|_| spec.mode == Mode::Meeting)
+            .and_then(|m| {
+                m.opening_speaker()
+                    .map(|a| (a.panelist_id.clone(), m.opening_line.clone()))
+            })
+            .filter(|(pid, _)| panel.iter().any(|p| &p.panelist_id == pid))
+        {
+            floor = opener.0.clone();
+            if !opener.1.trim().is_empty() {
+                pending_handover.insert(opener.0, opener.1);
+            }
+        }
         Ok(SessionState {
             id: spec.id,
             identity_id: spec.identity_id,
             mode: spec.mode,
-            floor: panel[0].panelist_id.clone(),
+            floor,
             round,
             settings: spec.settings,
             panel,
@@ -430,7 +485,7 @@ impl SessionState {
             history: Vec::new(),
             turns: Vec::new(),
             board_text: String::new(),
-            meeting: spec.meeting,
+            meeting,
             hints_given: 0,
             hint_max_level: 0,
             last_agent_text: HashMap::new(),
@@ -440,7 +495,7 @@ impl SessionState {
             live,
             question,
             pending_tool_results: Vec::new(),
-            pending_handover: HashMap::new(),
+            pending_handover,
             pending_notes: Vec::new(),
             heard_note: HashMap::new(),
             two_minute_warned: false,
@@ -457,7 +512,36 @@ impl SessionState {
             dev_empty_replies: 0,
             director_jobs: Vec::new(),
             speech_commits: 0,
+            message_owners: HashMap::new(),
+            meeting_updates: Default::default(),
         })
+    }
+
+    /// Appends to the history, remembering which panelist an assistant message or system note belongs to. Every
+    /// assistant message must go through here (R28 perspective).
+    pub fn push_message(&mut self, panelist_id: &str, message: Message) {
+        if matches!(message.role, Role::Assistant | Role::System) {
+            self.message_owners
+                .insert(self.history.len(), panelist_id.to_string());
+        }
+        self.history.push(message);
+    }
+
+    /// Meetings the user chairs: no attendee moves the phases, so they follow the schedule.
+    /// When the phase moves, the browser gets a `round.state` (returned and broadcast).
+    pub fn sync_meeting_phase(&mut self, now: Instant) -> Option<ServerEvent> {
+        if !self.meeting.as_ref().is_some_and(|m| m.user_chairs) {
+            return None;
+        }
+        let elapsed_min = self.elapsed_ms(now) as f64 / 60_000.0;
+        let due = crate::meeting::live::scheduled_phase(&self.round, elapsed_min);
+        if due <= self.phase_idx {
+            return None;
+        }
+        self.phase_idx = due;
+        let ev = ServerEvent::RoundState(self.round_state(now));
+        let _ = self.events.send(ev.clone());
+        Some(ev)
     }
 
     pub fn panelist(&self, id: &str) -> Option<&Panelist> {
@@ -989,18 +1073,25 @@ impl SessionState {
             for m in &mut messages {
                 m.content.iter_mut().for_each(|c| c.set_cache_control(None));
             }
-            self.history.extend(messages);
-            self.history.extend(extra);
+            for m in messages {
+                self.push_message(&panelist, m);
+            }
+            for m in extra {
+                self.push_message(&panelist, m);
+            }
             if !reply.is_empty() {
                 for block in &reply {
                     if let ContentBlock::ToolUse { id, .. } = block {
                         self.pending_tool_results.push(id.clone());
                     }
                 }
-                self.history.push(Message {
-                    role: Role::Assistant,
-                    content: reply,
-                });
+                self.push_message(
+                    &panelist,
+                    Message {
+                        role: Role::Assistant,
+                        content: reply,
+                    },
+                );
             }
         } else if !spoken.trim().is_empty() {
             let name = self.display_name(&panelist);
@@ -1045,6 +1136,12 @@ impl SessionState {
             UserInput::Event(super::markers::EventKind::Handover)
         ) {
             self.floor = panelist.clone();
+        }
+
+        // A meeting judges each confirmed user turn in the background (the reply to it was played).
+        if self.meeting.is_some() && draft.input.speech().is_some() {
+            let confirmed = self.turns.len();
+            self.meeting_updates.request(confirmed);
         }
 
         // No subscriber (no socket yet) is fine.
@@ -1161,6 +1258,8 @@ impl Registry {
         let _turn =
             tokio::time::timeout(std::time::Duration::from_secs(10), turn_lock.lock_owned()).await;
         let events = handle.lock().await.flush_provisional();
+        // The last confirmed turn's meeting update lands (bounded) before the final state is read.
+        crate::meeting::live::drain(&handle, crate::meeting::live::DRAIN_WAIT).await;
         self.remove(id);
         Some((handle, events))
     }

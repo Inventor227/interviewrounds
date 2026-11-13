@@ -3,10 +3,12 @@
 pub mod content;
 pub mod llm_gate;
 pub mod me;
+pub mod meetings;
 pub mod report;
 pub mod sessions;
 
 use axum::Router;
+use axum::extract::DefaultBodyLimit;
 use axum::middleware;
 use axum::routing::{get, post, put};
 
@@ -30,6 +32,11 @@ pub fn routes(state: &AppState) -> Router<AppState> {
         .route("/api/me/settings", put(me::put_settings))
         .route("/api/me/onboarding-done", post(me::onboarding_done))
         .merge(report::routes())
+        .route(
+            "/api/meetings/prepare",
+            post(meetings::prepare_route)
+                .layer(DefaultBodyLimit::max(crate::meeting::MAX_SETUP_BYTES)),
+        )
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             identity::require,

@@ -449,14 +449,34 @@ fn turn_stream(
             return;
         }
 
+        // Meetings: the state update runner (it judges each confirmed user turn), and a decision turn waits briefly
+        // for an update still running so the decision follows the newest state.
+        let decision_wait = {
+            let mut st = session.lock().await;
+            crate::meeting::live::ensure_runner(
+                &mut st,
+                &session,
+                app.llm.clone(),
+                app.catalog.clone(),
+                app.task_scope.as_ref(),
+            );
+            let panelist = st.resolve_panelist(panelist_req.as_deref());
+            crate::meeting::live::decision_wait_needed(&st, &panelist, Instant::now())
+        };
+        if decision_wait {
+            crate::meeting::live::wait_settled(&session, crate::meeting::live::DECISION_WAIT).await;
+        }
+
         // The panelist first: only its own parked replies are settled against its own Fish transcript.
         let (panelist, handover_line, input, draft, live, jobs) = {
             let mut st = session.lock().await;
             let panelist = st.resolve_panelist(panelist_req.as_deref());
             st.resolve_provisional(&panelist, fish_last.as_deref());
             st.observe_fish_transcript(&panelist, fish_last.as_deref());
+            st.sync_meeting_phase(Instant::now());
+            // A line written in advance is spoken word for word: a hand-over, or a meeting's opening line.
             let handover_line = match input {
-                UserInput::Event(EventKind::Handover) => st.pending_handover.get(&panelist).cloned(),
+                UserInput::Event(EventKind::Handover | EventKind::Start) => st.pending_handover.get(&panelist).cloned(),
                 _ => None,
             };
             // Fish sends the whole utterance again on each request; `record_user` revises or extends what is

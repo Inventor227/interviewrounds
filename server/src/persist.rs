@@ -239,6 +239,12 @@ pub struct LiveSnapshot {
     pub last_speaker: Option<String>,
     #[serde(default)]
     pub board_text: String,
+    /// The live meeting state (stances, concerns, decision), kept for reloads and the report.
+    #[serde(default)]
+    pub meeting: Option<MeetingState>,
+    /// Who said each assistant message and system note of `history` (per-panelist views).
+    #[serde(default)]
+    pub message_owners: HashMap<usize, String>,
 }
 
 pub fn snapshot(st: &SessionState, now: Instant) -> LiveSnapshot {
@@ -261,6 +267,8 @@ pub fn snapshot(st: &SessionState, now: Instant) -> LiveSnapshot {
         two_minute_warned: st.two_minute_warned,
         last_speaker: st.last_speaker.clone(),
         board_text: st.board_text.clone(),
+        meeting: st.meeting.clone(),
+        message_owners: st.message_owners.clone(),
     }
 }
 
@@ -295,13 +303,17 @@ pub fn restore(st: &mut SessionState, snap: LiveSnapshot, now: Instant) {
     st.two_minute_warned = snap.two_minute_warned;
     st.last_speaker = snap.last_speaker;
     st.board_text = snap.board_text;
+    if snap.meeting.is_some() {
+        st.meeting = snap.meeting;
+    }
+    st.message_owners = snap.message_owners;
 }
 
 fn parse_enum<T: serde::de::DeserializeOwned>(value: &str) -> anyhow::Result<T> {
     serde_json::from_value(json!(value)).with_context(|| format!("unexpected value {value:?}"))
 }
 
-/// Hidden meeting state for the attendee prompts, from the stored plan.
+/// The starting meeting state of a stored plan (the snapshot, when there is one, replaces it).
 pub async fn meeting_state(
     db: &PgPool,
     plan_id: Option<Uuid>,
@@ -309,13 +321,13 @@ pub async fn meeting_state(
     let Some(plan_id) = plan_id else {
         return Ok(None);
     };
-    let plan: Option<Value> = sqlx::query_scalar("select plan from meeting_plans where id = $1")
-        .bind(plan_id)
-        .fetch_optional(db)
-        .await?;
-    Ok(plan.map(|p| MeetingState {
-        hidden: p.to_string(),
-    }))
+    let row: Option<(Value, Value)> =
+        sqlx::query_as("select setup, plan from meeting_plans where id = $1")
+            .bind(plan_id)
+            .fetch_optional(db)
+            .await?;
+    row.map(|(setup, plan)| MeetingState::from_json(&setup, &plan))
+        .transpose()
 }
 
 /// Builds the in-memory state of a stored session (and restores its snapshot when there is one).
@@ -462,6 +474,16 @@ pub async fn end_session(app: &AppState, id: Uuid, reason: &str) -> anyhow::Resu
         }
         _ => None,
     };
+    if let Some(h) = &handle {
+        // The last played reply is committed first, then the meeting state update it asked for lands (bounded),
+        // so the stored state is the final one.
+        crate::ws::Playback::settle_unplayed(
+            &mut *h.lock().await,
+            fish_last.as_deref(),
+            Instant::now(),
+        );
+        crate::meeting::live::drain(h, crate::meeting::live::DRAIN_WAIT).await;
+    }
     let mut guard = match &handle {
         Some(h) => Some(h.lock().await),
         None => None,

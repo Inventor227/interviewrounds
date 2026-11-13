@@ -394,6 +394,7 @@ async fn create_inner(
     req: CreateSessionReq,
 ) -> AppResult<Result<Value, usage::CapError>> {
     // What to build.
+    let mut meeting_state = None;
     let (round, seats, plan) = match req.mode {
         Mode::Interview => {
             let id = req
@@ -414,6 +415,8 @@ async fn create_inner(
             .fetch_optional(&app.db)
             .await?
             .ok_or(AppError::NotFound)?;
+            meeting_state =
+                Some(crate::api::meetings::load_meeting(&app.db, plan_id, identity.id).await?);
             let id = req
                 .round_id
                 .clone()
@@ -453,11 +456,7 @@ async fn create_inner(
             },
             panel: seats,
             question_id: None,
-            meeting: plan
-                .as_ref()
-                .map(|(_, p)| crate::orchestrator::MeetingState {
-                    hidden: p.to_string(),
-                }),
+            meeting: meeting_state,
         },
         &app.catalog,
         LiveSettings::from_config(&app.config),

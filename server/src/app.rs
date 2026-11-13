@@ -47,6 +47,8 @@ pub struct AppState {
     pub load_lock: Arc<tokio::sync::Mutex<()>>,
     /// Wakes the scoring worker when a round ends in `scoring`.
     pub scoring_kick: Arc<tokio::sync::Notify>,
+    /// Wraps background tasks of a session (meeting state updates) in the usage ledger's session scope.
+    pub task_scope: Option<crate::meeting::live::TaskScope>,
 }
 
 impl AppState {
@@ -69,9 +71,15 @@ impl AppState {
             timing: SessionTiming::default(),
             load_lock: Arc::new(tokio::sync::Mutex::new(())),
             scoring_kick: Arc::new(tokio::sync::Notify::new()),
+            task_scope: Some(session_ledger_scope()),
             config: Arc::new(config),
             db,
         }
+    }
+
+    pub fn with_task_scope(mut self, scope: crate::meeting::live::TaskScope) -> Self {
+        self.task_scope = Some(scope);
+        self
     }
 
     pub fn with_catalog(mut self, catalog: Catalog) -> Self {
@@ -169,6 +177,19 @@ pub fn router(state: AppState) -> Router {
             csp,
         ))
         .layer(TraceLayer::new_for_http())
+}
+
+/// Runs a session's background task inside the ledger's session scope (a session id that is not a uuid runs
+/// unscoped).
+fn session_ledger_scope() -> crate::meeting::live::TaskScope {
+    Arc::new(
+        |sid: String, fut: futures::future::BoxFuture<'static, ()>| match sid.parse::<uuid::Uuid>()
+        {
+            Ok(u) => Box::pin(crate::usage::LLM_SESSION.scope(u, fut))
+                as futures::future::BoxFuture<'static, ()>,
+            Err(_) => fut,
+        },
+    )
 }
 
 /// A panic in one request answers 500 and leaves the server running (the release build unwinds; tasks spawned
