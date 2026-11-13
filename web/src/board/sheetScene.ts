@@ -25,6 +25,8 @@ export interface DevSheetHandle {
   /** The sheet's board texture as a PNG data URL (what the wall board shows). */
   snapshot(): string;
   sent: BoardOp[];
+  /** Every pinch start on the board (board cm), for checking where pinches land. */
+  pinches: { x_cm: number; y_cm: number; hand: string }[];
   destroy(): void;
 }
 
@@ -165,7 +167,11 @@ export async function createDevSheet(root: HTMLElement): Promise<DevSheetHandle>
     ids: new IdGen('x'),
   });
 
+  const pinches: DevSheetHandle['pinches'] = [];
+  xr.hands.onDown((p) => pinches.push({ x_cm: Math.round(p.x_cm * 100) / 100, y_cm: Math.round(p.y_cm * 100) / 100, hand: p.hand }));
+
   const handle: DevSheetHandle = {
+    pinches,
     store,
     xr,
     sent,

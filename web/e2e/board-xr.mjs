@@ -203,13 +203,15 @@ await shot('xr-02-two-boxes');
 // 3. A line from the first card's edge to the second: a connection.
 {
   const [a, c] = b.items;
-  const from = [a.x + a.w - 0.3, a.y + a.h / 2];
+  // Start at the card's edge, as on paper (the recognizer takes starts up to 1 cm outside).
+  const from = [a.x + a.w + 0.4, a.y + a.h / 2];
   const to = [c.x + 2, c.y + c.h / 2 + 0.3];
   await draw(along([from, to], 1.5));
 }
 await sleep(800);
 b = await board();
-if (b.edges.length !== 1) fail('the line did not connect the cards', b);
+const pinches = () => page(() => globalThis.__boardxr.pinches);
+if (b.edges.length !== 1) fail('the line did not connect the cards', { b, pinches: await pinches() });
 await shot('xr-03-connected');
 
 // 4. Voice labels through the dev typed turn: select a card with a short pinch, then say its name.
@@ -249,5 +251,5 @@ await call('xr', 'set-transform', { device: 'hand-right', position: { x: 0.35, y
 look = { pitch: 6, yaw: 0, roll: 0 };
 await shot('xr-07-wall');
 
-writeFileSync(path.join(SHOTS, 'board-xr.json'), JSON.stringify({ desk, board: b, sent }, null, 2));
+writeFileSync(path.join(SHOTS, 'board-xr.json'), JSON.stringify({ desk, board: b, sent, pinches: await pinches() }, null, 2));
 console.log('board xr ok');
