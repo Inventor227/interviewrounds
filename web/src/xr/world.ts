@@ -1,11 +1,13 @@
 // The XR app: one IWSDK world for the round room, in passthrough (`ar`) or as a 2D preview in the page (`preview`).
 //
-// ar:      immersive-ar, hand tracking required, hit test and anchors optional, 72 Hz raised to 90 only with
-//          measured headroom, medium fixed foveation, pause on XRSession visibility changes. On session start the desk placement runs ("Touch your desk where the sheet
-//          should go"), then the room is built and anchored around that desk.
+// ar:      immersive-ar, hand tracking required, hit test and anchors optional, medium fixed foveation. 72 Hz,
+//          raised to 90 only after the room and people are on screen and frames show headroom. Placement is
+//          explicit: place() asks "Touch your desk where the sheet should go", builds the room around the desk and
+//          anchors it. Everything placed belongs to one session: a session end forgets the desk and the anchor, hides
+//          the room and rejects a pending place(). XRSession visibility changes pause a live round.
 // preview: no WebXR. The same room in a calm virtual meeting room, camera at seated eye height, mouse input.
 //
-// The round controller drives `ui` and reads `room.seatPoses()`, `headPose()` and `hands()`.
+// The round controller drives it through createXRPort (port.ts).
 
 import {
   createSystem,
@@ -15,14 +17,16 @@ import {
   ReferenceSpaceType,
   SessionMode,
   signal,
+  UIKitDocument,
   VisibilityState,
   World,
   type ReadonlySignal,
   type WorldOptions,
 } from '@iwsdk/core';
-import { ACESFilmicToneMapping, Matrix4, Quaternion, Vector3, type Mesh, type Object3D, type Scene } from 'three';
-import { yawPitchFromQuat } from './math';
+import { ACESFilmicToneMapping, Matrix4, Quaternion, Vector3, type Material, type Mesh, type Object3D, type Scene, type Texture } from 'three';
 import { FrameRateGovernor } from './framerate';
+import { AnchorTracker, PlacementLifecycle } from './lifecycle';
+import { yawPitchFromQuat } from './math';
 import { DeskPlacement, type DeskPose, type HandState, type HeadPose } from './placement';
 import { PlacementView } from './placementView';
 import { buildPreviewRoom, MouseLook, PREVIEW_DESK, PREVIEW_FOV } from './preview';
@@ -76,14 +80,16 @@ export interface XRApp {
   room: Room;
   ui: RoundUI;
   sounds: Sounds;
-  /** Enters the immersive session (ar; needs a user gesture) or starts the preview. */
+  /** Enters the immersive session (ar; needs a user gesture). A second call while pending returns the same promise. */
   enter(): Promise<void>;
   exit(): void;
+  /** Ends the session and frees the renderer, the WebGL context, textures and geometry. */
   destroy(): void;
   /** Per-frame callback after the world's systems; dt in seconds. Returns an unsubscribe. */
   onFrame(cb: (dt: number, nowMs: number) => void): () => void;
   headPose(): HeadPose;
-  hands(): HandState[];
+  /** Live hand states (updated in place each XR frame; read, do not keep or mutate). */
+  hands(): readonly Readonly<HandState>[];
   visibility$: ReadonlySignal<VisibilityState>;
   /**
    * XRSession visibility changes (Quest system menu, headset off). The app also asks the round UI to pause by
@@ -92,10 +98,18 @@ export interface XRApp {
   onVisibility(cb: (v: XRVisibility) => void): () => void;
   /** The immersive session ended; byApp is true when exit() asked for it (End), false for the system or the user. */
   onSessionEnd(cb: (e: { byApp: boolean }) => void): () => void;
-  /** The placed desk, null until placement finishes. */
+  /** The placed desk of this session, null until placement finishes (and again after the session ends). */
   desk$: ReadonlySignal<DeskPose | null>;
-  /** Re-runs placement (also runs by itself on session start). */
-  placeDesk(): Promise<DeskPose>;
+  /**
+   * The desk for this session: starts placement on the first call (never automatically), shares the placement in
+   * flight, resolves at once when already placed. Rejects with PlacementCancelled without a session or when the
+   * session ends first. In preview it resolves with the preview desk.
+   */
+  place(): Promise<DeskPose>;
+  /** Places the desk again in the same session ("Move sheet"). */
+  replace(): Promise<DeskPose>;
+  /** Restart the frame rate measurement (call after adding people or other heavy content). */
+  sceneChanged(): void;
   /** Re-seats the room for 1 to 3 people. */
   setSeats(n: 1 | 2 | 3): SeatPose[];
   standins(): StandIn[];
@@ -106,7 +120,6 @@ const TIPS = ['thumb-tip', 'index-finger-tip', 'middle-finger-tip', 'ring-finger
 
 type FrameCb = (dt: number, nowMs: number) => void;
 const hooks = new WeakMap<World, Set<FrameCb>>();
-
 const frameStarts = new WeakMap<World, number>();
 
 /** Runs first each frame so the frame's CPU time (systems + render) can be measured. */
@@ -125,6 +138,34 @@ class FrameHookSystem extends createSystem({}) {
   }
 }
 
+function newHand(hand: 'left' | 'right'): HandState {
+  return {
+    hand,
+    tracked: false,
+    indexTip: { x: 0, y: 0, z: 0 },
+    tips: TIPS.map(() => ({ x: 0, y: 0, z: 0 })),
+    pinch: 0,
+  };
+}
+
+/** Frees geometry, materials and their textures under an object. */
+function disposeTree(root: Object3D): void {
+  root.traverse((o) => {
+    const m = o as Mesh;
+    if (!m.isMesh) return;
+    m.geometry?.dispose();
+    for (const mat of Array.isArray(m.material) ? m.material : [m.material]) disposeMaterial(mat);
+  });
+}
+
+function disposeMaterial(mat: Material | undefined): void {
+  if (!mat) return;
+  for (const v of Object.values(mat as unknown as Record<string, unknown>)) {
+    if (v && typeof v === 'object' && (v as Texture).isTexture) (v as Texture).dispose();
+  }
+  mat.dispose();
+}
+
 export async function createXRApp(root: HTMLElement, opts: XRAppOptions): Promise<XRApp> {
   const mode = opts.mode;
   let seatsN: 1 | 2 | 3 = opts.seats ?? 1;
@@ -136,8 +177,9 @@ export async function createXRApp(root: HTMLElement, opts: XRAppOptions): Promis
           xr: {
             sessionMode: SessionMode.ImmersiveAR,
             referenceSpace: ReferenceSpaceType.LocalFloor,
-            offer: opts.offer ? 'once' : 'none',
-            // Plane and mesh detection stay off: they cost a permission prompt (research/06 §2.2).
+            // Tooling re-offers after every exit so a script can enter again.
+            offer: opts.offer ? 'always' : 'none',
+            // Plane and mesh detection stay off: they would add a permission prompt before the room appears.
             features: { handTracking: { required: true }, hitTest: true, anchors: true },
           },
           render: { near: 0.01, far: 50, ...base.render },
@@ -193,56 +235,69 @@ export async function createXRApp(root: HTMLElement, opts: XRAppOptions): Promis
     return { pos: { x: tmpV.x, y: tmpV.y, z: tmpV.z }, yaw, pitch };
   };
 
-  let handStates: HandState[] = [];
+  // Two hand states, updated in place every XR frame (no per-frame allocation).
+  const left = newHand('left');
+  const right = newHand('right');
+  const handStates: HandState[] = [left, right];
   let controllersHinted = false;
+  let lastXRFrameAt: number | null = null;
+  let lastInterval = 0;
+
+  const anchorM = new Matrix4();
+  const anchors = new AnchorTracker((m) => room.setAnchorOffset(anchorM.fromArray(m)));
+
   world.onXRFrame((frame) => {
+    const now = performance.now();
+    lastInterval = lastXRFrameAt === null ? 0 : now - lastXRFrameAt;
+    lastXRFrameAt = now;
     const ref = world.xrReferenceSpace;
     const session = world.session;
     if (!ref || !session) return;
-    const out: HandState[] = [];
+    left.tracked = false;
+    right.tracked = false;
+    let controllers = false;
     for (const src of session.inputSources) {
       const hand = src.hand;
-      if (!hand || (src.handedness !== 'left' && src.handedness !== 'right')) continue;
-      const tips = [];
+      if (!hand) {
+        if (src.gamepad && src.targetRayMode === 'tracked-pointer') controllers = true;
+        continue;
+      }
+      const h = src.handedness === 'left' ? left : src.handedness === 'right' ? right : null;
+      if (!h) continue;
       let ok = true;
-      for (const name of TIPS) {
-        const space = hand.get(name);
+      for (let i = 0; i < TIPS.length; i++) {
+        const space = hand.get(TIPS[i]!);
         const pose = space ? frame.getJointPose?.(space, ref) : undefined;
         if (!pose) {
           ok = false;
           break;
         }
         const p = pose.transform.position;
-        tips.push({ x: p.x, y: p.y, z: p.z });
+        const t = h.tips[i]!;
+        t.x = p.x;
+        t.y = p.y;
+        t.z = p.z;
       }
-      if (!ok) {
-        out.push({ hand: src.handedness, tracked: false, indexTip: { x: 0, y: 0, z: 0 }, tips: [], pinch: 0 });
-        continue;
-      }
-      const [thumb, index] = [tips[0]!, tips[1]!];
+      if (!ok) continue;
+      h.tracked = true;
+      const thumb = h.tips[0]!;
+      const index = h.tips[1]!;
+      h.indexTip.x = index.x;
+      h.indexTip.y = index.y;
+      h.indexTip.z = index.z;
       const d = Math.hypot(thumb.x - index.x, thumb.y - index.y, thumb.z - index.z);
-      out.push({ hand: src.handedness, tracked: true, indexTip: index, tips, pinch: Math.max(0, Math.min(1, 1 - (d - 0.012) / 0.03)) });
+      h.pinch = Math.max(0, Math.min(1, 1 - (d - 0.012) / 0.03));
     }
-    handStates = out;
-    if (!controllersHinted && session.inputSources && Array.from(session.inputSources).some((s) => !s.hand && !!s.gamepad && s.targetRayMode === 'tracked-pointer')) {
+    if (controllers && !controllersHinted) {
       controllersHinted = true;
       ui.layoutHint(headPose());
-      ui.showHint('Put your controllers down; use your hands', performance.now(), 7000);
+      ui.showHint('Put your controllers down; use your hands', now, 7000);
     }
-    updateAnchor(frame, ref);
+    anchors.update(frame, ref);
   });
 
-  // ---- anchoring ----
-  let anchor: { space: XRSpace; m0: Matrix4 } | null = null;
-  const anchorM = new Matrix4();
-  const updateAnchor = (frame: XRFrame, ref: XRReferenceSpace) => {
-    if (!anchor) return;
-    const pose = frame.getPose(anchor.space, ref);
-    if (!pose) return;
-    anchorM.fromArray(pose.transform.matrix).multiply(anchor.m0);
-    room.setAnchorOffset(anchorM);
-  };
   const createAnchor = async (desk: DeskPose) => {
+    const gen = anchors.begin();
     const frame = world.xrFrame;
     const ref = world.xrReferenceSpace;
     if (!frame || !ref || typeof frame.createAnchor !== 'function') return;
@@ -250,8 +305,8 @@ export async function createXRApp(root: HTMLElement, opts: XRAppOptions): Promis
     try {
       const a = await frame.createAnchor(new XRRigidTransform({ ...desk.origin }, { x: q.x, y: q.y, z: q.z, w: q.w }), ref);
       if (!a) return;
-      const m = new Matrix4().compose(new Vector3(desk.origin.x, desk.origin.y, desk.origin.z), q, new Vector3(1, 1, 1));
-      anchor = { space: a.anchorSpace, m0: m.invert() };
+      const inv = new Matrix4().compose(new Vector3(desk.origin.x, desk.origin.y, desk.origin.z), q, new Vector3(1, 1, 1)).invert();
+      anchors.adopt(gen, a as unknown as { anchorSpace: XRSpace; delete?(): void }, Float32Array.from(inv.elements));
     } catch {
       // Anchors are optional; the room stays where it was placed.
     }
@@ -283,44 +338,67 @@ export async function createXRApp(root: HTMLElement, opts: XRAppOptions): Promis
     return seats;
   };
 
-  const loadStandins = async () => {
-    if (wantStandins.length === 0) return;
-    const loaded = await Promise.all(
-      wantStandins.slice(0, 3).map((id) =>
-        loadStandIn(renderer, id).catch((e) => {
-          console.warn('[xr] stand-in failed', id, e);
-          return null;
-        }),
-      ),
-    );
-    standins = loaded.filter((s): s is StandIn => !!s);
-    for (const s of standins) room.root.add(s.object);
-    const desk = desk$.value;
-    if (desk) build(desk);
-    else for (const s of standins) s.object.visible = false;
+  // Stand-ins load per seat as needed (no GLBs for empty seats).
+  let standinsLoading: Promise<void> | null = null;
+  const loadStandins = (): Promise<void> => {
+    const need = wantStandins.slice(standins.length, seatsN);
+    if (need.length === 0) return standinsLoading ?? Promise.resolve();
+    const prev = standinsLoading ?? Promise.resolve();
+    standinsLoading = prev.then(async () => {
+      const ids = wantStandins.slice(standins.length, seatsN);
+      const loaded = await Promise.all(
+        ids.map((id) =>
+          loadStandIn(renderer, id).catch((e) => {
+            console.warn('[xr] stand-in failed', id, e);
+            return null;
+          }),
+        ),
+      );
+      if (destroyed) {
+        for (const s of loaded) if (s) disposeTree(s.object);
+        return;
+      }
+      for (const s of loaded) {
+        if (!s) continue;
+        standins.push(s);
+        room.root.add(s.object);
+      }
+      const desk = desk$.value;
+      if (desk) build(desk);
+      else for (const s of standins) s.object.visible = false;
+      sceneChanged();
+    });
+    return standinsLoading;
   };
 
-  let placing: { p: DeskPlacement; resolve: (d: DeskPose) => void; laidOut: HeadPose | null } | null = null;
-  const placeDesk = (): Promise<DeskPose> => {
-    if (mode === 'preview') {
-      desk$.value = PREVIEW_DESK;
-      build(PREVIEW_DESK);
-      return Promise.resolve(PREVIEW_DESK);
-    }
-    return new Promise<DeskPose>((resolve) => {
-      placing = { p: new DeskPlacement(performance.now(), opts.placementFallbackMs), resolve, laidOut: null };
+  let placing: { p: DeskPlacement; laidOut: HeadPose | null } | null = null;
+  const lifecycle = new PlacementLifecycle({
+    start: () => {
+      placing = { p: new DeskPlacement(performance.now(), opts.placementFallbackMs), laidOut: null };
       placementView.reset();
       placementView.group.visible = true;
       ui.setStatus('placing');
-    });
-  };
+    },
+    reset: () => {
+      placing = null;
+      placementView.group.visible = false;
+      anchors.clear();
+      room.setAnchorOffset(new Matrix4());
+      if (mode === 'ar') room.root.visible = false;
+      if (ui.status.group.parent === scene) {
+        room.root.add(ui.status.group);
+        ui.hideStatus();
+      }
+      desk$.value = null;
+      governor?.disarm();
+    },
+  });
 
   const finishPlacement = (desk: DeskPose, now: number) => {
-    const p = placing;
     placing = null;
-    anchor = null;
     room.setAnchorOffset(new Matrix4());
     build(desk);
+    room.root.visible = true;
     placementView.finish(room.sheet, now);
     ui.hideStatus();
     if (desk.source === 'fallback') {
@@ -330,7 +408,8 @@ export async function createXRApp(root: HTMLElement, opts: XRAppOptions): Promis
     sounds.flap();
     desk$.value = desk;
     void createAnchor(desk);
-    p?.resolve(desk);
+    lifecycle.finished(desk);
+    sceneChanged();
   };
 
   // ---- preview camera ----
@@ -345,12 +424,7 @@ export async function createXRApp(root: HTMLElement, opts: XRAppOptions): Promis
   const buildPreview = () => {
     if (previewGroup) {
       previewGroup.removeFromParent();
-      previewGroup.traverse((o) => {
-        const m = o as Mesh;
-        if (!m.isMesh) return;
-        m.geometry.dispose();
-        for (const mat of Array.isArray(m.material) ? m.material : [m.material]) mat.dispose();
-      });
+      disposeTree(previewGroup);
     }
     const seats = room.seatPoses();
     const pr = buildPreviewRoom(PREVIEW_DESK, seatsN, seats);
@@ -360,33 +434,82 @@ export async function createXRApp(root: HTMLElement, opts: XRAppOptions): Promis
   };
 
   let resizeObs: ResizeObserver | null = null;
+  let fitRaf = 0;
   if (mode === 'preview') {
-    // Fit the canvas to its container (the world sizes to the window by default).
+    // Fit the canvas to its container. IWSDK's own window resize handler sizes the canvas to the window (pixels in
+    // its style); fit() runs after it and puts the canvas back into the stage.
     const canvas = renderer.domElement;
     canvas.style.display = 'block';
-    canvas.style.width = '100%';
-    canvas.style.height = '100%';
     const fit = () => {
       const w = root.clientWidth;
       const h = root.clientHeight;
       if (w === 0 || h === 0) return;
       renderer.setSize(w, h, false);
+      canvas.style.width = '100%';
+      canvas.style.height = '100%';
       camera.aspect = w / h;
       camera.updateProjectionMatrix();
       layoutPreviewHud();
     };
-    resizeObs = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(fit) : null;
+    const fitAfterResize = () => {
+      cancelAnimationFrame(fitRaf);
+      fit();
+      fitRaf = requestAnimationFrame(fit);
+    };
+    resizeObs = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(fitAfterResize) : null;
     resizeObs?.observe(root);
-    window.addEventListener('resize', fit);
-    world.addCleanup(() => window.removeEventListener('resize', fit));
+    window.addEventListener('resize', fitAfterResize);
+    world.addCleanup(() => window.removeEventListener('resize', fitAfterResize));
     fit();
     mouse = new MouseLook(canvas);
     attachUI();
-    await placeDesk();
+    desk$.value = PREVIEW_DESK;
+    build(PREVIEW_DESK);
     buildPreview();
   } else {
     attachUI();
+    room.root.visible = false;
   }
+
+  // ---- frame rate (ar) ----
+  type RateSession = XRSession & { supportedFrameRates?: Float32Array; frameRate?: number; updateTargetFrameRate?(r: number): Promise<void> };
+  let governor: FrameRateGovernor | null = null;
+  let targetFps: number | null = null;
+  /** The scene grew (room placed, people loaded): measure from here, after a short settle. */
+  let armAt: number | null = null;
+  function sceneChanged(): void {
+    if (!governor || !lifecycle.desk) return;
+    governor.disarm();
+    armAt = performance.now() + 1500;
+  }
+
+  // Frame CPU time = from the first system to the end of render submit; the XR frame interval shows GPU stalls.
+  const render = renderer.render.bind(renderer);
+  renderer.render = (s, c) => {
+    render(s, c);
+    const session = world.session as RateSession | undefined;
+    if (!governor || !session || session.visibilityState !== 'visible') return;
+    const now = performance.now();
+    if (armAt !== null && now >= armAt) {
+      armAt = null;
+      governor.arm(now);
+    }
+    const start = frameStarts.get(world);
+    if (start === undefined || lastInterval <= 0) return;
+    const rate = governor.frame(now - start, lastInterval, now);
+    if (!rate || !session.updateTargetFrameRate) return;
+    const g = governor;
+    session
+      .updateTargetFrameRate(rate)
+      .then(() => {
+        targetFps = rate;
+        console.info(`[xr] frame rate ${g.describe()}`);
+      })
+      .catch(() => {
+        g.refused();
+        console.info(`[xr] frame rate ${rate} Hz refused; staying at 72 Hz`);
+      });
+  };
 
   // ---- per frame ----
   let fps = 0;
@@ -425,37 +548,16 @@ export async function createXRApp(root: HTMLElement, opts: XRAppOptions): Promis
   });
 
   // ---- session lifecycle: frame rate, foveation, visibility, end ----
-  type RateSession = XRSession & { supportedFrameRates?: Float32Array; frameRate?: number; updateTargetFrameRate?(r: number): Promise<void> };
-  let governor: FrameRateGovernor | null = null;
-  let targetFps: number | null = null;
   const visCbs = new Set<(v: XRVisibility) => void>();
   const endCbs = new Set<(e: { byApp: boolean }) => void>();
   let exitByApp = false;
+  type EnterWaiter = { promise: Promise<void>; resolve: () => void; reject: (e: Error) => void; poll: ReturnType<typeof setInterval> | null };
+  let enterWaiter = null as EnterWaiter | null;
+  let destroyed = false;
 
-  // Frame CPU time = from the first system to the end of render. Feeds the 72/90 Hz choice.
-  const render = renderer.render.bind(renderer);
-  renderer.render = (s, c) => {
-    render(s, c);
-    const start = frameStarts.get(world);
-    if (governor && start !== undefined && world.session?.visibilityState === 'visible') {
-      const now = performance.now();
-      const rate = governor.frame(now - start, now);
-      const session = world.session as RateSession;
-      if (rate && session.updateTargetFrameRate) {
-        session
-          .updateTargetFrameRate(rate)
-          .then(() => {
-            targetFps = rate;
-            console.info(`[xr] frame rate ${rate} Hz (${governor?.describe()}; p95 CPU frame time ${rate === 90 ? 'under 9' : 'over 11'} ms)`);
-          })
-          .catch(() => console.info(`[xr] frame rate ${rate} Hz refused; staying at ${targetFps ?? 72} Hz`));
-      }
-    }
-  };
-
-  renderer.xr.addEventListener('sessionstart', () => {
+  const onSessionStart = () => {
     const s = renderer.xr.getSession() as RateSession | null;
-    // Start at 72 Hz (the WebXR default on Quest); 90 only after measured headroom.
+    // Start at 72 Hz (the WebXR default on Quest); 90 only after measured headroom with the full scene.
     const rates = s?.supportedFrameRates ? Array.from(s.supportedFrameRates) : [];
     governor = new FrameRateGovernor(rates.map((r) => Math.round(r)));
     targetFps = s?.frameRate ? Math.round(s.frameRate) : 72;
@@ -463,31 +565,34 @@ export async function createXRApp(root: HTMLElement, opts: XRAppOptions): Promis
     console.info(`[xr] frame rate 72 Hz to start; offered: ${rates.join(', ') || 'unknown'}`);
     renderer.xr.setFoveation(0.5);
     exitByApp = false;
+    controllersHinted = false;
+    lastXRFrameAt = null;
     s?.addEventListener('visibilitychange', () => {
       const v = s.visibilityState as XRVisibility;
       if (v !== 'visible') ui.systemPause();
       for (const cb of visCbs) cb(v);
     });
-    void placeDesk();
-  });
-  renderer.xr.addEventListener('sessionend', () => {
-    placing = null;
-    placementView.group.visible = false;
+    lifecycle.sessionStarted();
+    if (enterWaiter) {
+      if (enterWaiter.poll) clearInterval(enterWaiter.poll);
+      enterWaiter.resolve();
+      enterWaiter = null;
+    }
+  };
+  const onSessionEnd = () => {
+    lifecycle.sessionEnded();
     governor = null;
     targetFps = null;
+    armAt = null;
     const byApp = exitByApp;
     exitByApp = false;
     if (!byApp) ui.systemPause();
     for (const cb of endCbs) cb({ byApp });
-  });
+  };
+  renderer.xr.addEventListener('sessionstart', onSessionStart);
+  renderer.xr.addEventListener('sessionend', onSessionEnd);
 
   void loadStandins();
-
-  let enterWaiter: { resolve: () => void; reject: (e: Error) => void } | null = null;
-  renderer.xr.addEventListener('sessionstart', () => {
-    enterWaiter?.resolve();
-    enterWaiter = null;
-  });
 
   const app: XRApp = {
     world,
@@ -497,29 +602,34 @@ export async function createXRApp(root: HTMLElement, opts: XRAppOptions): Promis
     ui,
     sounds,
     enter() {
-      if (mode === 'preview') return Promise.resolve();
-      if (world.session) return Promise.resolve();
-      return new Promise<void>((resolve, reject) => {
-        enterWaiter = { resolve, reject };
-        try {
-          world.launchXR();
-        } catch (e) {
-          enterWaiter = null;
-          reject(e instanceof Error ? e : new Error(String(e)));
-          return;
-        }
-        // launchXR reports failures only to the console: notice when the request ends without a session.
-        const started = performance.now();
-        const poll = setInterval(() => {
-          if (!enterWaiter) return clearInterval(poll);
-          if (world.session) return;
-          if (!world.sessionRequestPending && performance.now() - started > 500) {
-            clearInterval(poll);
-            enterWaiter.reject(new Error('The headset did not start the session.'));
-            enterWaiter = null;
-          }
-        }, 250);
+      if (mode === 'preview' || world.session) return Promise.resolve();
+      if (enterWaiter) return enterWaiter.promise;
+      let resolve!: () => void;
+      let reject!: (e: Error) => void;
+      const promise = new Promise<void>((res, rej) => {
+        resolve = res;
+        reject = rej;
       });
+      const w: EnterWaiter = { promise, resolve, reject, poll: null };
+      enterWaiter = w;
+      const fail = (e: Error) => {
+        if (w.poll) clearInterval(w.poll);
+        if (enterWaiter === w) enterWaiter = null;
+        w.reject(e);
+      };
+      try {
+        world.launchXR();
+      } catch (e) {
+        fail(e instanceof Error ? e : new Error(String(e)));
+        return promise;
+      }
+      // launchXR reports failures only to the console: notice when the request ends without a session.
+      const started = performance.now();
+      w.poll = setInterval(() => {
+        if (world.session) return;
+        if (!world.sessionRequestPending && performance.now() - started > 500) fail(new Error('The headset did not start the session.'));
+      }, 250);
+      return promise;
     },
     exit() {
       if (mode !== 'ar' || !world.session) return;
@@ -535,28 +645,68 @@ export async function createXRApp(root: HTMLElement, opts: XRAppOptions): Promis
       return () => endCbs.delete(cb);
     },
     destroy() {
+      if (destroyed) return;
+      destroyed = true;
+      if (enterWaiter?.poll) clearInterval(enterWaiter.poll);
+      enterWaiter?.reject(new Error('The room was closed.'));
+      enterWaiter = null;
+      const session = world.session;
+      exitByApp = true;
+      session?.end().catch(() => {});
+      renderer.xr.removeEventListener('sessionstart', onSessionStart);
+      renderer.xr.removeEventListener('sessionend', onSessionEnd);
+      lifecycle.sessionEnded();
+      cancelAnimationFrame(fitRaf);
       resizeObs?.disconnect();
       mouse?.dispose();
-      for (const e of panelEntities) e.destroy();
-      room.dispose();
+      frameCbs.clear();
       hooks.delete(world);
+      for (const e of panelEntities) e.destroy();
+      // Panels (UIKit documents and their glyph atlases), the hold ring, placement visuals, people and the room.
+      for (const g of [...Object.values(ui.groups), ui.hint.group]) {
+        g.traverse((o) => {
+          if (o instanceof UIKitDocument) o.dispose();
+        });
+        disposeTree(g);
+      }
+      disposeTree(placementView.group);
+      for (const s of standins) {
+        s.mixer.stopAllAction();
+        disposeTree(s.object);
+      }
+      standins = [];
+      if (previewGroup) disposeTree(previewGroup);
+      room.dispose();
       world.destroy();
+      renderer.dispose();
+      renderer.forceContextLoss();
+      renderer.domElement.remove();
     },
     onFrame(cb) {
       frameCbs.add(cb);
       return () => frameCbs.delete(cb);
     },
     headPose,
-    hands: () => handStates.map((h) => ({ ...h, tips: [...h.tips] })),
+    hands: () => handStates,
     visibility$: world.visibilityState,
     desk$,
-    placeDesk,
+    place() {
+      if (mode === 'preview') return Promise.resolve(PREVIEW_DESK);
+      return lifecycle.place();
+    },
+    replace() {
+      if (mode === 'preview') return Promise.resolve(PREVIEW_DESK);
+      return lifecycle.replace();
+    },
+    sceneChanged,
     setSeats(n) {
       seatsN = n;
+      void loadStandins();
       const desk = desk$.value;
       if (!desk) return [];
       const seats = build(desk);
       if (mode === 'preview') buildPreview();
+      sceneChanged();
       return seats;
     },
     standins: () => standins,

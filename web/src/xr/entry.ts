@@ -11,7 +11,8 @@ import type { XRApp, XRMode } from './world';
 export interface ImmersiveHandle {
   mode: XRMode;
   app: XRApp;
-  enter(): void;
+  /** Enters the room and places the desk; rejects with a message fit to show on the page. */
+  enter(): Promise<void>;
   exit(): void;
   destroy(): void;
 }
@@ -49,8 +50,15 @@ export async function createImmersive(container: HTMLElement, opts: { seats?: 1 
   return {
     mode,
     app,
-    enter: () => {
-      app.enter().catch((e: unknown) => console.warn('[xr] enter failed', e));
+    enter: async () => {
+      try {
+        await app.enter();
+      } catch (e) {
+        console.warn('[xr] enter failed', e);
+        throw new Error('The headset did not start the room. Tap Enter again.');
+      }
+      // Without the round controller (this page alone), place the desk right away.
+      await app.place().catch(() => {});
     },
     exit: () => app.exit(),
     destroy: () => app.destroy(),
