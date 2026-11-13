@@ -2,8 +2,10 @@
 //
 // An index fingertip that rests still on the desk for 0.6 s sets the desk: its height (minus the finger pad) is the
 // desk top, the tip is the near edge centre of the sheet, and the head's yaw at that moment is the facing. A
-// controller does the same with its front tip: touch the desk and pull the trigger (at once), or hold the tip still
-// on the desk for the same 0.6 s while it points down at it. The tip is where the controller's aim ray starts, the
+// controller does the same with its front tip, resting on the desk and pointing down at it: once the tip has been
+// still for 0.3 s a trigger pull places at once, and without the trigger the same 0.6 s rest as a finger does. A
+// trigger pulled in the air, on the move, with the controller level, or while its ray is on a card or a button (the
+// usual way to "click" something) never places. The tip is where the controller's aim ray starts, the
 // front face of the controller body, so the desk top is the tip minus a few millimetres, not the grip 5 cm behind it.
 // With no touch within 6 s (wall clock) we fall back to a typical seated desk height below the head; only a rest that
 // is at least half done when the clock runs out may finish, and never past a hard cap. A desk candidate must sit in a
@@ -36,6 +38,8 @@ export const CONTROLLER_PAD = 0.005;
  * about 20 degrees): one lying in a lap or held level in the air is not touching a desk with its tip.
  */
 export const CONTROLLER_DWELL_MIN_DOWN = 0.34;
+/** The trigger places only when the controller's tip has rested this long (ms): a touch, not a wave. */
+export const TRIGGER_STEADY_MS = 300;
 export const FALLBACK_MS = 6000;
 /** Typical seated eye-to-desk height. */
 export const FALLBACK_DESK_BELOW_HEAD = 0.45;
@@ -65,6 +69,8 @@ export interface ControllerTouch {
   dir: Vec3;
   /** The trigger is held. */
   pressed: boolean;
+  /** The aim ray is on a panel (the prompt card, a button): the trigger belongs to that, not to the desk. */
+  busy?: boolean;
 }
 
 export interface DeskDwell {
@@ -248,7 +254,7 @@ export class DeskPlacement {
     let bestHand: 'left' | 'right' | null = null;
     const seen = { left: false, right: false };
     /** One side's tip this frame: keeps its rest history and finishes on a full rest. */
-    const rest = (side: 'left' | 'right', kind: 'hand' | 'controller', tip: Vec3, tips: Vec3[] | undefined, pad: number): PlacementStatus | null => {
+    const rest = (side: 'left' | 'right', kind: 'hand' | 'controller', tip: Vec3, tips: Vec3[] | undefined, pad: number, pulled = false): PlacementStatus | null => {
       seen[side] = true;
       const hist = this.hist[side];
       if (this.histKind[side] !== kind) hist.length = 0;
@@ -259,6 +265,12 @@ export class DeskPlacement {
       const r = restingMs(hist);
       const dwell = detectDeskDwell(hist, r, pad);
       if (dwell) return this.finish(dwell.at, dwell.deskY, head, side, kind);
+      // A controller's trigger, pulled once the tip has rested a moment: placed now, where it rests.
+      if (pulled && r.at && r.ms >= TRIGGER_STEADY_MS) {
+        let minY = Infinity;
+        for (const s of hist) if (s.t_ms >= t_ms - r.ms) minY = Math.min(minY, s.tip.y);
+        return this.finish({ x: r.at.x, y: minY - pad, z: r.at.z }, minY - pad, head, side, kind);
+      }
       const p = Math.min(1, r.ms / DWELL_MS);
       if (r.at && (p > bestProgress || !bestTip)) {
         bestProgress = p;
@@ -278,14 +290,11 @@ export class DeskPlacement {
       if (!c.tracked || seen[c.hand]) continue;
       const was = this.trigger[c.hand];
       this.trigger[c.hand] = c.pressed;
-      // The tip on the desk and a pull of the trigger: placed at once.
-      if (c.pressed && was === false && inDeskBand(c.tip.y, head.pos.y)) {
-        const y = c.tip.y - CONTROLLER_PAD;
-        return this.finish({ x: c.tip.x, y, z: c.tip.z }, y, head, c.hand, 'controller');
-      }
-      // Or the tip held still on the desk, as with a finger, while the controller points down at it.
-      if (c.dir.y > -CONTROLLER_DWELL_MIN_DOWN) continue;
-      const done = rest(c.hand, 'controller', c.tip, undefined, CONTROLLER_PAD);
+      const pulled = c.pressed && was === false;
+      // Only a controller that points down at the desk and is not aiming at a panel can be touching it: its tip is
+      // then watched like a fingertip. Still for 0.3 s plus a trigger pull places; still for 0.6 s places by itself.
+      if (c.dir.y > -CONTROLLER_DWELL_MIN_DOWN || c.busy) continue;
+      const done = rest(c.hand, 'controller', c.tip, undefined, CONTROLLER_PAD, pulled);
       if (done) return done;
     }
     for (const side of ['left', 'right'] as const) {

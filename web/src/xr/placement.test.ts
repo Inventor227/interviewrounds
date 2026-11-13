@@ -169,11 +169,23 @@ describe('desk placement with a controller', () => {
   const ctrl = (tip: { x: number; y: number; z: number }, pressed: boolean, dir = { x: 0, y: -Math.SQRT1_2, z: -Math.SQRT1_2 }, hand: 'left' | 'right' = 'right') => ({ hand, tracked: true, tip, dir, pressed });
   const DESK_TIP = { x: 0.12, y: 0.745, z: -0.42 };
 
+  /** The tip rests at `tip` for `ms` (frames of 14 ms from t0); returns the last status and the time. */
+  const restFor = (p: DeskPlacement, t0: number, ms: number, make: (pressed: boolean) => ReturnType<typeof ctrl>) => {
+    let st = p.update(t0, head, noHands, [make(false)]);
+    let t = t0;
+    while (t < t0 + ms) {
+      t += 14;
+      st = p.update(t, head, noHands, [make(false)]);
+    }
+    return { st, t };
+  };
+
   it('controller_places_desk_with_tip_offset', () => {
     const p = new DeskPlacement(0);
-    // The tip touches the desk; the trigger is not pulled yet.
-    expect(p.update(0, head, noHands, [ctrl(DESK_TIP, false)]).state).not.toBe('done');
-    const st = p.update(14, head, noHands, [ctrl(DESK_TIP, true)]);
+    // The tip rests on the desk for 0.35 s, pointing down at it; the trigger is not pulled yet.
+    const { st: before, t } = restFor(p, 0, 350, (pressed) => ctrl(DESK_TIP, pressed));
+    expect(before.state).toBe('dwelling');
+    const st = p.update(t + 14, head, noHands, [ctrl(DESK_TIP, true)]);
     expect(st.state).toBe('done');
     const desk = st.result!;
     // The desk top is the tip minus the controller's contact pad: a few millimetres, not the 5 cm to the grip.
@@ -181,7 +193,9 @@ describe('desk placement with a controller', () => {
     expect(desk.deskY).toBeCloseTo(DESK_TIP.y - CONTROLLER_PAD, 6);
     expect(DESK_TIP.y - desk.deskY).toBeLessThan(0.01);
     // The sheet's near edge centre is under the tip, facing the way the head faces.
-    expect(desk.origin).toEqual({ x: DESK_TIP.x, y: DESK_TIP.y - CONTROLLER_PAD, z: DESK_TIP.z });
+    expect(desk.origin.x).toBeCloseTo(DESK_TIP.x, 6);
+    expect(desk.origin.y).toBeCloseTo(DESK_TIP.y - CONTROLLER_PAD, 6);
+    expect(desk.origin.z).toBeCloseTo(DESK_TIP.z, 6);
     expect(desk.yaw).toBe(0.3);
     expect(desk.source).toBe('touch');
     // The hand that held it is the dominant one (the tray goes on the other side), as with a finger.
@@ -189,24 +203,60 @@ describe('desk placement with a controller', () => {
     expect(desk.input).toBe('controllers');
   });
 
+  it('a_trigger_while_the_ray_is_on_the_prompt_card_never_places', () => {
+    // The usual way to "click" a card: the controller at chest height, level, its ray on the card, the trigger pulled.
+    const p = new DeskPlacement(0, 60000);
+    const chest = { x: 0.15, y: HEAD_Y - 0.3, z: -0.25 };
+    const level = { x: 0, y: 0.1, z: -1 };
+    let { st, t } = restFor(p, 0, 1000, (pressed) => ({ ...ctrl(chest, pressed, level), busy: true }));
+    for (let k = 0; k < 5; k++) {
+      st = p.update((t += 14), head, noHands, [{ ...ctrl(chest, true, level), busy: true }]);
+      expect(st.state).toBe('waiting');
+      st = p.update((t += 14), head, noHands, [{ ...ctrl(chest, false, level), busy: true }]);
+    }
+    // Not even when the controller happens to point down while its ray is on a card (a card low in view).
+    ({ st, t } = restFor(p, t, 1000, (pressed) => ({ ...ctrl(chest, pressed), busy: true })));
+    st = p.update((t += 14), head, noHands, [{ ...ctrl(chest, true), busy: true }]);
+    expect(st.state).toBe('waiting');
+    expect(st.result).toBeNull();
+  });
+
+  it('a_trigger_pulled_in_the_air_level_or_on_the_move_does_not_place', () => {
+    const p = new DeskPlacement(0, 60000);
+    // Level, perfectly still, in the band: a controller pointing at something, not touching a desk.
+    let { st, t } = restFor(p, 0, 600, (pressed) => ctrl(DESK_TIP, pressed, { x: 0, y: 0, z: -1 }));
+    st = p.update((t += 14), head, noHands, [ctrl(DESK_TIP, true, { x: 0, y: 0, z: -1 })]);
+    expect(st.state).toBe('waiting');
+    p.update((t += 14), head, noHands, [ctrl(DESK_TIP, false)]);
+    // Pointing down but on its way down to the desk (20 cm a second): the pull does not place where it happens to be.
+    for (let i = 0; i < 30; i++) st = p.update((t += 14), head, noHands, [ctrl({ ...DESK_TIP, y: DESK_TIP.y + 0.1 - i * 0.0028 }, false)]);
+    st = p.update((t += 14), head, noHands, [ctrl({ ...DESK_TIP, y: DESK_TIP.y + 0.013 }, true)]);
+    expect(st.state).not.toBe('done');
+    // It arrives and rests only 0.15 s before the pull: too soon.
+    p.update((t += 14), head, noHands, [ctrl(DESK_TIP, false)]);
+    ({ st, t } = restFor(p, t, 150, (pressed) => ctrl(DESK_TIP, pressed)));
+    st = p.update((t += 14), head, noHands, [ctrl(DESK_TIP, true)]);
+    expect(st.state).not.toBe('done');
+  });
+
   it('a_trigger_already_held_when_placement_starts_does_not_place', () => {
     const p = new DeskPlacement(0);
-    expect(p.update(0, head, noHands, [ctrl(DESK_TIP, true, { x: 0, y: 0, z: -1 })]).state).toBe('waiting');
-    expect(p.update(14, head, noHands, [ctrl(DESK_TIP, true, { x: 0, y: 0, z: -1 })]).state).toBe('waiting');
+    // Held from the start while the tip rests (under the dwell time): no pull was seen.
+    let t = 0;
+    let st = p.update(t, head, noHands, [ctrl(DESK_TIP, true)]);
+    while (t < 400) st = p.update((t += 14), head, noHands, [ctrl(DESK_TIP, true)]);
+    expect(st.state).toBe('dwelling');
     // Let go and pull again: placed.
-    p.update(28, head, noHands, [ctrl(DESK_TIP, false, { x: 0, y: 0, z: -1 })]);
-    // The other controller appears with its trigger already down: not a pull either.
-    const idle = ctrl(DESK_TIP, false, { x: 0, y: 0, z: -1 });
-    expect(p.update(42, head, noHands, [idle, ctrl(DESK_TIP, true, { x: 0, y: 0, z: -1 }, 'left')]).state).toBe('waiting');
-    expect(p.update(56, head, noHands, [ctrl(DESK_TIP, true, { x: 0, y: 0, z: -1 })]).state).toBe('done');
+    p.update((t += 14), head, noHands, [ctrl(DESK_TIP, false)]);
+    st = p.update((t += 14), head, noHands, [ctrl(DESK_TIP, true)]);
+    expect(st.state).toBe('done');
   });
 
   it('a_trigger_pull_near_the_face_or_down_in_the_lap_does_not_place', () => {
-    const p = new DeskPlacement(0);
     for (const y of [HEAD_Y - 0.1, HEAD_Y - 0.9]) {
-      p.update(0, head, noHands, [ctrl({ ...DESK_TIP, y }, false)]);
-      expect(p.update(14, head, noHands, [ctrl({ ...DESK_TIP, y }, true)]).state).not.toBe('done');
-      p.update(28, head, noHands, [ctrl({ ...DESK_TIP, y }, false)]);
+      const p = new DeskPlacement(0, 60000);
+      const { t } = restFor(p, 0, 500, (pressed) => ctrl({ ...DESK_TIP, y }, pressed));
+      expect(p.update(t + 14, head, noHands, [ctrl({ ...DESK_TIP, y }, true)]).state).not.toBe('done');
     }
   });
 
