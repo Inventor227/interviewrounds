@@ -48,9 +48,7 @@ const floor0 = (await roundState()).floor;
 const other = panel.find((p) => p.id !== floor0);
 stage('answer 1', await answer('Thanks for making the time. We help mid sized clinics cut no shows with reminders that patients actually answer, and we are raising two million to grow sales.'));
 stage('answer 2', await answer('Revenue is forty thousand a month, growing twelve percent month over month, with churn under two percent.'));
-await look(S, -12, 10);
-await sleep(800);
-await shot('05-after-answers');
+// One look down at the meeting kit's sheet (each capture costs half a minute of a five minute meeting).
 await look(S, -50);
 await sleep(800);
 await shot('05b-sheet');

@@ -173,7 +173,10 @@ export async function answer(text, timeoutMs = 90000) {
       return agent.length > b && last && Date.now() - last.at > 4000 ? { who: last.who, text: last.text } : null;
     }, before);
     if (reply) return reply;
-    if (Date.now() > end) await fail('no reply to a typed answer', await roundState());
+    // The round can end by itself while we wait (a time limit in the slow emulator): that is not a failure here.
+    const st = await roundState();
+    if (st && !['live', 'greeting', 'paused'].includes(st.state)) return { ended: true, state: st.state };
+    if (Date.now() > end) await fail('no reply to a typed answer', st);
   }
 }
 
