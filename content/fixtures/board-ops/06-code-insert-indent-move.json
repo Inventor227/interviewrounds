@@ -1,5 +1,5 @@
 {
-  "name": "code lines: insert after, indent with clamping, move",
+  "name": "code lines: insert after, indent with clamping, move, edit; complexity and approach",
   "start": {
     "schema": "ir.board.v1",
     "round": {
@@ -144,6 +144,17 @@
         "slot": "time",
         "value": "O(n)"
       }
+    },
+    {
+      "op_id": "c11",
+      "src": "scribe",
+      "op": "code.approach",
+      "args": {
+        "lines": [
+          "Hash map of value to index",
+          "One pass"
+        ]
+      }
     }
   ],
   "expected": {
@@ -154,7 +165,7 @@
       "question_id": null,
       "language": "python"
     },
-    "rev": 10,
+    "rev": 11,
     "size": {
       "w": 64,
       "h": 40
@@ -193,7 +204,10 @@
           "src": "scribe"
         }
       ],
-      "approach": [],
+      "approach": [
+        "Hash map of value to index",
+        "One pass"
+      ],
       "complexity": {
         "time": "O(n)",
         "space": null
@@ -213,7 +227,8 @@
       "c7",
       "c8",
       "c9",
-      "c10"
+      "c10",
+      "c11"
     ]
   }
 }

@@ -1,0 +1,187 @@
+{
+  "name": "sticky rank and lane via item.move; absent fields unchanged; rank on a non-sticky rejected",
+  "start": {
+    "schema": "ir.board.v1",
+    "round": {
+      "id": "s_fixture",
+      "type": "pm",
+      "question_id": null,
+      "language": null
+    },
+    "rev": 0,
+    "size": {
+      "w": 64,
+      "h": 40
+    },
+    "brief": {
+      "question": "Fixture board",
+      "lines": []
+    },
+    "items": [
+      {
+        "id": "s1",
+        "kind": "sticky",
+        "lane": "idea",
+        "text": "Carpool app",
+        "votes": 0,
+        "quad": null,
+        "x": 4,
+        "y": 4
+      },
+      {
+        "id": "s2",
+        "kind": "sticky",
+        "lane": "idea",
+        "text": "Shuttle bus",
+        "votes": 0,
+        "quad": null,
+        "x": 4,
+        "y": 12
+      },
+      {
+        "id": "m1",
+        "kind": "metric",
+        "role": "north_star",
+        "label": "Weekly riders",
+        "x": 40,
+        "y": 2
+      }
+    ],
+    "edges": [],
+    "code": null,
+    "meeting": null,
+    "focus": null,
+    "ghosts": [],
+    "op_ids": []
+  },
+  "ops": [
+    {
+      "op_id": "r1",
+      "src": "hand",
+      "op": "item.move",
+      "args": {
+        "id": "s1",
+        "x": 20,
+        "y": 6,
+        "rank": 1
+      }
+    },
+    {
+      "op_id": "r2",
+      "src": "hand",
+      "op": "item.move",
+      "args": {
+        "id": "s2",
+        "x": 20,
+        "y": 14,
+        "rank": 2
+      }
+    },
+    {
+      "op_id": "r3",
+      "src": "hand",
+      "op": "item.move",
+      "args": {
+        "id": "s1",
+        "x": 20,
+        "y": 14,
+        "rank": 2
+      }
+    },
+    {
+      "op_id": "r4",
+      "src": "hand",
+      "op": "item.move",
+      "args": {
+        "id": "s2",
+        "x": 20,
+        "y": 6,
+        "rank": 1
+      }
+    },
+    {
+      "op_id": "r5",
+      "src": "hand",
+      "op": "item.move",
+      "args": {
+        "id": "m1",
+        "x": 40,
+        "y": 4,
+        "rank": 1
+      }
+    },
+    {
+      "op_id": "r6",
+      "src": "hand",
+      "op": "item.move",
+      "args": {
+        "id": "s2",
+        "x": 20,
+        "y": 6,
+        "lane": null
+      }
+    }
+  ],
+  "expected": {
+    "schema": "ir.board.v1",
+    "round": {
+      "id": "s_fixture",
+      "type": "pm",
+      "question_id": null,
+      "language": null
+    },
+    "rev": 5,
+    "size": {
+      "w": 64,
+      "h": 40
+    },
+    "brief": {
+      "question": "Fixture board",
+      "lines": []
+    },
+    "items": [
+      {
+        "id": "s1",
+        "kind": "sticky",
+        "lane": "idea",
+        "text": "Carpool app",
+        "votes": 0,
+        "quad": null,
+        "x": 20,
+        "y": 14,
+        "rank": 2
+      },
+      {
+        "id": "s2",
+        "kind": "sticky",
+        "lane": null,
+        "text": "Shuttle bus",
+        "votes": 0,
+        "quad": null,
+        "x": 20,
+        "y": 6,
+        "rank": 1
+      },
+      {
+        "id": "m1",
+        "kind": "metric",
+        "role": "north_star",
+        "label": "Weekly riders",
+        "x": 40,
+        "y": 2
+      }
+    ],
+    "edges": [],
+    "code": null,
+    "meeting": null,
+    "focus": null,
+    "ghosts": [],
+    "op_ids": [
+      "r1",
+      "r2",
+      "r3",
+      "r4",
+      "r6"
+    ]
+  }
+}
