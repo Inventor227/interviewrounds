@@ -1,0 +1,52 @@
+{
+  "id": "pm.product_sense.short",
+  "title": "Product sense",
+  "summary": "Pick a user, find their real problem, propose one solution and say how you would measure it.",
+  "role": "pm",
+  "round_type": "pm_product_sense",
+  "length": "short",
+  "target_minutes": 7,
+  "hard_stop_minutes": 8,
+  "silence_wait_seconds": 40,
+  "interrupt_after_seconds": 120,
+  "panel": {
+    "lead": "persona.priya",
+    "second": null,
+    "second_enters_phase": null
+  },
+  "phases": [
+    {
+      "id": "segment",
+      "title": "Users",
+      "minutes": 1.5,
+      "goal": "Introduce yourself in one line, give the prompt and call show_question. Ask them to pick one group of users and say why."
+    },
+    {
+      "id": "problem",
+      "title": "Problem",
+      "minutes": 1.5,
+      "goal": "Ask for the most important pain point for that group and why it matters most."
+    },
+    {
+      "id": "solution",
+      "title": "Solution",
+      "minutes": 2.5,
+      "goal": "Ask for one solution to that pain and the smallest version that would test it.",
+      "uses_whiteboard": true
+    },
+    {
+      "id": "metric",
+      "title": "Metric",
+      "minutes": 1.5,
+      "goal": "Ask how they would know it worked and what must not get worse. Close and call end_round.",
+      "must_cover": [
+        "success_metric"
+      ]
+    }
+  ],
+  "rubric_id": "rubric.pm_product_sense",
+  "question_pool": "bank.pm_product_sense",
+  "hands": "stickies",
+  "board_kit": "pm",
+  "full_version": "pm.product_sense.full"
+}

@@ -1,0 +1,60 @@
+{
+  "id": "pm.leadership.full",
+  "title": "Leadership",
+  "summary": "A product you drove, then three situations on influence, conflict and failure, with a director pushing back.",
+  "role": "pm",
+  "round_type": "pm_leadership",
+  "length": "full",
+  "target_minutes": 25,
+  "hard_stop_minutes": 28,
+  "silence_wait_seconds": 20,
+  "interrupt_after_seconds": 180,
+  "panel": {
+    "lead": "persona.sam",
+    "second": "persona.viktor",
+    "second_enters_phase": "story_3"
+  },
+  "phases": [
+    {
+      "id": "intro",
+      "title": "Intro",
+      "minutes": 1,
+      "goal": "Introduce yourself, mention the director joins later, and give the format in under twenty seconds."
+    },
+    {
+      "id": "opener",
+      "title": "Your product",
+      "minutes": 5,
+      "goal": "Ask about a product or feature they drove. Probe what they decided, who they had to convince, and the result."
+    },
+    {
+      "id": "story_1",
+      "title": "Story one",
+      "minutes": 6,
+      "goal": "Ask the card that targets what you know least about so far. Two to four probes, each built on the last answer."
+    },
+    {
+      "id": "story_2",
+      "title": "Story two",
+      "minutes": 6,
+      "goal": "Next card, chosen the same way. Test scope for the level and how they handled the people who disagreed."
+    },
+    {
+      "id": "story_3",
+      "title": "Challenge",
+      "minutes": 6,
+      "goal": "The director asks about a hard call: saying no, a failed bet, or a decision that cost the team. He challenges the decision once, firmly, and sees whether they hold or update with a reason."
+    },
+    {
+      "id": "candidate_questions",
+      "title": "Your questions",
+      "minutes": 1,
+      "goal": "Take one question, answer briefly, close and call end_round."
+    }
+  ],
+  "rubric_id": "rubric.pm_leadership",
+  "question_pool": "bank.pm_leadership",
+  "hands": "none",
+  "board_kit": null,
+  "short_version": "pm.leadership.short"
+}
