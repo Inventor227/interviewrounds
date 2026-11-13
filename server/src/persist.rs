@@ -220,6 +220,11 @@ pub struct LiveSnapshot {
     /// When the user pause began (for the voice release after a restart).
     #[serde(default)]
     pub paused_at: Option<DateTime<Utc>>,
+    /// The model was down for several turns (the clock stays held after a restart too).
+    #[serde(default)]
+    pub degraded: bool,
+    #[serde(default)]
+    pub failed_turns: u32,
     #[serde(default)]
     pub brief: Option<Brief>,
     #[serde(default)]
@@ -262,6 +267,8 @@ pub fn snapshot(st: &SessionState, now: Instant) -> LiveSnapshot {
         } else {
             None
         },
+        degraded: st.degraded,
+        failed_turns: st.failed_turns,
         brief: st.brief.clone(),
         closing_line: st.closing_line.clone(),
         hints_given: st.hints_given,
@@ -297,6 +304,8 @@ pub fn restore(st: &mut SessionState, snap: LiveSnapshot, now: Instant) {
     } else {
         SessionStatus::Live
     };
+    st.degraded = snap.degraded;
+    st.failed_turns = snap.failed_turns;
     st.paused_wall = if st.status == SessionStatus::Paused {
         Some(snap.paused_at.unwrap_or_else(Utc::now))
     } else {

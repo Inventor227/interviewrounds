@@ -39,6 +39,14 @@ pub struct FakeLlm {
     pub scribe: Mutex<Option<String>>,
     /// Director and Scribe requests, in order (prewarms left out).
     pub creates: Mutex<Vec<MessagesRequest>>,
+    /// Models that are overloaded: every call to them fails (prewarms too).
+    pub down: Mutex<Vec<String>>,
+}
+
+impl FakeLlm {
+    fn is_down(&self, model: &str) -> bool {
+        self.down.lock().unwrap().iter().any(|m| m == model)
+    }
 }
 
 impl FakeLlm {
@@ -92,6 +100,9 @@ impl LlmApi for FakeLlm {
             return Ok(created(&req.model, json!([])));
         }
         self.creates.lock().unwrap().push(req.clone());
+        if self.is_down(&req.model) {
+            return Err(ClaudeError::Overloaded);
+        }
         if scribe {
             let prompt: String = req.system.iter().map(|b| b.text.as_str()).collect();
             let prefix = prompt
@@ -125,6 +136,9 @@ impl LlmApi for FakeLlm {
         req: &MessagesRequest,
     ) -> Result<BoxStream<'static, Result<StreamEvent, ClaudeError>>, ClaudeError> {
         self.requests.lock().unwrap().push(req.clone());
+        if self.is_down(&req.model) {
+            return Err(ClaudeError::Overloaded);
+        }
         if self.hang.load(Ordering::SeqCst) {
             let first = stream::iter(vec![Ok(StreamEvent::TextDelta("Well, ".into()))]);
             return Ok(first.chain(stream::pending()).boxed());

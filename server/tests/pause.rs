@@ -1044,3 +1044,86 @@ async fn join_is_refused_while_paused_with_voices_released() {
     assert_eq!(res.status, StatusCode::CONFLICT, "{}", res.body);
     assert_eq!(app.fish_calls("POST", "/v1/agent/sessions").await.len(), 1);
 }
+
+const ALL_MODELS: [&str; 3] = ["claude-sonnet-5-5", "claude-haiku-5-5", "claude-opus-5-5"];
+
+async fn ui_events(app: &live::TestApp, id: &str) -> Vec<Value> {
+    sqlx::query_scalar(
+        "select data from session_events where session_id = $1 and kind = 'ui.event' order by id",
+    )
+    .bind(Uuid::parse_str(id).unwrap())
+    .fetch_all(&app.state.db)
+    .await
+    .unwrap()
+}
+
+#[tokio::test]
+async fn degraded_hold_is_logged_as_a_pause_and_the_clock_waits_for_a_real_reply() {
+    let app = live::test_app(Options {
+        timing: roomy(),
+        ..Options::default()
+    })
+    .await;
+    let base = app.serve().await;
+    let (_, id, token) = new_session(&app, "fake").await;
+    let mut ws = hello(&base, &id, &token, 0).await;
+    frame_of(&mut ws, "round.state", WAIT).await.unwrap();
+    // Every model is down: three hold lines, then the round is degraded.
+    *app.llm.down.lock().unwrap() = ALL_MODELS.iter().map(|m| m.to_string()).collect();
+    for i in 0..3 {
+        let res = app.turn(&token, &id, &format!("Point number {i}.")).await;
+        assert_eq!(res.status, StatusCode::OK);
+    }
+    let handle = app.state.registry.get(&id).unwrap();
+    assert!(handle.lock().await.degraded);
+    live::eventually("degraded hold logged", WAIT, || async {
+        ui_events(&app, &id)
+            .await
+            .iter()
+            .any(|e| e["kind"] == "pause" && e["reason"] == "degraded")
+    })
+    .await;
+    // The browser is told.
+    let until = tokio::time::Instant::now() + WAIT;
+    loop {
+        let left = until.saturating_duration_since(tokio::time::Instant::now());
+        match live::next(&mut ws, left).await {
+            Some(live::Next::Frame(f)) if f["t"] == "round.state" && f["d"]["degraded"] == true => {
+                break;
+            }
+            Some(live::Next::Frame(_)) => {}
+            other => panic!("no degraded round.state: {other:?}"),
+        }
+    }
+    // Held, also across a `ui.event resume` (the user is there; the model is not).
+    let before = round_ms(&app, &id).await;
+    send(&mut ws, "ui.event", 1, json!({"kind": "resume"})).await;
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    let held = round_ms(&app, &id).await;
+    assert!(held.abs_diff(before) <= 5, "{before} -> {held}");
+    // The model is back: a real reply, the clock runs, and the resume closes the pause span.
+    app.llm.down.lock().unwrap().clear();
+    let res = app.turn(&token, &id, "Point number three.").await;
+    assert_eq!(res.status, StatusCode::OK);
+    assert!(!handle.lock().await.degraded);
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(round_ms(&app, &id).await > before + 100);
+    let events = ui_events(&app, &id).await;
+    let paused = events
+        .iter()
+        .position(|e| e["kind"] == "pause" && e["reason"] == "degraded")
+        .unwrap();
+    assert!(
+        events[paused..]
+            .iter()
+            .any(|e| e["kind"] == "resume" && e["reason"] == "model_back"),
+        "{events:?}"
+    );
+    // No resume was logged while the clock stood still.
+    assert!(
+        !events[paused..]
+            .iter()
+            .any(|e| e["kind"] == "resume" && e["reason"] == "back"),
+        "{events:?}"
+    );
+}

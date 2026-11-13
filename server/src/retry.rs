@@ -764,25 +764,32 @@ pub async fn score(deps: &ScoringDeps, child: Uuid) -> anyhow::Result<Value> {
                 .persona(&spec.persona_id)
                 .map(|p| p.display_name.clone())
                 .unwrap_or_else(|| "Interviewer".into());
-            let req = build_request(&deps.fast_model, &spec, &level, &role, &transcript, &interviewer);
+            let mut req = build_request(&deps.fast_model, &spec, &level, &role, &transcript, &interviewer);
             let mut last = anyhow!("no scoring attempt left");
             let mut got = None;
             // Every attempt is ledgered first, so restarts never buy more than MAX_ATTEMPTS calls.
             while let Some(attempt) = claim_attempt(deps, child).await? {
+                let mut unavailable = false;
                 // The attempt's own ledger row carries the call's usage: the metered client must not add another.
                 let call = crate::usage::LLM_UNMETERED.scope((), deps.llm.create(&req));
                 let (model, usage, res) =
                     match tokio::time::timeout(MODEL_TIMEOUT.min(deps.model_timeout), call).await {
-                        Err(_) => (
-                            req.model.clone(),
-                            estimate(&req),
-                            Err(anyhow!("the retry score took too long")),
-                        ),
-                        Ok(Err(e)) => (
-                            req.model.clone(),
-                            estimate(&req),
-                            Err(anyhow!("the retry score call failed: {e}")),
-                        ),
+                        Err(_) => {
+                            unavailable = true;
+                            (
+                                req.model.clone(),
+                                estimate(&req),
+                                Err(anyhow!("the retry score took too long")),
+                            )
+                        }
+                        Ok(Err(e)) => {
+                            unavailable = e.is_unavailable();
+                            (
+                                req.model.clone(),
+                                estimate(&req),
+                                Err(anyhow!("the retry score call failed: {e}")),
+                            )
+                        }
                         Ok(Ok(resp)) => {
                             let model = if resp.model.is_empty() {
                                 req.model.clone()
@@ -804,8 +811,16 @@ pub async fn score(deps: &ScoringDeps, child: Uuid) -> anyhow::Result<Value> {
                         break;
                     }
                     Err(err) => {
-                        tracing::warn!(session_id = %child, attempt, error = %format!("{err:#}"), "retry scoring attempt failed");
+                        tracing::warn!(session_id = %child, attempt, model = %req.model, error = %format!("{err:#}"), "retry scoring attempt failed");
                         last = err;
+                        // The model was down (or too slow): the next attempt goes to another one, as for rounds.
+                        if unavailable
+                            && let Some(other) = [&deps.card_fallback_model, &deps.fallback_model, &deps.model]
+                                .into_iter()
+                                .find(|m| **m != req.model)
+                        {
+                            req = crate::orchestrator::retarget(&req, other);
+                        }
                     }
                 }
             }

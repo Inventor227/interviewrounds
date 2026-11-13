@@ -353,11 +353,11 @@ async fn failed_model_calls_are_ledgered_at_zero_cost_with_the_error_kind() {
     assert_eq!(rows[0].2, 0.0);
     assert_eq!(
         rows[0].3,
-        json!({"call": "model_call", "error": "overloaded"})
+        json!({"call": "model_call", "error": "overloaded", "status": 529})
     );
     assert_eq!(
         rows[1].3,
-        json!({"call": "stream", "error": "rate_limited"})
+        json!({"call": "stream", "error": "rate_limited", "status": 429})
     );
     // The error's class only: no request or error text.
     assert!(!rows.iter().any(|r| r.3.to_string().contains("secret")));

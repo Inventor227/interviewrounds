@@ -174,12 +174,16 @@ Sequencing and acks:
   `hello` (status `created` until then). After a drop (or a server restart) a reconnect alone does not restart it: the
   next live turn (the resume flow's `[event: resume]`) or `ui.event {kind: "resume"}` does. The same holds after
   `POST /resume` from a pause: the clock waits for the user, and the report counts the pause until then. Nothing is
-  spoken on a reconnect. `degraded: true` means the interviewer's model has failed 3 live turns in a row, even after
-  its fallback model (each of those turns said the hold line "Sorry, give me a second."). The round clock is then
-  held, as in a pause, until a turn gets a real reply, and that snapshot carries `degraded: false`. The browser shows
-  "Your interviewer is reconnecting…" while it is true. Held time counts toward the 10-minute pause budget.
-  (Each live turn first retries once on a different model: the fallback, `LIVE_FALLBACK_MODEL`, when the model was
-  overloaded, rate limited, failed with a 5xx or gave no text in time.) `time_check_due: true` is sent once per phase boundary, on the snapshot when the
+  spoken on a reconnect. `degraded: true` means the interviewer's model was unavailable for 3 live turns in a row,
+  even after its fallback model (each of those turns said the hold line "Sorry, give me a second."; a refusal does not
+  count). The round clock is then held, as in a pause, and the hold is logged as a pause for the report, until a turn
+  gets a real reply. That snapshot carries `degraded: false`. The browser shows "Your interviewer is reconnecting…"
+  while it is true. Held time counts toward the 10-minute pause budget.
+  (Each live turn retries within its time budget, never after any of the reply was spoken: first on a different
+  model, the fallback `LIVE_FALLBACK_MODEL`, when the model was overloaded, rate limited, failed with a 5xx or gave
+  no text in time; then, while both only refuse, once more on the first model after a short pause. A start marker
+  whose attempts all fail gets a written opener (who is speaking, which round, the question is on the card) instead
+  of the hold line, recorded as the opener.) `time_check_due: true` is sent once per phase boundary, on the snapshot when the
   current phase runs out of time, and again on the snapshot after a `hello` while that time check is still owed (no
   `[event: time_check]` has reached the server since the boundary); it is `false` otherwise. On `true` the browser sends
   `[event: time_check]`. In an interview `brief` holds the question card's title and brief lines from the first snapshot,

@@ -221,7 +221,7 @@ impl Scribe {
 
     /// The model request: fast model, low effort, structured output limited to the Scribe's ops.
     pub fn build_request(&self, input: &ScribeInput) -> MessagesRequest {
-        MessagesRequest {
+        let mut req = MessagesRequest {
             model: self.model.clone(),
             max_tokens: 2048,
             system: system_blocks(&self.prompt(input)),
@@ -236,7 +236,10 @@ impl Scribe {
                 ),
             }),
             ..MessagesRequest::default()
-        }
+        };
+        // Defensive: the Scribe never carries the live history, so never a thinking block made under it.
+        crate::claude::strip_thinking(&mut req.messages);
+        req
     }
 
     /// Suggested ops for the last utterance; empty on timeout, error, refusal or anything unusable.

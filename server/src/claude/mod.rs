@@ -288,8 +288,12 @@ pub enum StreamEvent {
 pub enum ClaudeError {
     #[error("rate limited (retry after {retry_after:?})")]
     RateLimited { retry_after: Option<Duration> },
+    /// HTTP 529, or an `overloaded_error` event in a stream.
     #[error("overloaded")]
     Overloaded,
+    /// Any other 5xx (or an `api_error` event in a stream, kept as 500).
+    #[error("server error {status}")]
+    ServerError { status: u16 },
     #[error("bad request: {0}")]
     BadRequest(String),
     #[error("refused")]
@@ -298,14 +302,45 @@ pub enum ClaudeError {
     Network(String),
 }
 
+/// Drops thinking blocks (and messages left empty by that) from a history. A thinking block is only valid under the
+/// exact prefix it was made with, so a request with another system prompt, tools or model must never carry one.
+pub fn strip_thinking(messages: &mut Vec<Message>) {
+    for m in messages.iter_mut() {
+        m.content.retain(|b| {
+            !matches!(
+                b,
+                ContentBlock::Thinking { .. } | ContentBlock::RedactedThinking { .. }
+            )
+        });
+    }
+    messages.retain(|m| !m.content.is_empty());
+}
+
 impl ClaudeError {
     /// The model could not answer right now (overloaded or another 5xx, rate limited, the connection failed): worth
     /// one more try on a different model. Bad requests and refusals are not.
     pub fn is_unavailable(&self) -> bool {
         matches!(
             self,
-            ClaudeError::Overloaded | ClaudeError::RateLimited { .. } | ClaudeError::Network(_)
+            ClaudeError::Overloaded
+                | ClaudeError::ServerError { .. }
+                | ClaudeError::RateLimited { .. }
+                | ClaudeError::Network(_)
         )
+    }
+
+    /// The HTTP status behind the error, when there was one (529 overloaded, 5xx, 429, 4xx); for the ledger.
+    pub fn status(&self) -> Option<u16> {
+        match self {
+            ClaudeError::Overloaded => Some(529),
+            ClaudeError::ServerError { status } => Some(*status),
+            ClaudeError::RateLimited { .. } => Some(429),
+            // The message starts with the status ("400 invalid_request_error: ...") when it came from HTTP.
+            ClaudeError::BadRequest(msg) => {
+                msg.split_whitespace().next().and_then(|w| w.parse().ok())
+            }
+            ClaudeError::Refusal | ClaudeError::Network(_) => None,
+        }
     }
 
     /// The error's class for the ledger (never its text).
@@ -313,6 +348,7 @@ impl ClaudeError {
         match self {
             ClaudeError::RateLimited { .. } => "rate_limited",
             ClaudeError::Overloaded => "overloaded",
+            ClaudeError::ServerError { .. } => "server_error",
             ClaudeError::BadRequest(_) => "bad_request",
             ClaudeError::Refusal => "refusal",
             ClaudeError::Network(_) => "network",
