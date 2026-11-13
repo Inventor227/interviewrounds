@@ -1517,4 +1517,41 @@ describe('RoundController in the room', () => {
     await h.ctl.dispose();
     expect(vi.getTimerCount()).toBe(0);
   });
+
+  it('only_the_users_own_end_asks_for_a_goodbye', async () => {
+    const ENDING = '[event: ending]';
+    // The server ends the round at its time limit, with its own goodbye playing.
+    const h = harness();
+    const t = await live(h);
+    t.mode('speaking');
+    h.socket.serverSend('round.ended', { reason: 'time_limit' });
+    expect(h.ctl.state).toBe('ending');
+    t.mode('listening');
+    await vi.waitFor(() => expect(h.ctl.state).toBe('scoring'));
+    expect(t.sentEvents).not.toContain(ENDING);
+
+    // The snapshot says the round is over before any round.ended arrives (a retry's fixed end).
+    const h2 = harness();
+    const t2 = await live(h2);
+    h2.socket.serverSend('round.state', { ...rs(0, 0), status: 'scoring' });
+    await vi.waitFor(() => expect(h2.ctl.state).toBe('scoring'));
+    expect(t2.sentEvents).not.toContain(ENDING);
+    expect(h2.api.endSession).not.toHaveBeenCalled();
+
+    // The interviewer closes the round, and the user taps End while the closing line plays: still no request.
+    const h3 = harness();
+    const t3 = await live(h3);
+    t3.mode('speaking');
+    h3.socket.serverSend('round.ending', { closing_line: 'That is our time.' });
+    h3.ui('end');
+    t3.mode('listening');
+    await vi.waitFor(() => expect(h3.ctl.state).toBe('scoring'));
+    expect(t3.sentEvents).not.toContain(ENDING);
+
+    // The user's own End is the one case that asks.
+    const h4 = harness();
+    const t4 = await live(h4);
+    h4.ui('end');
+    expect(t4.sentEvents).toEqual([ENDING]);
+  });
 });

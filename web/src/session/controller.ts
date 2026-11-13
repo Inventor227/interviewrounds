@@ -203,6 +203,9 @@ interface CandidateTurn {
 type VoiceStateMsg = ClientMsgMap['voice.state'] & { latency?: LatencySplit };
 type RoundState = RoundStatePayload;
 
+/** Session statuses that mean the round itself is over. */
+const ROUND_OVER: ReadonlySet<string> = new Set(['scoring', 'scored', 'failed', 'abandoned']);
+
 const isActive = (s: ControllerState) => s === 'live' || s === 'greeting' || s === 'paused';
 
 export class RoundController {
@@ -1237,6 +1240,9 @@ export class RoundController {
   private onRoundState(d: RoundState): void {
     const prev = this.lastRound;
     this.lastRound = d;
+    // The server says the round is over (its own goodbye at a time limit, a retry's fixed end):
+    // the same as round.ended, and never a request for another goodbye from here.
+    if (ROUND_OVER.has(d.status) && (isActive(this.st) || this.st === 'ending') && !this.serverEnded) this.onRoundEnded();
     this.deps.xr.ui.setRoundState({ ...d, controller: this.st });
     if (d.time_check_due !== undefined) {
       // The server says when; once it does, the phase heuristic is off.
