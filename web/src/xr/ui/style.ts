@@ -94,7 +94,10 @@ export interface Button {
 export function button(labelText: string, opts: ButtonOpts = {}): Button {
   const base = opts.primary ? ACCENT : BUTTON;
   const hover = opts.primary ? ACCENT_HI : BUTTON_HOVER;
-  let armed = false;
+  // Per pointer: a press belongs to the pointer that went down on the button (another hand's ray crossing it
+  // neither cancels nor completes it).
+  const armed = new Set<number>();
+  const id = (e?: { pointerId?: number }) => e?.pointerId ?? -1;
   const root = new UIKit.Container({
     width: opts.width ?? 8,
     height: opts.height ?? 4.4,
@@ -105,18 +108,19 @@ export function button(labelText: string, opts: ButtonOpts = {}): Button {
     cursor: 'pointer',
     hover: { backgroundColor: hover },
     active: { backgroundColor: opts.primary ? ACCENT_HI : BUTTON_ACTIVE, transformScaleX: 0.97, transformScaleY: 0.97 },
-    onPointerDown: () => {
-      armed = true;
+    onPointerDown: (e?: { pointerId?: number; button?: number }) => {
+      // The main button only (a mouse's right button in the 2D preview presses nothing).
+      if ((e?.button ?? 0) !== 0) return;
+      armed.add(id(e));
       opts.onDown?.();
     },
-    onPointerUp: () => {
-      const pressed = armed;
-      armed = false;
+    onPointerUp: (e?: { pointerId?: number; button?: number }) => {
+      if (!armed.delete(id(e))) return;
       opts.onUp?.();
-      if (pressed) opts.onClick?.();
+      opts.onClick?.();
     },
-    onPointerLeave: () => {
-      armed = false;
+    onPointerLeave: (e?: { pointerId?: number }) => {
+      if (!armed.delete(id(e))) return;
       (opts.onLeave ?? opts.onUp)?.();
     },
   } as never);
@@ -177,8 +181,10 @@ export function holdRing(radius: number, color = INK): { mesh: Mesh; set(p: numb
   const c = parseHex(color);
   (mat.uniforms.uColor!.value as number[]).splice(0, 3, ...c);
   const mesh = new Mesh(new CircleGeometry(radius, 48), mat);
-  // Drawn only: a pointer goes through it to the button it surrounds (it would otherwise take the ray from the
-  // button the moment it shows, and a hold by ray could never finish).
+  // Drawn only: every pointer (a ray, a poking fingertip's sphere, a grab) goes through it to the button it
+  // surrounds. It would otherwise take the pointer from the button the moment it shows, and a hold could never
+  // finish.
+  mesh.pointerEvents = 'none';
   mesh.raycast = () => {};
   mesh.renderOrder = 10;
   mesh.visible = false;

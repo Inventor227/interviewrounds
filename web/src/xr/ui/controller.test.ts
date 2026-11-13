@@ -234,3 +234,129 @@ describe('panels with a controller', () => {
     expect(ui.hint.history.map((h) => h.line)).toEqual(['No desk? We set one up for you.']);
   });
 });
+
+// ---- a hand's poke: the fingertip is a small sphere that presses within 2 cm of a panel ----
+
+import { createTouchPointer } from '@pmndrs/pointer-events';
+
+/** A fingertip as the room's pointer system drives it: a touch pointer on a space (hover 20 cm, down 2 cm). */
+function pokeRig(scene: Scene) {
+  const tip = new Object3D();
+  scene.add(tip);
+  const camera = new PerspectiveCamera();
+  const pointer = createTouchPointer(() => camera, { current: tip }, {}, { hoverRadius: 0.2, downRadius: 0.02, clickThresholdMs: 800, button: 0 });
+  let t = 0;
+  return {
+    /** One frame with the fingertip at a world point. */
+    at(p: Vector3) {
+      scene.traverse((o) => {
+        if (o instanceof UIKitDocument) (o.rootElement as unknown as { update(dt: number): void }).update(1 / 72);
+      });
+      tip.position.copy(p);
+      scene.updateMatrixWorld(true);
+      pointer.move(scene, { timeStamp: (t += 14) });
+    },
+    down: () => pointer.getButtonsDown().size > 0,
+  };
+}
+
+describe('panels with a hand poke', () => {
+  function barScene() {
+    const actions: RoundAction[] = [];
+    const bar = new RoundBar((a) => actions.push(a));
+    const scene = new Scene();
+    scene.add(bar.group);
+    // As in the room: the panel's group is an interactable entity, so everything under it can take a pointer.
+    bar.group.addEventListener('pointerenter' as never, () => {});
+    place(bar.group, layoutDesk(DESK).roundBar);
+    bar.setState({ status: 'live', elapsed_s: 5, total_s: 480, muted: false, captions: false });
+    scene.updateMatrixWorld(true);
+    const rig = pokeRig(scene);
+    rig.at(new Vector3(0, 2, 0));
+    const normal = new Vector3(0, 0, 1).transformDirection(bar.group.matrixWorld);
+    const centre = (name: 'mute' | 'pause' | 'cc' | 'end') => (bar as unknown as Record<string, { root: Object3D }>)[name]!.root.getWorldPosition(new Vector3());
+    /** The fingertip `d` metres in front of a button's centre (negative: pushed through it). */
+    const over = (name: 'mute' | 'pause' | 'cc' | 'end', d: number) => centre(name).addScaledVector(normal, d);
+    return { actions, bar, rig, over, centre };
+  }
+
+  it('a_hand_poke_taps_pause_and_the_other_round_bar_buttons', () => {
+    const { actions, bar, rig, over } = barScene();
+    // The finger comes in at 5 mm a frame, goes 4 mm through the panel and comes back.
+    const poke = (name: 'mute' | 'pause' | 'cc') => {
+      for (let d = 0.08; d >= -0.004; d -= 0.005) rig.at(over(name, d));
+      expect(rig.down(), `${name} pressed`).toBe(true);
+      for (let d = -0.004; d <= 0.08; d += 0.005) rig.at(over(name, d));
+      expect(rig.down()).toBe(false);
+    };
+    poke('pause');
+    expect(actions).toEqual(['pause']);
+    bar.setState({ status: 'paused', elapsed_s: 5, total_s: 480, muted: false, captions: false });
+    poke('pause');
+    poke('mute');
+    poke('cc');
+    expect(actions).toEqual(['pause', 'resume', 'mute', 'captions']);
+    // A slow poke (the finger rests on the button for two seconds) still presses.
+    bar.setState({ status: 'live', elapsed_s: 5, total_s: 480, muted: false, captions: false });
+    for (let d = 0.06; d >= 0; d -= 0.005) rig.at(over('pause', d));
+    for (let i = 0; i < 144; i++) rig.at(over('pause', 0.001));
+    for (let d = 0; d <= 0.06; d += 0.005) rig.at(over('pause', d));
+    expect(actions.at(-1)).toBe('pause');
+    // A finger that slides off sideways before lifting presses nothing.
+    const n = actions.length;
+    for (let d = 0.06; d >= 0; d -= 0.005) rig.at(over('mute', d));
+    for (let k = 0; k <= 30; k++) rig.at(over('mute', 0.002).add(new Vector3(0, 0.02 * k, 0)));
+    expect(actions).toHaveLength(n);
+  });
+
+  it('a_hand_poke_holds_end_until_the_ring_is_full', () => {
+    const { actions, bar, rig, over } = barScene();
+    // The finger arrives, the press starts 2 cm out, and it keeps coming: the ring that shows around End must not
+    // take the fingertip from the button.
+    let now = 1000;
+    const frame = (d: number) => {
+      now += 14;
+      bar.tick(0.014, now);
+      rig.at(over('end', d));
+    };
+    for (let d = 0.08; d >= 0.002; d -= 0.004) frame(d);
+    expect(rig.down()).toBe(true);
+    // Resting on End for 0.4 s and lifting: not an End.
+    for (let i = 0; i < 28; i++) frame(0.002);
+    for (let d = 0.002; d <= 0.08; d += 0.005) frame(d);
+    expect(actions).not.toContain('end');
+    // Again, held for the full second (and a little), then lifted: End.
+    for (let d = 0.08; d >= 0.002; d -= 0.004) frame(d);
+    for (let i = 0; i < Math.ceil((END_HOLD_MS + 100) / 14); i++) frame(0.002 + 0.002 * Math.sin(i / 5));
+    expect(actions).not.toContain('end');
+    for (let d = 0.002; d <= 0.08; d += 0.005) frame(d);
+    expect(actions.at(-1)).toBe('end');
+  });
+
+  it('a_hand_poke_presses_the_paused_card_buttons', () => {
+    const ui = new RoundUI();
+    const actions: RoundAction[] = [];
+    ui.onAction((a) => actions.push(a));
+    const scene = new Scene();
+    scene.add(ui.groups.status);
+    ui.groups.status.addEventListener('pointerenter' as never, () => {});
+    place(ui.groups.status, layoutDesk(DESK).status);
+    ui.setNotice('paused');
+    const rig = pokeRig(scene);
+    rig.at(new Vector3(0, 3, 0));
+    scene.updateMatrixWorld(true);
+    const normal = new Vector3(0, 0, 1).transformDirection(ui.groups.status.matrixWorld);
+    const targets: Object3D[] = [];
+    ui.groups.status.traverse((o) => {
+      const p = (o as unknown as { properties?: { peek?(): { onPointerDown?: unknown } } }).properties?.peek?.();
+      if (p?.onPointerDown) targets.push(o);
+    });
+    expect(targets).toHaveLength(2);
+    for (const t of targets) {
+      const c = t.getWorldPosition(new Vector3());
+      for (let d = 0.08; d >= -0.003; d -= 0.005) rig.at(c.clone().addScaledVector(normal, d));
+      for (let d = -0.003; d <= 0.08; d += 0.005) rig.at(c.clone().addScaledVector(normal, d));
+    }
+    expect(actions).toEqual(['resume', 'end']);
+  });
+});
