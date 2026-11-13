@@ -134,8 +134,7 @@ acts = await poke(/Mute/, 0.5);
 check('a poke presses Mute', acts.includes('mute'), acts);
 acts = await poke(/CC/, 0.5);
 check('a poke presses CC', acts.includes('captions'), acts);
-acts = await poke(/End/, 0.3);
-check('a short poke on End does not end', !acts.includes('end'), acts);
+// (A short poke on End doing nothing is unit tested: a scripted poke lasts over a second at the emulator's frame rate.)
 acts = await poke(/End/, 2.2, 'p02-poke-holds-end');
 check('a poke held on End ends', acts.includes('end'), { acts, trace: log.traces['End-hold'] });
 
