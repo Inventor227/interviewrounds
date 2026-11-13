@@ -1,2 +1,6 @@
 .iwsdk/
 *.tsbuildinfo
+# Candidate speech for the real-voice emulator runs, made by e2e/make-voice.py on the Mac (say)
+e2e/voice/
+# Copied in by those runs on the server copy only
+public/__emu_voice/
