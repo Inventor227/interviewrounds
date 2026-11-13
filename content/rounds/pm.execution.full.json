@@ -36,7 +36,7 @@
       "id": "diagnosis",
       "title": "Diagnosis",
       "minutes": 10,
-      "goal": "Metric definitions, time window, data quality, internal versus external causes, segment cuts and the funnel step, in a sensible order. Give data exactly when asked and keep it fixed. Ask whether a change could be noise.",
+      "goal": "The lead gives part two and lets the candidate start; the data scientist takes over after their first answer and never hands them the first step. Probe metric definitions, time window, data quality, internal versus external causes, segment cuts and the funnel step, in a sensible order. Give data exactly when asked and keep it fixed. Ask whether a change could be noise.",
       "uses_whiteboard": true,
       "must_cover": [
         "data_check",

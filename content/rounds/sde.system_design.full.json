@@ -49,7 +49,7 @@
       "id": "deep_dive",
       "title": "Deep dive",
       "minutes": 8,
-      "goal": "Failure modes and trade-offs: a node or region dies, a hot key, a slow dependency, retries that duplicate work. One failure at a time, built on their own design. Senior and above choose where to go deeper first.",
+      "goal": "Failure modes and trade-offs: a node or region dies, a hot key, a slow dependency, retries that duplicate work. One failure at a time, built on their own design. The lead opens the phase (senior and above: 'Where would you go deeper?'); the second interviewer takes over only after the candidate has answered.",
       "must_cover": [
         "failure_mode",
         "trade_off"
