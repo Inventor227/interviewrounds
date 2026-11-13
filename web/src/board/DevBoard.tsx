@@ -3,10 +3,10 @@
 // bin to delete, type a voice line to label the selected card, undo.
 import { useEffect, useRef, useState } from 'preact/hooks';
 import type { BoardOp } from '../shared/types';
-import { parseLabelCommand } from './grammar';
+import { parseLabelCommand, voiceLabel } from './grammar';
 import { BoardInput } from './input';
 import { HLD_KIT } from './kits';
-import { COMPONENT_NAMES, emptyBoard, findItem, IdGen } from './model';
+import { COMPONENT_NAMES, emptyBoard, IdGen } from './model';
 import { MouseAdapter } from './mouse';
 import { BoardStore } from './ops';
 import { BoardView } from './render';
@@ -118,15 +118,14 @@ export function DevBoard() {
         return [r.left + px, r.top + py];
       },
       say(line) {
-        const parsed = parseLabelCommand(line);
-        const focus = store.board.focus;
+        const hit = voiceLabel(store.board, line);
         let msg: string;
-        if (!parsed) msg = 'Not a label. Try "call that the order service".';
-        else if (!focus || !findItem(store.board, focus)) msg = 'Select a card first, then say its name.';
-        else {
-          apply({ op_id: ids.next('op'), src: 'voice_grammar', op: 'item.label', args: { id: focus, text: parsed.label } });
-          return `Labelled "${parsed.label}".`;
+        if (hit) {
+          apply({ op_id: ids.next('op'), src: 'voice_grammar', op: 'item.label', args: { id: hit.id, text: hit.label } });
+          return `Labelled "${hit.label}".`;
         }
+        if (!parseLabelCommand(line)) msg = 'Not a label. Try "call that the order service".';
+        else msg = 'Select a card first, then say its name.';
         setStatus(msg);
         return msg;
       },
