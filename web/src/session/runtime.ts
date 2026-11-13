@@ -495,7 +495,7 @@ export function createRoundRuntime({ preview }: RuntimeOptions): RoundController
           return () => skips.delete(cb);
         },
       });
-      // The 20 s only count while the user is in the room (headset on, no system menu, page visible).
+      // The 30 s only count while the user is in the room (headset on, no system menu, page visible).
       const watch = watchPresence(onboarding, {
         onXrVisibility: (cb) => a.onVisibility(cb),
         xrNow: () => (a.world.session?.visibilityState as 'visible' | 'visible-blurred' | 'hidden' | undefined) ?? 'visible',

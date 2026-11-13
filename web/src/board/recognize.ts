@@ -13,8 +13,12 @@ export type Recognized =
 
 /** Strokes shorter than this make no mark. */
 export const MIN_STROKE_CM = 1.5;
-/** A connector may start or end this far outside a card. */
-export const CONNECT_MARGIN_CM = 1.0;
+/**
+ * A connector may start or end this far outside a card. With the card's own rim inside the edge (input.ts RIM_CM,
+ * 0.8 cm) the band a connector can start in is 2.2 cm across: Meta's smallest target for a fingertip or a ray. The
+ * card is drawn as before; only the band is wider.
+ */
+export const CONNECT_MARGIN_CM = 1.4;
 /** A connector may end this far outside the target card (fingertip error is about 1 to 1.5 cm). */
 export const CONNECT_END_MARGIN_CM = 1.5;
 /** Smallest card a box can become (either orientation). */

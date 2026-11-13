@@ -339,7 +339,7 @@ export function HeadsetStep(props: { xr: XrState; questUrl: string; questNote?: 
             <h3 class="step-title">Headset ready</h3>
             <p class="step-text">The room opens in passthrough. Sit at your desk with some space in front of you.</p>
             <p class="step-text hands" data-test="hands-note">
-              Use your hands. Controllers are optional.
+              Use your hands or your controllers.
             </p>
           </>
         )}

@@ -1,13 +1,13 @@
 // Onboarding by doing, once per device, in the first round with a sheet: after the desk is placed
 // a ghost hand shows "pinch and draw a box" over the sheet, and the step is done when the user has
-// made one box themselves, pinched Skip, or 20 s have passed without a box. The round starts at
-// that moment: the interviewer waits until then, and never longer than those 20 s. Nothing on
+// made one box themselves, pinched Skip, or 30 s have passed without a box. The round starts at
+// that moment: the interviewer waits until then, and never longer than those 30 s. Nothing on
 // screen counts down. Pure logic: the room supplies the board and the visuals.
 
 export type OnboardResult = 'done' | 'skipped' | 'none';
 
 /** The round starts by itself after this long without a box: the onboarding never holds a round. */
-export const ONBOARD_TIMEOUT_MS = 20_000;
+export const ONBOARD_TIMEOUT_MS = 30_000;
 
 /** Kits where a drawn box becomes a card of the round (the coding and meeting sheets work differently). */
 export const ONBOARDING_KITS: readonly string[] = ['hld', 'lld', 'pm'];
@@ -81,7 +81,7 @@ export class Onboarding {
 
   /**
    * Whether the user is in the room (headset on, no system menu, page visible). Away: the clock waits, so a round
-   * never starts into an empty room. Back: the line and Skip again, and a fresh 20 s.
+   * never starts into an empty room. Back: the line and Skip again, and a fresh 30 s.
    */
   setPresent(present: boolean): void {
     this.present = present;
@@ -129,10 +129,10 @@ export interface PresenceWatch {
 }
 
 /**
- * Keeps the onboarding's 20 s clock to the time the user is really in the room. Present means: a headset session
+ * Keeps the onboarding's 30 s clock to the time the user is really in the room. Present means: a headset session
  * that is `visible`, and a page that is not hidden. The state that already holds when the watch starts counts (a
  * system menu up as placement ends: no clock yet). After a session end nobody is present until the next Enter,
- * whatever the page's visibility does meanwhile. Coming back shows the line and Skip again and starts a fresh 20 s.
+ * whatever the page's visibility does meanwhile. Coming back shows the line and Skip again and starts a fresh 30 s.
  */
 export function watchPresence(onboarding: Onboarding, src: PresenceSources): PresenceWatch {
   let xr = src.xrNow?.() ?? 'visible';
