@@ -1,7 +1,8 @@
 // Dev only: the board in a minimal IWSDK passthrough scene, without the room, for emulator
 // runs and checks before the XR room is integrated. It implements BoardXRPort from the World:
-// hands from joint poses, pinches from select events, the head, and a desk placed in front
-// of the head (or where a script puts it). A plain plane stands in for the wall whiteboard.
+// hands from joint poses, controllers from their aim rays and gamepads, selects (a pinch or
+// the trigger) from select events, the head, and a desk placed in front of the head (or where
+// a script puts it). A plain plane stands in for the wall whiteboard.
 import { Mesh, MeshBasicMaterial, Object3D, PlaneGeometry, Quaternion, SRGBColorSpace, Vector3, type Texture } from 'three';
 import type { BoardOp, GhostOp } from '../shared/types';
 import { createBoardXR, type BoardXR } from './boardXR';
@@ -9,11 +10,12 @@ import type { BoardKit } from '../shared/types';
 import { sampleStartBoard } from './kits/samples';
 import { IdGen } from './model';
 import { BoardStore } from './ops';
-import type { BoardXRPort, DeskPose, HeadPose, SelectPhase, Vec3, XRHandSample } from './port';
+import type { BoardXRPort, DeskPose, HeadPose, SelectPhase, Vec3, XRControllerSample, XRHandSample } from './port';
 import { placeAnchor, sheetToWorld } from './sheetMath';
+import { ButtonEdges, pulsePad, HAPTICS, readGamepad, type HapticPad } from '../xr/input';
 
 type FrameCb = (dt: number, nowMs: number) => void;
-type SelectCb = (hand: 'left' | 'right', phase: SelectPhase, nowMs: number) => void;
+type SelectCb = (hand: 'left' | 'right', phase: SelectPhase, nowMs: number, kind?: 'hand' | 'controller') => void;
 
 export interface DevSheetHandle {
   store: BoardStore;
@@ -58,6 +60,9 @@ export async function createDevSheet(root: HTMLElement): Promise<DevSheetHandle>
   const ends = new Set<() => void>();
   const selects = new Set<SelectCb>();
   let hands: XRHandSample[] = [];
+  let controllers: XRControllerSample[] = [];
+  const pads: Partial<Record<'left' | 'right', HapticPad>> = {};
+  const buttons = new ButtonEdges();
   let desk: DeskPose | null = null;
   let lastT = 0;
   let frameN = 0;
@@ -106,6 +111,9 @@ export async function createDevSheet(root: HTMLElement): Promise<DevSheetHandle>
       return () => selects.delete(cb);
     },
     hands: () => hands,
+    controllers: () => controllers,
+    onButton: (cb) => buttons.on(cb),
+    haptic: (hand, name) => void pulsePad(pads[hand], HAPTICS[name].strength, HAPTICS[name].ms),
     headPose,
     desk: () => desk,
     onSessionEnd(cb) {
@@ -126,9 +134,29 @@ export async function createDevSheet(root: HTMLElement): Promise<DevSheetHandle>
     const session = world.session;
     if (!ref || !session) return;
     const out: XRHandSample[] = [];
+    const ctrls: XRControllerSample[] = [];
+    const now = performance.now();
     for (const src of session.inputSources) {
       const hand = src.hand;
-      if (!hand || (src.handedness !== 'left' && src.handedness !== 'right')) continue;
+      if (src.handedness !== 'left' && src.handedness !== 'right') continue;
+      if (!hand) {
+        // A held controller: its aim ray starts at its front tip.
+        const pose = src.gamepad && src.targetRayMode === 'tracked-pointer' ? frame.getPose(src.targetRaySpace, ref) : undefined;
+        if (!pose) continue;
+        const p = pose.transform.position;
+        const q = pose.transform.orientation;
+        const pad = readGamepad(src.gamepad);
+        ctrls.push({
+          hand: src.handedness,
+          tracked: true,
+          tip: { x: p.x, y: p.y, z: p.z },
+          dir: { x: -2 * (q.x * q.z + q.w * q.y), y: -2 * (q.y * q.z - q.w * q.x), z: -(1 - 2 * (q.x * q.x + q.y * q.y)) },
+          stick: pad.stick,
+        });
+        pads[src.handedness] = src.gamepad as unknown as HapticPad;
+        buttons.update(src.handedness, pad, now);
+        continue;
+      }
       const joint = (name: XRHandJoint): Vec3 | null => {
         const space = hand.get(name);
         const pose = space ? frame.getJointPose?.(space, ref) : undefined;
@@ -141,6 +169,12 @@ export async function createDevSheet(root: HTMLElement): Promise<DevSheetHandle>
       out.push({ hand: src.handedness, tracked: !!(thumbTip && indexTip), thumbTip, indexTip });
     }
     hands = out;
+    controllers = ctrls;
+    for (const side of ['left', 'right'] as const) {
+      if (ctrls.some((c) => c.hand === side)) continue;
+      delete pads[side];
+      buttons.update(side, null, now);
+    }
     const t = performance.now();
     const dt = lastT ? (t - lastT) / 1000 : 0;
     lastT = t;
@@ -157,7 +191,7 @@ export async function createDevSheet(root: HTMLElement): Promise<DevSheetHandle>
     const fire = (e: XRInputSourceEvent, phase: SelectPhase) => {
       const h = e.inputSource.handedness;
       if (h !== 'left' && h !== 'right') return;
-      for (const cb of [...selects]) cb(h, phase, performance.now());
+      for (const cb of [...selects]) cb(h, phase, performance.now(), e.inputSource.hand ? 'hand' : 'controller');
     };
     s.addEventListener('selectstart', ((e: XRInputSourceEvent) => {
       selected.delete(e.inputSource);

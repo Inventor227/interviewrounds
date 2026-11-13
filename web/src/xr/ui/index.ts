@@ -32,6 +32,8 @@ export class RoundUI {
   readonly hint = new Hint();
   readonly summary: SummaryCard;
   readonly captions = new Captions();
+  /** The input the placement prompt was last worded for (tooling and tests). */
+  placingFor: 'hands' | 'controllers' | null = null;
   private readonly listeners = new Set<(a: RoundAction) => void>();
   private chrome = false;
   private lastStage: StatusStage | null = null;
@@ -170,6 +172,7 @@ export class RoundUI {
   /** The desk placement prompt, worded for the input in use (hands: a finger; controllers: the tip and the trigger). */
   showPlacing(input: 'hands' | 'controllers'): void {
     this.lastStage = 'placing';
+    this.placingFor = input;
     this.status.showText(PLACING_COPY[input].title, PLACING_COPY[input].detail);
   }
 

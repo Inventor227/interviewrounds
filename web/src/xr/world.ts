@@ -112,6 +112,8 @@ export interface XRApp {
   onButton(cb: (hand: 'left' | 'right', button: ControllerButton, nowMs: number) => void): () => void;
   /** A short, light pulse on that side's controller; nothing for a hand, and nothing while the user is speaking. */
   haptic(hand: 'left' | 'right', name: HapticName): void;
+  /** The pulses given so far, newest last (tooling and tests). */
+  hapticLog(): readonly { hand: 'left' | 'right'; name: HapticName; atMs: number }[];
   /** The sheet frame (Room.sheetAnchor): origin at the near edge centre, +X right, -Z far, +Y the surface normal. */
   readonly sheetAnchor: Object3D;
   /** The placed desk of this session, or null (same as desk$.value). */
@@ -905,6 +907,7 @@ export async function createXRApp(root: HTMLElement, opts: XRAppOptions): Promis
     onInputChange: (cb) => input.onInputChange(cb),
     onButton: (cb) => buttons.on(cb),
     haptic: (hand, name) => void haptics.pulse(hand, name),
+    hapticLog: () => haptics.log,
     sheetAnchor: room.sheetAnchor,
     desk: () => desk$.value,
     wallboardTexture: (tex) => room.wallboardTexture(tex),
