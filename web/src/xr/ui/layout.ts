@@ -25,7 +25,8 @@ export function layoutDesk(desk: DeskFrame): Record<PanelName, PanelPose> {
   const f = forwardOf(desk.yaw);
   const r = rightOf(desk.yaw);
   const o = v3(desk.origin.x, desk.deskY, desk.origin.z);
-  const user = userPoint(desk);
+  // Cards that stand before the eyes measure from the real head when placement saw it.
+  const user = desk.head ? v3(desk.head.x, desk.deskY, desk.head.z) : userPoint(desk);
   const standing = (ahead: number, up: number, tiltDeg: number): PanelPose => {
     const p = addScaled(user, f, ahead);
     return { pos: v3(p.x, desk.deskY + up, p.z), yaw: desk.yaw, tilt: -tiltDeg * DEG };

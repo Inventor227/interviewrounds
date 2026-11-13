@@ -148,6 +148,8 @@ export interface DeskPose {
   yaw: number;
   deskY: number;
   source: 'touch' | 'fallback' | 'preview';
+  /** The head at placement time, when known (cards that stand in front of the eyes use it). */
+  head?: Vec3;
 }
 
 export type PlacementState = 'waiting' | 'dwelling' | 'done';
@@ -166,7 +168,7 @@ export interface PlacementStatus {
 export function fallbackDesk(head: HeadPose): DeskPose {
   const deskY = head.pos.y - FALLBACK_DESK_BELOW_HEAD;
   const o = addScaled({ x: head.pos.x, y: deskY, z: head.pos.z }, forwardOf(head.yaw), FALLBACK_SHEET_AHEAD);
-  return { origin: o, yaw: head.yaw, deskY, source: 'fallback' };
+  return { origin: o, yaw: head.yaw, deskY, source: 'fallback', head: { ...head.pos } };
 }
 
 /**
@@ -201,7 +203,7 @@ export class DeskPlacement {
       while (hist.length > 2 && hist[0]!.t_ms < t_ms - DWELL_MS * 2) hist.shift();
       const dwell = detectDeskDwell(hist);
       if (dwell) {
-        this.result = { origin: dwell.at, yaw: head.yaw, deskY: dwell.deskY, source: 'touch' };
+        this.result = { origin: dwell.at, yaw: head.yaw, deskY: dwell.deskY, source: 'touch', head: { ...head.pos } };
         return { state: 'done', progress: 1, tip: dwell.at, hand: h.hand, result: this.result };
       }
       const rest = restingMs(hist);

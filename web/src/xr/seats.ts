@@ -8,7 +8,7 @@
 import { add, addScaled, DEG, forwardOf, rightOf, v3, type Vec3 } from './math';
 import type { DeskPose } from './placement';
 
-export type DeskFrame = Pick<DeskPose, 'origin' | 'yaw' | 'deskY'>;
+export type DeskFrame = Pick<DeskPose, 'origin' | 'yaw' | 'deskY'> & { head?: DeskPose['head'] };
 
 /** Desk height the seated clips were authored at: hands land on a 0.74 m desk with the root on the floor. */
 export const AVATAR_DESK_Y = 0.74;
