@@ -5,6 +5,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, anyhow, bail};
@@ -163,9 +164,11 @@ pub async fn score_with_card(
     env.events.progress(&input.session_id, "scoring", 20).await;
     let req = build_request(env, input, round, rubric, &lines, &delivery)?;
     let main = async {
-        let (text, usage) = run_model(env, &input.session_id, &req, true, env.timeout).await?;
-        let out: Value = serde_json::from_str(text.trim())
-            .map_err(|e| anyhow!("the model output is not JSON: {e}"))?;
+        let (text, usage) =
+            run_model(env, &input.session_id, &req, true, env.timeout, "scoring").await?;
+        // A reply that is not JSON was still paid for: its usage is kept apart from the parse result.
+        let out = serde_json::from_str::<Value>(text.trim())
+            .map_err(|e| anyhow!("the model output is not JSON: {e}"));
         anyhow::Ok((out, usage))
     };
     // The card: once per run, its own short timeout; sent the moment it is ready.
@@ -174,7 +177,7 @@ pub async fn score_with_card(
         slot.0
             .get_or_init(|| async {
                 let req = card_request(env, input, round, &lines);
-                match run_model(env, &input.session_id, &req, false, env.card_timeout).await {
+                match run_model(env, &input.session_id, &req, false, env.card_timeout, "scoring_card").await {
                     Ok((text, usage)) => {
                         let out: Value = serde_json::from_str(text.trim()).unwrap_or(Value::Null);
                         let (card, items) = build_card(&out, &lines);
@@ -197,7 +200,16 @@ pub async fn score_with_card(
             return None;
         }
         let req = meeting_request(env, input, &lines);
-        match run_model(env, &input.session_id, &req, false, env.meeting_timeout).await {
+        match run_model(
+            env,
+            &input.session_id,
+            &req,
+            false,
+            env.meeting_timeout,
+            "scoring_meeting",
+        )
+        .await
+        {
             Ok((text, usage)) => Some((
                 serde_json::from_str::<Value>(text.trim()).unwrap_or(Value::Null),
                 usage,
@@ -266,6 +278,10 @@ pub async fn score_with_card(
             usage,
         },
     );
+    let out = match out {
+        Ok(v) => v,
+        Err(err) => return Err(err.context(UsageOnError(calls))),
+    };
 
     let mut report = assemble(input, env.catalog, round, rubric, &lines, &out, &delivery);
     if let Some(m) = &meeting_out {
@@ -1301,13 +1317,92 @@ pub fn merge_meeting(report: &mut Value, out: &Value, lines: &[Line]) {
 /// Rough size of a full answer, for the progress bar.
 const EXPECTED_CHARS: usize = 12_000;
 
+tokio::task_local! {
+    /// Calls of the current scoring attempt that ended without reporting their usage (an error, a timeout, a cut-off
+    /// side call), as estimates, so the ledger and the spend caps still see them.
+    static UNREPORTED: Arc<std::sync::Mutex<Vec<CallUsage>>>;
+}
+
+/// Runs `fut` (one scoring attempt) collecting the estimates of calls that never reported usage into `log`.
+pub async fn collecting_unreported<F: std::future::Future>(
+    log: Arc<std::sync::Mutex<Vec<CallUsage>>>,
+    fut: F,
+) -> F::Output {
+    UNREPORTED.scope(log, fut).await
+}
+
+/// Rough tokens of an image block in a request (a board picture of at most 1568 px a side).
+const IMAGE_TOKENS: u64 = 1600;
+
+/// Records an estimate for a model call unless it finished with real usage: input from the request text (about
+/// 4 characters per token, images at a flat rate), output from the text streamed so far.
+struct PendingCall {
+    model: String,
+    kind: &'static str,
+    input_tokens: u64,
+    out_chars: usize,
+    /// The stop event's usage, when the call stopped for a reason that counts as a failure.
+    known: Option<Usage>,
+    done: bool,
+}
+
+impl PendingCall {
+    fn new(req: &MessagesRequest, kind: &'static str) -> Self {
+        let mut chars: usize = req.system.iter().map(|b| b.text.len()).sum();
+        let mut images = 0u64;
+        for m in &req.messages {
+            for b in &m.content {
+                match b {
+                    ContentBlock::Text { text, .. } => chars += text.len(),
+                    ContentBlock::Other(_) => images += 1,
+                    _ => {}
+                }
+            }
+        }
+        PendingCall {
+            model: req.model.clone(),
+            kind,
+            input_tokens: chars as u64 / 4 + images * IMAGE_TOKENS,
+            out_chars: 0,
+            known: None,
+            done: false,
+        }
+    }
+}
+
+impl Drop for PendingCall {
+    fn drop(&mut self) {
+        if self.done {
+            return;
+        }
+        let call = CallUsage {
+            model: std::mem::take(&mut self.model),
+            kind: self.kind,
+            usage: self.known.take().unwrap_or(Usage {
+                input_tokens: self.input_tokens,
+                output_tokens: self.out_chars as u64 / 4,
+                ..Usage::default()
+            }),
+        };
+        tracing::info!(
+            kind = call.kind,
+            input_tokens = call.usage.input_tokens,
+            output_tokens = call.usage.output_tokens,
+            "scoring call ended without usage; estimate recorded"
+        );
+        let _ = UNREPORTED.try_with(|log| log.lock().unwrap_or_else(|e| e.into_inner()).push(call));
+    }
+}
+
 async fn run_model(
     env: &ScoreEnv<'_>,
     session_id: &str,
     req: &MessagesRequest,
     progress: bool,
     timeout: Duration,
+    kind: &'static str,
 ) -> anyhow::Result<(String, Usage)> {
+    let mut pending = PendingCall::new(req, kind);
     let call = async {
         let mut stream = env
             .llm
@@ -1320,6 +1415,7 @@ async fn run_model(
             match ev.map_err(|e| anyhow!("scoring stream failed: {e}"))? {
                 StreamEvent::TextDelta(t) => {
                     text.push_str(&t);
+                    pending.out_chars = text.len();
                     let pct = 20 + (text.len().min(EXPECTED_CHARS) * 70 / EXPECTED_CHARS) as u8;
                     if progress && pct >= last_pct + 10 {
                         last_pct = pct;
@@ -1328,8 +1424,15 @@ async fn run_model(
                 }
                 StreamEvent::Stop { reason, usage } => {
                     return match reason.as_str() {
-                        "end_turn" | "stop_sequence" => Ok((text, usage)),
-                        other => Err(anyhow!("scoring stopped early: {other}")),
+                        "end_turn" | "stop_sequence" => {
+                            pending.done = true;
+                            Ok((text, usage))
+                        }
+                        other => {
+                            // Paid for but unusable: its real usage is recorded as the attempt's.
+                            pending.known = Some(usage);
+                            Err(anyhow!("scoring stopped early: {other}"))
+                        }
                     };
                 }
                 _ => {}

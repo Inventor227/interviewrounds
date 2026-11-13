@@ -821,14 +821,27 @@ async fn score_session_inner(deps: &ScoringDeps, session_id: Uuid) -> anyhow::Re
     let card = report::CardSlot::default();
     let mut last_err = anyhow!("no scoring attempt left");
     while let Some(attempt) = claim_attempt(deps, session_id).await? {
-        let result = score_attempt(deps, session_id, &card).await;
-        let calls = match &result {
+        let unreported = Arc::new(Mutex::new(Vec::new()));
+        let result = report::collecting_unreported(
+            unreported.clone(),
+            score_attempt(deps, session_id, &card),
+        )
+        .await;
+        let mut calls = match &result {
             Ok(s) => s.calls.clone(),
             Err(e) => e
                 .downcast_ref::<report::UsageOnError>()
                 .map(|u| u.0.clone())
                 .unwrap_or_default(),
         };
+        // Calls that failed, timed out or were cut off before reporting usage, as estimates; a failed main call
+        // fills the attempt's own row.
+        calls.extend(
+            unreported
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .drain(..),
+        );
         record_usage(deps, session_id, attempt, &calls).await;
         let stored = match result {
             Ok(scored) => store_report(
@@ -920,7 +933,7 @@ fn cost(model: &str, u: &Usage) -> f64 {
 }
 
 /// Fills the attempt's ledger row with the main call's usage and adds a row per side call; adds the cost to
-/// the session. Calls that failed before reporting usage cost nothing here.
+/// the session. A call that failed before reporting usage comes in as an estimate.
 async fn record_usage(
     deps: &ScoringDeps,
     session_id: Uuid,
