@@ -5,12 +5,16 @@ mod common;
 
 use std::path::Path;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use axum::http::{Method, StatusCode};
-use common::live::{self, Options, eventually, fixture_catalog, full_req, go_live, short_req};
+use common::live::{
+    self, Options, eventually, fixture_catalog, frame_of, full_req, go_live, hello, short_req,
+};
 use common::scored::{LEAD_ASKS, SECOND_ASKS, example_report, scored, turn_text};
 use ir_server::scoring::{ReportSchema, ScoringDeps, score_session};
+use ir_server::ws::SessionTiming;
 use serde_json::{Value, json};
 use uuid::Uuid;
 
@@ -58,6 +62,30 @@ async fn retry_requires_retry_prompt() {
         assert_eq!(res.status, StatusCode::CONFLICT, "{strip}: {}", res.body);
         assert_eq!(res.body["code"], "no_retry");
     }
+
+    // A meeting has no retry.
+    let meeting = scored(&app, &me, short_req("fake"), &LEAD_ASKS, example_report).await;
+    sqlx::query("update sessions set mode = 'meeting' where id = $1::uuid")
+        .bind(&meeting)
+        .execute(&app.state.db)
+        .await
+        .unwrap();
+    let res = retry(&app, &me, &meeting).await;
+    assert_eq!(res.status, StatusCode::CONFLICT, "{}", res.body);
+    assert_eq!(res.body["code"], "no_retry");
+
+    // Nor does a retry, even once it is scored.
+    let child = retry(&app, &me, &id).await;
+    assert_eq!(child.status, StatusCode::OK, "{}", child.body);
+    let child = child.body["session_id"].as_str().unwrap().to_string();
+    sqlx::query("update sessions set status = 'scored', started_at = now() where id = $1::uuid")
+        .bind(&child)
+        .execute(&app.state.db)
+        .await
+        .unwrap();
+    let res = retry(&app, &me, &child).await;
+    assert_eq!(res.status, StatusCode::CONFLICT, "{}", res.body);
+    assert_eq!(res.body["code"], "no_retry");
 
     // A round that has not been scored.
     let open = app.create(&me, short_req("fake")).await;
@@ -117,6 +145,10 @@ async fn retry_links_to_parent() {
     assert_eq!(panel[0]["persona_id"], "persona.ana");
     assert_eq!(res.body["timing"]["target_minutes"], 2.0);
     assert_eq!(res.body["timing"]["hard_stop_minutes"], 2.5);
+    // Short waits for a two minute retry: a check-in after 20 s of quiet, a long-answer cut-in by 90 s (Ana's own
+    // 60 s stays).
+    assert_eq!(res.body["timing"]["silence_wait_seconds"], 20);
+    assert_eq!(res.body["timing"]["interrupt_after_seconds"], 60);
 
     let (link, length, spec): (Option<Uuid>, String, Value) =
         sqlx::query_as("select parent_session_id, length, retry from sessions where id = $1::uuid")
@@ -141,11 +173,38 @@ async fn retry_links_to_parent() {
             system.contains("Round script: a two minute retry of one answer"),
             "{system}"
         );
-        assert!(system.contains("What breaks first at 10x traffic?"));
+        assert!(system.contains("Let's try that again. What breaks first at 10x traffic?"));
         assert!(!system.contains("Round script: system design"));
+        // The brief card holds the clean re-ask, the same line the interviewer opens with.
         assert_eq!(
             st.brief.as_ref().unwrap().question,
-            "What breaks first at 10x traffic?"
+            "Let's try that again. What breaks first at 10x traffic?"
+        );
+        assert_eq!(
+            st.timed_close,
+            Some((120_000, ir_server::retry::CLOSING_LINE.to_string()))
+        );
+    }
+
+    // A restart rebuilds the same retry from what it re-asks.
+    app.state.registry.remove(&child);
+    let reloaded = ir_server::persist::load_live(&app.state, Uuid::parse_str(&child).unwrap())
+        .await
+        .unwrap()
+        .expect("reloaded");
+    {
+        let st = reloaded.lock().await;
+        assert!(
+            st.panel[0].system[0]
+                .text
+                .contains("Round script: a two minute retry of one answer")
+        );
+        assert_eq!(st.panel[0].persona.id, "persona.ana");
+        assert_eq!(st.round.target_minutes, 2.0);
+        assert!(st.timed_close.is_some());
+        assert_eq!(
+            st.pending_handover.get("p1").map(String::as_str),
+            Some("Let's try that again. What breaks first at 10x traffic?")
         );
     }
 
@@ -338,6 +397,112 @@ async fn retry_score_appends_to_parent_report() {
             .len(),
         1
     );
+}
+
+#[tokio::test]
+async fn retry_says_goodbye_at_120_s_with_no_model() {
+    let app = live::test_app(Options {
+        timing: SessionTiming {
+            tick: Duration::from_millis(100),
+            closing_grace: Duration::from_millis(300),
+            ..SessionTiming::default()
+        },
+        ..Options::default()
+    })
+    .await;
+    let base = app.serve().await;
+    let me = app.guest().await;
+    let parent = scored(&app, &me, short_req("fake"), &LEAD_ASKS, example_report).await;
+    let res = retry(&app, &me, &parent).await;
+    assert_eq!(res.status, StatusCode::OK, "{}", res.body);
+    let child = res.body["session_id"].as_str().unwrap().to_string();
+    let token = res.body["client_token"].as_str().unwrap().to_string();
+    let mut ws = hello(&base, &child, &token, 0).await;
+    let first = frame_of(&mut ws, "round.state", Duration::from_secs(3))
+        .await
+        .unwrap();
+    assert_eq!(first["d"]["status"], "live");
+    turn_text(&app, &token, &child, "[event: start]").await;
+    turn_text(
+        &app,
+        &token,
+        &child,
+        "I'd shard the store by key and watch p99 per shard.",
+    )
+    .await;
+    // From here the model never answers and the director never calls a tool.
+    app.llm.hang.store(true, Ordering::SeqCst);
+    let streamed = app.llm.requests.lock().unwrap().len();
+
+    let jump = |secs: u64| {
+        let handle = app.state.registry.get(&child).expect("in memory");
+        async move {
+            let mut st = handle.lock().await;
+            st.started_at -= Duration::from_secs(secs);
+        }
+    };
+    // 90 s: the answer phase is over. Nobody moves the phase (no next_phase).
+    jump(91).await;
+    let at_90 = time_check(&mut ws).await;
+    assert_eq!(at_90["d"]["phase_id"], "retry");
+
+    // 120 s: the app asks for its goodbye.
+    jump(30).await;
+    let at_120 = time_check(&mut ws).await;
+    assert_eq!(at_120["d"]["phase_id"], "close");
+    let (status, said) = turn_text(&app, &token, &child, "[event: time_check]").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(said, ir_server::retry::CLOSING_LINE);
+    let ending = frame_of(&mut ws, "round.ending", Duration::from_secs(3))
+        .await
+        .expect("round.ending");
+    assert_eq!(ending["d"]["closing_line"], ir_server::retry::CLOSING_LINE);
+    let ended = frame_of(&mut ws, "round.ended", Duration::from_secs(3))
+        .await
+        .expect("round.ended");
+    assert_eq!(ended["d"]["reason"], "completed");
+    assert_eq!(
+        app.llm.requests.lock().unwrap().len(),
+        streamed,
+        "no model call for the goodbye"
+    );
+    let (status, reason): (String, Option<String>) =
+        sqlx::query_as("select status, ended_reason from sessions where id = $1::uuid")
+            .bind(&child)
+            .fetch_one(&app.state.db)
+            .await
+            .unwrap();
+    assert_eq!(
+        (status.as_str(), reason.as_deref()),
+        ("scoring", Some("completed"))
+    );
+}
+
+#[tokio::test]
+async fn me_never_offers_sign_in() {
+    let app = live::test_app(Options {
+        env: &[
+            ("GOOGLE_CLIENT_ID", "client.apps.example"),
+            ("GOOGLE_CLIENT_SECRET", "secret"),
+        ],
+        ..Options::default()
+    })
+    .await;
+    let res = app.call(Method::GET, "/api/me", None, None).await;
+    assert_eq!(res.status, StatusCode::OK);
+    assert_eq!(res.body["sign_in_available"], false);
+}
+
+/// The next `round.state` that asks for a time check.
+async fn time_check(ws: &mut live::Ws) -> Value {
+    loop {
+        let f = frame_of(ws, "round.state", Duration::from_secs(3))
+            .await
+            .expect("round.state");
+        if f["d"]["time_check_due"] == true {
+            return f;
+        }
+    }
 }
 
 #[tokio::test]

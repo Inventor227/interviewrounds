@@ -2,9 +2,11 @@
 //!
 //! `POST /api/sessions/{id}/retry` makes a child session (`parent_session_id`, length `retry`) on the parent's
 //! round: one panelist (the persona who asked the weakest question), a 90 s answer phase and a 30 s close, the
-//! question restated word for word as the opening line, no board. The live prompt uses `round-retry.md`; the
-//! question being retried is in the phase goals. What the retry re-asks is fixed when it is made
-//! (`sessions.retry`), so a restart rebuilds the same prompt.
+//! report's `retry.prompt` (the clean re-ask) as the opening line and on the brief card, no board. The live prompt
+//! uses `round-retry.md`; the question being retried is in the phase goals. At 120 s the app says a fixed closing
+//! line itself, with no model call (`SessionState::timed_close`), and the round ends; nothing waits on the
+//! director's tools. What the retry re-asks is fixed when it is made (`sessions.retry`), so a restart rebuilds the
+//! same round and prompt.
 //!
 //! Scoring a retry is one fast model call: the new answer on the parent's weakest-moment competency, with the
 //! first answer and its score for comparison. The result is appended to the parent report's
@@ -37,6 +39,10 @@ pub const RETRY_SECONDS: f64 = 120.0;
 pub const ANSWER_SECONDS: f64 = 90.0;
 /// The round stops on its own this long after the time is up, if the goodbye never came.
 pub const GOODBYE_SECONDS: f64 = 30.0;
+/// What the app says at 120 s, word for word (no model call); the round then ends.
+pub const CLOSING_LINE: &str = "Thanks, that's time. Your before and after is on your report.";
+/// Quiet seconds before the interviewer checks in (scaled by level like any round): short, the retry is two minutes.
+pub const SILENCE_SECONDS: u32 = 20;
 /// The note when the retry recorded no answer (no model call is made).
 pub const NO_ANSWER_NOTE: &str = "No new answer was recorded in this retry.";
 /// The prompt script a retry's panelist runs (`content/prompts/round-retry.md`).
@@ -277,7 +283,7 @@ fn prompt_safe(text: &str) -> String {
 /// The retry's round: the parent round's identity (id, title, role, type, question pool), a short round in
 /// length, two phases (answer 90 s with the time check at its end, close 30 s), no board, one panelist.
 pub fn round(base: &RoundConfig, spec: &RetrySpec) -> RoundConfig {
-    let question = prompt_safe(&spec.question);
+    let question = prompt_safe(&spec.prompt);
     let minutes = |s: f64| s / 60.0;
     RoundConfig {
         id: base.id.clone(),
@@ -288,7 +294,7 @@ pub fn round(base: &RoundConfig, spec: &RetrySpec) -> RoundConfig {
         length: "short".into(),
         target_minutes: minutes(RETRY_SECONDS),
         hard_stop_minutes: minutes(RETRY_SECONDS + GOODBYE_SECONDS),
-        silence_wait_seconds: base.silence_wait_seconds,
+        silence_wait_seconds: base.silence_wait_seconds.min(SILENCE_SECONDS),
         interrupt_after_seconds: base.interrupt_after_seconds.min(ANSWER_SECONDS as u32),
         panel: PanelConfig {
             lead: spec.persona_id.clone(),
@@ -301,10 +307,10 @@ pub fn round(base: &RoundConfig, spec: &RetrySpec) -> RoundConfig {
                 title: Some("Retry".into()),
                 minutes: minutes(ANSWER_SECONDS),
                 goal: format!(
-                    "The question being retried: \"{question}\". You already asked it again as your first line. \
+                    "The question being retried, which you already asked again as your first line: \"{question}\" \
                      Listen to the new answer. At most two short probes in the whole retry, each built on their \
-                     own words. No hints, no teaching, no grading. At the time check your transition line is \
-                     only: \"About thirty seconds left.\"[[tool:  Then call next_phase.]]"
+                     own words. No hints, no teaching, no grading. At the time check say only: \"About thirty \
+                     seconds left.\""
                 ),
                 must_cover: Vec::new(),
                 uses_whiteboard: false,
@@ -313,9 +319,8 @@ pub fn round(base: &RoundConfig, spec: &RetrySpec) -> RoundConfig {
                 id: "close".into(),
                 title: Some("Close".into()),
                 minutes: minutes(RETRY_SECONDS - ANSWER_SECONDS),
-                goal: "Let them finish their thought. When time is up, close in one line with no feedback: \
-                       \"That's time. Thanks for trying it again. Your before and after is on your report.\"\
-                       [[tool:  Then call end_round with that line.]]"
+                goal: "Let them finish their thought. Never close the round yourself: when time is up the app \
+                       says the closing line."
                     .into(),
                 must_cover: Vec::new(),
                 uses_whiteboard: false,
@@ -345,6 +350,15 @@ pub fn state(
     script_round.round_type = SCRIPT_ROUND_TYPE.into();
     script_round.length = "retry".into();
     let mut st = SessionState::with_round(spec, round, catalog, live, now)?;
+    // A persona's own long-answer time would outlast the answer phase.
+    for p in &mut st.panel {
+        let own = p
+            .persona
+            .interrupts_after_seconds
+            .unwrap_or(st.round.interrupt_after_seconds);
+        p.persona.interrupts_after_seconds = Some(own.min(ANSWER_SECONDS as u32));
+    }
+    st.timed_close = Some(((RETRY_SECONDS * 1000.0) as u64, CLOSING_LINE.to_string()));
     let personas: Vec<(String, crate::content::Persona)> = st
         .panel
         .iter()
@@ -369,11 +383,11 @@ pub fn state(
     Ok(st)
 }
 
-/// A new retry's start: the question on the brief card, the opening line spoken word for word on
+/// A new retry's start: the clean re-ask on the brief card, the same line spoken word for word on
 /// `[event: start]`, and no two-minute warning (the whole retry is two minutes).
 pub fn prime(st: &mut SessionState, retry: &RetrySpec) {
     st.brief = Some(Brief {
-        question: clip(&retry.question, 200),
+        question: clip(&retry.prompt, 200),
         lines: Vec::new(),
     });
     let floor = st.floor.clone();

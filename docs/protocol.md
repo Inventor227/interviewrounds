@@ -57,13 +57,17 @@ JSON; cookie `ir_id` identifies the device/user; all under same origin. A new gu
   round id, level, style and voice (`voice: "fake"` needs `X-Dev-Key` as on create). Its `round` is a `RoundPublic`
   of the parent round with `length: "short"`, `target_minutes: 2`, `hands: "none"`, `board_kit: null`, two phases
   (`retry` 1.5 min, then `close` 0.5 min; the time check at 90 s) and one panelist: the persona who asked the weakest
-  question. `timing.hard_stop_minutes` is 2.5: at 120 s the time check asks for the goodbye, and the round stops on
-  its own 30 s later if none came. The opening line on `[event: start]` is `retry.prompt` (its first two sentences),
-  spoken word for word with no model call; the brief card holds the question. Caps and guest limits are those of a
-  quick round (a retry counts as one). Scoring is one `FAST_MODEL` call (ledgered like any other) that scores the new
-  answer 1 to 4 on the parent's weakest-moment competency, then appends `{session_id, at, before_score, after_score,
-  note}` to the parent report's `weakest_moment.retries` (once per retry); the socket gets `report.progress` and
-  `report.ready` as for a round (no headset card).
+  question. `timing`: `silence_wait_seconds` at most 20 (then scaled by level), `interrupt_after_seconds` at most 90,
+  `hard_stop_minutes` 2.5. The opening line on `[event: start]` is `retry.prompt` (its first two sentences), spoken
+  word for word with no model call; the brief card holds the same line. At 120 s the server moves to the `close`
+  phase, `round.state` asks for a time check, and the next app event (`[event: time_check]`, or any other marker)
+  gets the fixed closing line "Thanks, that's time. Your before and after is on your report." word for word with no
+  model call; then `round.ending` and the round ends (`completed`) after the usual grace. Nothing waits on the
+  model's tools; the 150 s hard stop is only a backstop. Caps and guest limits are those of a quick round (a retry
+  counts as one). Scoring is one `FAST_MODEL` call that scores the new answer 1 to 4 on the parent's weakest-moment
+  competency, then appends `{session_id, at, before_score, after_score, note}` to the parent report's
+  `weakest_moment.retries` (once per retry); the socket gets `report.progress` and `report.ready` as for a round (no
+  headset card).
 - `GET /api/me` → `{identity:{kind:"guest"|"user", name?, email?}, sign_in_available, settings, onboarding_done,
   streak:{current, best, today_done}, daily:{round_id, title}|null, resumable:{session_id, round_title, expires_at}|null,
   limits, entitlements}`. `resumable` is a dropped live session the user can still resume (`POST /api/sessions/{id}/resume`)
