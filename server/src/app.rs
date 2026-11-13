@@ -15,6 +15,7 @@ use tower_http::services::{ServeDir, ServeFile};
 use tower_http::set_header::SetResponseHeaderLayer;
 use tower_http::trace::TraceLayer;
 
+use crate::api;
 use crate::claude::ClaudeClient;
 use crate::config::Config;
 use crate::db;
@@ -78,6 +79,7 @@ pub fn router(state: AppState) -> Router {
         .layer(middleware::from_fn(static_cache_headers));
 
     Router::new()
+        .merge(api::report::routes())
         .route("/healthz", get(healthz))
         // Fish custom LLM endpoint (and the fake-voice path from the browser).
         .route("/v1/chat/completions", post(oai::chat_completions))

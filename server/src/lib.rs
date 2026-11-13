@@ -1,5 +1,6 @@
 //! Interview Rounds server: API, Fish custom LLM endpoint, websocket and the static web app.
 
+pub mod api;
 pub mod app;
 pub mod claude;
 pub mod config;
