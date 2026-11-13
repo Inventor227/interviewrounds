@@ -31,6 +31,7 @@ import { needsOnboarding, Onboarding, watchPresence, type PresenceWatch } from '
 import { People, type AvatarLike } from './people';
 import type { HeadSamplerPort, SocketPort, UiAction, XRPort, XRVisibilityLike } from './ports';
 import { clearLiveRoom, setLiveRoom, type LiveRoom } from './room';
+import { describeSession, recordTransport, recorder } from './recorder';
 import { createRoundClock, itemCentre } from './roundClock';
 import { StageTimings } from './timings';
 
@@ -589,8 +590,11 @@ export function createRoundRuntime({ preview }: RuntimeOptions): RoundController
       // board's own sheet, and in rounds without a board there is no sheet at all.
       let lastDesk: unknown = null;
       const tmp = { x: 0, y: 0, z: 0 };
+      const rec = recorder();
+      let lipAt = 0;
+      const lastLip = new Map<string, number>();
       cleanups.push(
-        a.onFrame((dt) => {
+        a.onFrame((dt, now) => {
           const desk = a.desk();
           if (desk !== lastDesk) {
             lastDesk = desk;
@@ -605,6 +609,16 @@ export function createRoundRuntime({ preview }: RuntimeOptions): RoundController
           tmp.y = h.y;
           tmp.z = h.z;
           people?.update(dt, tmp);
+          if (rec && people && now - lipAt >= 100) {
+            lipAt = now;
+            for (const l of people.lips()) {
+              const level = Math.round(l.level * 100) / 100;
+              // Only while a voice moves the lips (and the frame it stops), so silence costs nothing.
+              if (level === 0 && lastLip.get(l.id) === 0) continue;
+              lastLip.set(l.id, level);
+              rec.event('avatar.lip', { panelist: l.id, level, engine: l.engine });
+            }
+          }
         }),
       );
 
@@ -657,6 +671,11 @@ export function createRoundRuntime({ preview }: RuntimeOptions): RoundController
   const makeTransport = (p: Panelist, o: TransportOptions | undefined, res: CreateSessionRes): VoiceTransport => {
     const make = settings ? browser.makeTransport({ voice_speed: settings.voice_speed }) : base;
     const t = make(p, o, res);
+    const rec = recorder();
+    if (rec) {
+      Object.assign(rec.meta, describeSession(res));
+      recordTransport(rec, t);
+    }
     // Captions follow the words as they play; the board hears what the user said.
     t.on('agentText', (e) => app?.ui.setCaption(p.display_name, e.text));
     t.on('userTranscript', (e) => {
@@ -666,7 +685,8 @@ export function createRoundRuntime({ preview }: RuntimeOptions): RoundController
   };
 
   const makeSocket = (wsUrl: string, clientToken: string, lastSeq = 0): SocketPort => {
-    socket = new SessionSocket(wsUrl, clientToken, { lastSeq });
+    const rec = recorder();
+    socket = new SessionSocket(wsUrl, clientToken, rec ? { lastSeq, WebSocketImpl: rec.socketClass() } : { lastSeq });
     sessionId = sessionIdOf(wsUrl);
     wireSocket();
     return socket;
@@ -679,7 +699,22 @@ export function createRoundRuntime({ preview }: RuntimeOptions): RoundController
     xr,
     media: browser.browserMedia,
     visibility: browser.pageVisibility,
-    avatars: (id) => people?.port(id),
+    avatars: (id) => {
+      const port = people?.port(id);
+      const rec = recorder();
+      if (!port || !rec) return port;
+      return {
+        setMode: (mode) => {
+          rec.event('avatar.mode', { panelist: id, mode });
+          port.setMode(mode);
+        },
+        attachVoice: (stream) => {
+          rec.event('avatar.voice', { panelist: id });
+          rec.attachAudio(id, stream);
+          port.attachVoice(stream);
+        },
+      };
+    },
     board: {
       onActivity(cb) {
         activityCbs.add(cb);

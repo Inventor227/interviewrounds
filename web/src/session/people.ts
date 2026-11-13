@@ -23,6 +23,9 @@ export interface AvatarLike {
   update(dt: number): void;
   /** Body detail: 0 full (the first seat), 1 simplified (the others). */
   setDetail?(level: 0 | 1): unknown;
+  /** Lip sync state (the avatar runtime has them; fakes may not). */
+  readonly voiceLevel?: number;
+  readonly lipSyncEngine?: string;
   dispose(): void;
 }
 
@@ -174,6 +177,13 @@ export class People {
   /** A panelist gestures at a point in the room (a card on the sheet). */
   pointAt(panelistId: string, world: Vec3): void {
     this.people.find((x) => x.panelist.panelist_id === panelistId)?.avatar?.pointAt(world);
+  }
+
+  /** Each loaded panelist's voice level as its lips follow it (for recordings). */
+  lips(): { id: string; level: number; engine: string | null }[] {
+    return this.people
+      .filter((p) => p.avatar)
+      .map((p) => ({ id: p.panelist.panelist_id, level: p.avatar!.voiceLevel ?? 0, engine: p.avatar!.lipSyncEngine ?? null }));
   }
 
   /** Where each seated panelist's eyes are, for the head sampler. */

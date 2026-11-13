@@ -15,6 +15,7 @@ import type { ImmersiveHandle } from '../../xr/entry';
 import { loadMe } from '../components/data';
 import { clock } from '../components/format';
 import { Page } from '../components/Ui';
+import { recordController, recorder } from '../../session/recorder';
 import { takeLaunch } from '../launch';
 import { useNow } from './Home';
 
@@ -220,6 +221,8 @@ function LiveSession(props: { launch: Taken }) {
       room?.onChange(() => bump((n) => n + 1)) ?? (() => undefined),
     ];
     if (dev) (globalThis as { __round?: unknown }).__round = { controller, room, get session() { return current(); }, timings: () => room?.timings.spans() };
+    const rec = recorder();
+    if (rec) offs.push(recordController(rec, controller));
     return () => {
       offs.forEach((o) => o());
       if (dev) delete (globalThis as { __round?: unknown }).__round;
