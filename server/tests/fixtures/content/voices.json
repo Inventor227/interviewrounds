@@ -1,0 +1,1 @@
+{ "provider": "fish", "voices": { "daniel": { "persona_id": "persona.daniel", "fish_id": "voice-daniel" }, "ana": { "persona_id": "persona.ana", "fish_id": "voice-ana" } } }

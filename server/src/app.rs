@@ -6,7 +6,7 @@ use axum::extract::{Request, State};
 use axum::http::{HeaderName, HeaderValue, StatusCode, header};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{any, get};
+use axum::routing::{any, get, post};
 use axum::{Json, Router};
 use serde_json::json;
 use sqlx::PgPool;
@@ -15,23 +15,54 @@ use tower_http::services::{ServeDir, ServeFile};
 use tower_http::set_header::SetResponseHeaderLayer;
 use tower_http::trace::TraceLayer;
 
+use crate::claude::ClaudeClient;
 use crate::config::Config;
 use crate::db;
 use crate::error::AppError;
+use crate::fish::FishClient;
+use crate::orchestrator::{
+    LlmApi, MemorySessionAuth, OrchestratorOptions, Registry, SessionAuth, oai,
+};
 
 /// Shared state for every handler.
 #[derive(Clone)]
 pub struct AppState {
     pub db: PgPool,
     pub config: Arc<Config>,
+    pub llm: Arc<dyn LlmApi>,
+    pub fish: FishClient,
+    pub registry: Registry,
+    pub session_auth: Arc<dyn SessionAuth>,
+    pub orchestrator: OrchestratorOptions,
 }
 
 impl AppState {
     pub fn new(db: PgPool, config: Config) -> Self {
         AppState {
             db,
+            llm: Arc::new(ClaudeClient::new(&config)),
+            fish: FishClient::new(&config),
+            registry: Registry::new(),
+            session_auth: Arc::new(MemorySessionAuth::default()),
+            orchestrator: OrchestratorOptions::default(),
             config: Arc::new(config),
         }
+    }
+
+    /// Replaces the model client (tests use a scripted one).
+    pub fn with_llm(mut self, llm: Arc<dyn LlmApi>) -> Self {
+        self.llm = llm;
+        self
+    }
+
+    pub fn with_session_auth(mut self, auth: Arc<dyn SessionAuth>) -> Self {
+        self.session_auth = auth;
+        self
+    }
+
+    pub fn with_orchestrator_options(mut self, options: OrchestratorOptions) -> Self {
+        self.orchestrator = options;
+        self
     }
 }
 
@@ -48,6 +79,10 @@ pub fn router(state: AppState) -> Router {
 
     Router::new()
         .route("/healthz", get(healthz))
+        // Fish custom LLM endpoint (and the fake-voice path from the browser).
+        .route("/v1/chat/completions", post(oai::chat_completions))
+        // Developer pages (DEV_KEY; 404 without it).
+        .merge(crate::dev::routes())
         // Unknown API paths answer JSON 404 instead of the web app.
         .route("/api", any(api_not_found))
         .route("/api/{*rest}", any(api_not_found))
