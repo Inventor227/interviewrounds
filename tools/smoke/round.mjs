@@ -396,7 +396,9 @@ async function meetingRound() {
   let floor = created.data.floor;
   say(`meeting session ${id}, floor ${floor}, panel ${created.data.panel.map((p) => `${p.panelist_id}=${p.display_name}`).join(", ")}`);
   const ping = await openSocket(ws_url, token);
-  await waitFrame((f) => f.t === "round.state", 5000, "round.state");
+  const mstate = await waitFrame((f) => f.t === "round.state", 5000, "round.state");
+  // A meeting's card is the user's own meeting: nothing from the question bank appears on it.
+  check("meeting starts with an empty brief card", !mstate.d.brief?.question, mstate.d.brief);
 
   // A hand-over moves the floor: the browser joins the next attendee, whose first line is already spoken.
   const handOver = async (since) => {
