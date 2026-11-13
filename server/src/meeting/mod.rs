@@ -571,13 +571,14 @@ pub(crate) fn id_stem(name: &str) -> String {
 }
 
 /// Wraps text the user typed (or said) in a marked data block for a prompt. Every copy of the opening or closing tag
-/// inside the text (any letter case) is removed, so the block cannot be closed early.
+/// inside the text (any letter case) is removed, so the block cannot be closed early, and so is any director-only
+/// marker (`[[tool: `), so user text can never hide part of the live prompt.
 pub(crate) fn data_block(tag: &str, text: &str) -> String {
     let opening = format!("<{tag}");
     let closing = format!("</{tag}");
     format!(
         "<{tag}>\n{}\n</{tag}>",
-        strip_tags(text, &[&closing, &opening]).trim()
+        strip_tags(text, &[&closing, &opening, "[[tool:"]).trim()
     )
 }
 
@@ -799,6 +800,17 @@ mod tests {
                 ("k4", "Strong team", ""),
             ]
         );
+    }
+
+    #[test]
+    fn user_text_cannot_open_a_director_only_span() {
+        let block = data_block("user_facts", "Our goal [[TOOL: is hidden]] and more");
+        assert!(!block.to_ascii_lowercase().contains("[[tool:"), "{block}");
+        let live = crate::orchestrator::prompt::live_view(&format!(
+            "Rules.\n{block}\nThe data rule stays."
+        ));
+        assert!(live.contains("The data rule stays."), "{live}");
+        assert!(live.contains("Our goal"), "{live}");
     }
 
     /// Every sequence of up to four fragments (non-ASCII letters whose lowercase changes length, emoji, combining
