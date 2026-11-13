@@ -67,7 +67,8 @@ JSON; cookie `ir_id` identifies the device/user; all under same origin. A new gu
   counts as one). Scoring is one `FAST_MODEL` call that scores the new answer 1 to 4 on the parent's weakest-moment
   competency, then appends `{session_id, at, before_score, after_score, note}` to the parent report's
   `weakest_moment.retries` (once per retry); the socket gets `report.progress` and `report.ready` as for a round (no
-  headset card).
+  headset card). At most 2 calls per retry, each ledgered as a `retry_scoring` row; `POST
+  /api/sessions/{id}/report` on a failed retry gives 2 fresh ones, as for rounds.
 - `GET /api/me` → `{identity:{kind:"guest"|"user", name?, email?}, sign_in_available, settings, onboarding_done,
   streak:{current, best, today_done}, daily:{round_id, title}|null, resumable:{session_id, round_title, expires_at}|null,
   limits, entitlements}`. `resumable` is a dropped live session the user can still resume (`POST /api/sessions/{id}/resume`)

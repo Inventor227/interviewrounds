@@ -24,7 +24,7 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::claude::{
-    Message, MessagesRequest, OutputConfig, SystemBlock, fallbacks_for, thinking_for,
+    Message, MessagesRequest, OutputConfig, SystemBlock, Usage, fallbacks_for, thinking_for,
 };
 use crate::content::{Catalog, PanelConfig, Phase, RoundConfig};
 use crate::orchestrator::prompt;
@@ -43,6 +43,8 @@ pub const GOODBYE_SECONDS: f64 = 30.0;
 pub const CLOSING_LINE: &str = "Thanks, that's time. Your before and after is on your report.";
 /// Quiet seconds before the interviewer checks in (scaled by level like any round): short, the retry is two minutes.
 pub const SILENCE_SECONDS: u32 = 20;
+/// Scoring attempts a retry may use, counted since the last re-score (as for rounds).
+pub const MAX_ATTEMPTS: i64 = 2;
 /// The note when the retry recorded no answer (no model call is made).
 pub const NO_ANSWER_NOTE: &str = "No new answer was recorded in this retry.";
 /// The prompt script a retry's panelist runs (`content/prompts/round-retry.md`).
@@ -643,9 +645,88 @@ type RetryRow = (
     Option<DateTime<Utc>>,
 );
 
-/// Scores a retry session that ended in `scoring`: one fast model call (tried twice), then the entry on the
-/// parent report. The call runs in the session's ledger scope, so it is priced like any other model call.
-/// A retry that cannot be scored ends `failed` (`POST /api/sessions/{id}/report` tries again).
+/// Takes the next scoring attempt of a retry that is `scoring`, if one is left: locks the session row, counts the
+/// attempts since the last re-score and writes the attempt's ledger row (`retry_scoring`, priced after the call).
+async fn claim_attempt(deps: &ScoringDeps, child: Uuid) -> anyhow::Result<Option<i64>> {
+    let mut tx = deps.db.begin().await?;
+    let row: Option<(String, Uuid)> =
+        sqlx::query_as("select status, identity_id from sessions where id = $1 for update")
+            .bind(child)
+            .fetch_optional(&mut *tx)
+            .await?;
+    let Some((_, identity)) = row.filter(|(status, _)| status == "scoring") else {
+        return Ok(None);
+    };
+    let used: i64 = sqlx::query_scalar(
+        "select count(*) from usage_events where session_id = $1 and kind = 'retry_scoring' \
+           and created_at > coalesce((select max(created_at) from usage_events \
+                                      where session_id = $1 and kind = 'rescore'), '-infinity')",
+    )
+    .bind(child)
+    .fetch_one(&mut *tx)
+    .await?;
+    if used >= MAX_ATTEMPTS {
+        return Ok(None);
+    }
+    let id: i64 = sqlx::query_scalar(
+        "insert into usage_events (identity_id, session_id, provider, kind, model, usage_phase, cost_usd) \
+         values ($1, $2, 'anthropic', 'retry_scoring', $3, $4, 0) returning id",
+    )
+    .bind(identity)
+    .bind(child)
+    .bind(&deps.fast_model)
+    .bind(deps.usage_phase.as_str())
+    .fetch_one(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(Some(id))
+}
+
+/// Rough usage of a call that gave none (an error or a timeout): the whole request as input, about 4 characters
+/// a token, nothing out.
+fn estimate(req: &MessagesRequest) -> Usage {
+    let chars = json!({"system": req.system, "messages": req.messages})
+        .to_string()
+        .len() as u64;
+    Usage {
+        input_tokens: chars / 4 + 1,
+        ..Usage::default()
+    }
+}
+
+/// Prices an attempt into its ledger row and the session's cost.
+async fn record_attempt(deps: &ScoringDeps, child: Uuid, attempt: i64, model: &str, usage: &Usage) {
+    let cost = crate::usage::claude_cost(model, usage);
+    let res = sqlx::query(
+        "update usage_events set model = $2, input_tokens = $3, output_tokens = $4, cache_read_tokens = $5, \
+             cache_write_tokens = $6, cost_usd = ($7::float8)::numeric where id = $1",
+    )
+    .bind(attempt)
+    .bind(model)
+    .bind(usage.input_tokens as i32)
+    .bind(usage.output_tokens as i32)
+    .bind(usage.cache_read_input_tokens as i32)
+    .bind(usage.cache_creation_input_tokens as i32)
+    .bind(cost)
+    .execute(&deps.db)
+    .await;
+    if let Err(err) = res {
+        tracing::warn!(session_id = %child, error = %err, "could not record a retry scoring attempt");
+    }
+    if cost > 0.0 {
+        let _ = sqlx::query(
+            "update sessions set cost_usd = cost_usd + ($2::float8)::numeric where id = $1",
+        )
+        .bind(child)
+        .bind(cost)
+        .execute(&deps.db)
+        .await;
+    }
+}
+
+/// Scores a retry session that ended in `scoring`: one fast model call (at most `MAX_ATTEMPTS` per re-score,
+/// each ledgered as `retry_scoring`), then the entry on the parent report. A retry that cannot be scored ends
+/// `failed` (`POST /api/sessions/{id}/report` gives it fresh attempts).
 pub async fn score(deps: &ScoringDeps, child: Uuid) -> anyhow::Result<Value> {
     let row: Option<RetryRow> =
         sqlx::query_as(
@@ -684,18 +765,39 @@ pub async fn score(deps: &ScoringDeps, child: Uuid) -> anyhow::Result<Value> {
                 .map(|p| p.display_name.clone())
                 .unwrap_or_else(|| "Interviewer".into());
             let req = build_request(&deps.fast_model, &spec, &level, &role, &transcript, &interviewer);
-            let mut last = anyhow!("no attempt");
+            let mut last = anyhow!("no scoring attempt left");
             let mut got = None;
-            for attempt in 1..=2 {
-                let call = crate::usage::LLM_SESSION.scope(child, deps.llm.create(&req));
-                let res = match tokio::time::timeout(MODEL_TIMEOUT.min(deps.model_timeout), call).await {
-                    Err(_) => Err(anyhow!("the retry score took too long")),
-                    Ok(Err(e)) => Err(anyhow!("the retry score call failed: {e}")),
-                    Ok(Ok(resp)) if resp.stop_reason.as_deref() == Some("refusal") => {
-                        Err(anyhow!("the retry score was refused"))
-                    }
-                    Ok(Ok(resp)) => parse_verdict(&resp.text()),
-                };
+            // Every attempt is ledgered first, so restarts never buy more than MAX_ATTEMPTS calls.
+            while let Some(attempt) = claim_attempt(deps, child).await? {
+                // The attempt's own ledger row carries the call's usage: the metered client must not add another.
+                let call = crate::usage::LLM_UNMETERED.scope((), deps.llm.create(&req));
+                let (model, usage, res) =
+                    match tokio::time::timeout(MODEL_TIMEOUT.min(deps.model_timeout), call).await {
+                        Err(_) => (
+                            req.model.clone(),
+                            estimate(&req),
+                            Err(anyhow!("the retry score took too long")),
+                        ),
+                        Ok(Err(e)) => (
+                            req.model.clone(),
+                            estimate(&req),
+                            Err(anyhow!("the retry score call failed: {e}")),
+                        ),
+                        Ok(Ok(resp)) => {
+                            let model = if resp.model.is_empty() {
+                                req.model.clone()
+                            } else {
+                                resp.model.clone()
+                            };
+                            let res = if resp.stop_reason.as_deref() == Some("refusal") {
+                                Err(anyhow!("the retry score was refused"))
+                            } else {
+                                parse_verdict(&resp.text())
+                            };
+                            (model, resp.usage.clone(), res)
+                        }
+                    };
+                record_attempt(deps, child, attempt, &model, &usage).await;
                 match res {
                     Ok(v) => {
                         got = Some(v);

@@ -359,21 +359,21 @@ async fn retry_score_appends_to_parent_report() {
 
     // The call is in the ledger, on the retry session.
     let db = app.state.db.clone();
-    eventually("the retry's model call in the ledger", Duration::from_secs(3), || {
-        let db = db.clone();
-        async move {
-            let n: i64 = sqlx::query_scalar(
-                "select count(*) from usage_events where session_id = $1 and provider = 'anthropic' \
-                   and kind = 'model_call' and model = 'claude-sonnet-5-5'",
-            )
-            .bind(child_id)
-            .fetch_one(&db)
-            .await
-            .unwrap();
-            n == 1
-        }
-    })
-    .await;
+    let ledger = |db: sqlx::PgPool| async move {
+        sqlx::query_as::<_, (String, Option<String>, f64)>(
+            "select kind, model, cost_usd::float8 from usage_events \
+             where session_id = $1 and kind not in ('prewarm', 'live_turn', 'live_turn_cut') order by id",
+        )
+        .bind(child_id)
+        .fetch_all(&db)
+        .await
+        .unwrap()
+    };
+    let rows = ledger(db.clone()).await;
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert_eq!(rows[0].0, "retry_scoring");
+    assert_eq!(rows[0].1.as_deref(), Some("claude-sonnet-5-5"));
+    assert!(rows[0].2 > 0.0, "{rows:?}");
 
     // Scoring the same retry again adds nothing.
     sqlx::query("update sessions set status = 'scoring' where id = $1")
@@ -396,6 +396,50 @@ async fn retry_score_appends_to_parent_report() {
             .unwrap()
             .len(),
         1
+    );
+
+    // Two attempts per re-score at most: a third run makes no call and leaves the retry failed.
+    sqlx::query("update sessions set status = 'scoring' where id = $1")
+        .bind(child_id)
+        .execute(&app.state.db)
+        .await
+        .unwrap();
+    let calls = app.llm.creates.lock().unwrap().len();
+    assert!(score_session(&deps, child_id).await.is_err());
+    assert_eq!(
+        app.llm.creates.lock().unwrap().len(),
+        calls,
+        "no call past the budget"
+    );
+    let st = app
+        .call(
+            Method::GET,
+            &format!("/api/sessions/{child}"),
+            Some(&me),
+            None,
+        )
+        .await;
+    assert_eq!(st.body["status"], "failed");
+    // "Try again" gives it two fresh attempts.
+    let again = app
+        .call(
+            Method::POST,
+            &format!("/api/sessions/{child}/report"),
+            Some(&me),
+            None,
+        )
+        .await;
+    assert_eq!(again.status, StatusCode::ACCEPTED, "{}", again.body);
+    score_session(&deps, child_id)
+        .await
+        .expect("scored after a re-score");
+    assert_eq!(
+        ledger(db.clone())
+            .await
+            .iter()
+            .filter(|r| r.0 == "retry_scoring")
+            .count(),
+        3
     );
 }
 
