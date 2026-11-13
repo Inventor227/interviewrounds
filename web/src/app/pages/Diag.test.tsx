@@ -15,6 +15,8 @@ const q = (t: string) => root.querySelector(`[data-test="${t}"]`) as HTMLElement
 describe('Diag page', () => {
   beforeEach(() => {
     calls.length = 0;
+    sessionStorage.clear();
+    history.replaceState(null, '', '/diag');
     URL.createObjectURL = vi.fn(() => 'blob:tone');
     vi.spyOn(HTMLMediaElement.prototype, 'play').mockRejectedValue(Object.assign(new Error('blocked'), { name: 'NotAllowedError' }));
     root = document.createElement('div');
@@ -45,12 +47,16 @@ describe('Diag page', () => {
     for (const s of ['device', 'mic', 'autoplay', 'xr', 'hands', 'echo', 'results']) expect(q(`diag-${s}`)).not.toBeNull();
     expect(q('diag-device-kv')?.textContent).toContain('WebXR');
     expect(q('diag-autoplay-kv')?.textContent).toContain('blocked');
-    // The room code loads on demand; wait for it.
-    for (let i = 0; i < 100 && q('diag-xr-state')?.dataset.stage === 'loading'; i++) await act(async () => await new Promise((r) => setTimeout(r, 50)));
+    // The support check loads on demand; wait for it.
+    for (let i = 0; i < 100 && q('diag-xr-state')?.dataset.stage === 'checking'; i++) await act(async () => await new Promise((r) => setTimeout(r, 50)));
     expect(q('diag-xr-state')?.dataset.stage).toBe('none');
-    expect((q('diag-xr-run') as HTMLButtonElement).disabled).toBe(true);
-    // The paid echo test needs the dev key and a second tap to confirm.
-    expect((q('diag-echo-run') as HTMLButtonElement).disabled).toBe(true);
+    expect((q('diag-xr-load') as HTMLButtonElement).disabled).toBe(true);
+    expect(q('diag-xr-run')).toBeNull();
+    // The paid echo test is for the team only: no key field or price without ?dev=1.
+    expect(q('diag-key')).toBeNull();
+    expect(q('diag-echo-run')).toBeNull();
+    expect(q('diag-echo')?.textContent).toContain('Step 6 is for our team.');
+    expect(q('diag-echo')?.textContent).not.toContain('$');
   });
 
   it('sends the results with the note, making a guest first when needed', async () => {
@@ -78,17 +84,30 @@ describe('Diag page', () => {
     expect(JSON.stringify(body).length).toBeLessThan(64 * 1024);
   });
 
-  it('asks before the paid echo test and sends the dev key', async () => {
-    stubFetch({ 'POST /api/diag/echo': [{ status: 429, body: { code: 'fish_cap', message: 'The voice budget is used up.' } }] });
+  it('asks before the paid echo test, sends the dev key once on a double tap, and makes a guest first', async () => {
+    history.replaceState(null, '', '/diag?dev=1');
+    stubFetch({
+      'POST /api/diag/echo': [
+        { status: 401, body: { code: 'unauthorized', message: 'no identity' } },
+        { status: 429, body: { code: 'fish_cap', message: 'The voice budget is used up.' } },
+      ],
+      'GET /api/me': [{ status: 200, body: {} }],
+    });
     await act(async () => render(<Diag />, root));
     await settle();
+    expect((q('diag-echo-run') as HTMLButtonElement).disabled).toBe(true);
     const key = q('diag-key') as HTMLInputElement;
     key.value = 'k1';
     await act(async () => void key.dispatchEvent(new Event('input', { bubbles: true })));
     await act(async () => q('diag-echo-run')!.click());
     expect(calls.some((c) => c.path === '/api/diag/echo')).toBe(false);
-    await act(async () => q('diag-echo-confirm')!.click());
+    const confirm = q('diag-echo-confirm')!;
+    await act(async () => {
+      confirm.click();
+      confirm.click();
+    });
     await settle();
+    expect(calls.map((c) => `${c.method} ${c.path}`)).toEqual(['POST /api/diag/echo', 'GET /api/me', 'POST /api/diag/echo']);
     const echo = calls.find((c) => c.path === '/api/diag/echo')!;
     expect(echo.headers['x-dev-key']).toBe('k1');
     expect(root.textContent).toContain('fish_cap');

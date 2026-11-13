@@ -59,17 +59,21 @@ async function call<T>(method: string, path: string, body?: unknown, headers: Re
   return data as T;
 }
 
-/** Stores the results; makes a guest identity first when the browser has none. */
-export async function sendResults(payload: object): Promise<{ id: number }> {
+/** Runs a call that needs an identity; makes a guest first (GET /api/me) when the browser has none. */
+async function withIdentity<T>(run: () => Promise<T>): Promise<T> {
   try {
-    return await call<{ id: number }>('POST', '/api/diag', payload);
+    return await run();
   } catch (e) {
     if (!(e instanceof DiagError) || e.status !== 401) throw e;
     await call('GET', '/api/me');
-    return call<{ id: number }>('POST', '/api/diag', payload);
+    return run();
   }
 }
 
+export function sendResults(payload: object): Promise<{ id: number }> {
+  return withIdentity(() => call<{ id: number }>('POST', '/api/diag', payload));
+}
+
 export function echoVoice(key: string): Promise<{ voice: EchoVoice; passage: string; max_seconds: number }> {
-  return call('POST', '/api/diag/echo', {}, { 'x-dev-key': key });
+  return withIdentity(() => call('POST', '/api/diag/echo', {}, { 'x-dev-key': key }));
 }

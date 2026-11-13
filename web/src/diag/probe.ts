@@ -154,6 +154,9 @@ export class MicTest {
   }
 
   async start(): Promise<MicResult> {
+    // A fresh result per run: no levels or errors carried over from an earlier try.
+    this.levels.length = 0;
+    this.result = { permission_before: 'unknown', permission_after: null, grant_ms: null, error: null, label: null, settings: null, level: null };
     this.result.permission_before = await micPermission();
     const t0 = performance.now();
     try {
