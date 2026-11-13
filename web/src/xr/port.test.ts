@@ -15,6 +15,7 @@ function fakeApp() {
     ui: {
       setRoundState: vi.fn(),
       showSummary: vi.fn(),
+      showQuickCard: vi.fn(),
       setStatus: vi.fn(),
       hideStatus: vi.fn(),
       showStatusText: vi.fn(),
@@ -25,7 +26,15 @@ function fakeApp() {
     },
   };
   const press = (a: RoundAction) => listeners.forEach((cb) => cb(a));
-  return { app: app as unknown as XRAppLike & typeof app, press };
+  const selects = new Set<(hand: 'left' | 'right', phase: 'start' | 'end' | 'cancel', nowMs: number) => void>();
+  Object.assign(app, {
+    onSelect: (cb: (hand: 'left' | 'right', phase: 'start' | 'end' | 'cancel', nowMs: number) => void) => {
+      selects.add(cb);
+      return () => selects.delete(cb);
+    },
+  });
+  const pinch = (phase: 'start' | 'end' | 'cancel') => selects.forEach((cb) => cb('right', phase, 0));
+  return { app: app as unknown as XRAppLike & typeof app, press, pinch };
 }
 
 const ROUND: RoundStatePayload = {
@@ -116,5 +125,24 @@ describe('createXRPort', () => {
     const r = { schema_version: '1.0' } as Report;
     createXRPort(app).ui.showSummary(r);
     expect(app.ui.showSummary).toHaveBeenCalledWith(r);
+  });
+
+  it('the_quick_card_reaches_the_summary_card', () => {
+    const { app } = fakeApp();
+    const card = { one_line: 'Clear on scale.', top_strength: null, top_fix: null };
+    createXRPort(app).ui.showCard!(card);
+    expect(app.ui.showQuickCard).toHaveBeenCalledWith(card);
+  });
+
+  it('a_pinch_start_is_a_gesture', () => {
+    const { app, pinch } = fakeApp();
+    const cb = vi.fn();
+    const off = createXRPort(app).onGesture!(cb);
+    pinch('start');
+    pinch('end');
+    expect(cb).toHaveBeenCalledTimes(1);
+    off();
+    pinch('start');
+    expect(cb).toHaveBeenCalledTimes(1);
   });
 });

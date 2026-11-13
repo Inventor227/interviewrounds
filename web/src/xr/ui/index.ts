@@ -3,7 +3,7 @@
 
 import { UIKitDocument } from '@iwsdk/core';
 import type { Object3D } from 'three';
-import type { Report } from '../../shared/types';
+import type { HeadsetCard, Report } from '../../shared/types';
 import type { HeadPose } from '../placement';
 import type { DeskFrame } from '../seats';
 import type { Sounds } from '../sound';
@@ -13,7 +13,7 @@ import { Hint } from './hint';
 import { layoutDesk, layoutHeadStatus, layoutHint, layoutHud, type PanelName, type PanelPose } from './layout';
 import { RoundBar } from './roundBar';
 import { StatusCard } from './statusCard';
-import { SummaryCard, summaryFromReport } from './summaryCard';
+import { quickCardFromHeadset, SummaryCard, summaryFromReport } from './summaryCard';
 import type { RoundAction, RoundUIState, StatusStage, SummaryView } from './types';
 
 export type { RoundAction, RoundUIState, StatusStage, SummaryView } from './types';
@@ -101,6 +101,14 @@ export class RoundUI {
     this.status.hide();
     this.setChromeVisible(false);
     this.summary.show(view);
+    this.sounds?.chime();
+  }
+
+  /** The quick card (one line, top strength, top fix) in the summary card's place, until the report is ready. */
+  showQuickCard(card: HeadsetCard): void {
+    this.status.hide();
+    this.setChromeVisible(false);
+    this.summary.showQuick(quickCardFromHeadset(card));
     this.sounds?.chime();
   }
 

@@ -2,7 +2,7 @@
 // the round; the app owns the room, the placement and the panels.
 
 import type { ControllerState, SeatPoseLike, UiAction, XRPort } from '../session/ports';
-import type { Report, RoundStatePayload } from '../shared/types';
+import type { HeadsetCard, Report, RoundStatePayload } from '../shared/types';
 import type { DeskPose } from './placement';
 import type { SeatPose } from './seats';
 import type { RoundAction, RoundUIState, StatusStage } from './ui/types';
@@ -12,10 +12,13 @@ export interface XRAppLike {
   enter(): Promise<void>;
   exit(): void;
   place(): Promise<DeskPose>;
+  /** XR select events per hand (a pinch): user gestures. */
+  onSelect?(cb: (hand: 'left' | 'right', phase: 'start' | 'end' | 'cancel', nowMs: number) => void): () => void;
   room: { seatPoses(): SeatPose[] };
   ui: {
     setRoundState(s: RoundUIState): void;
     showSummary(r: Report): void;
+    showQuickCard(c: HeadsetCard): void;
     setStatus(stage: StatusStage, pct?: number | null): void;
     showStatusText(text: string, pct?: number | null): void;
     hideStatus(): void;
@@ -45,6 +48,7 @@ export function createXRPort(app: XRAppLike): XRPort & { dispose(): void } {
     enter: () => app.enter(),
     place: () => app.place().then(() => undefined),
     exit: () => app.exit(),
+    onGesture: (cb: () => void) => app.onSelect?.((_hand, phase) => phase === 'start' && cb()) ?? (() => {}),
     ui: {
       setRoundState(s: RoundStatePayload & { controller: ControllerState }) {
         const status = s.controller === 'paused' ? 'paused' : s.status;
@@ -57,6 +61,7 @@ export function createXRPort(app: XRAppLike): XRPort & { dispose(): void } {
         });
       },
       showSummary: (r: Report) => app.ui.showSummary(r),
+      showCard: (c: HeadsetCard) => app.ui.showQuickCard(c),
       setStatus(text: string | null, progress?: number) {
         if (text === null) app.ui.hideStatus();
         else if (HEAR_LINE.test(text)) app.ui.setStatus('hear');

@@ -1,9 +1,10 @@
 // Summary card after the round: verdict chip, four competency bars, the top strength, the top fix, then Retry and
-// See full report. Stands at eye level across the desk.
+// See full report. Stands at eye level across the desk. A few seconds after the round it first shows the quick card
+// (one line, the top strength and the top fix, each with the user's own words); the full summary replaces it.
 
 import { UIKitDocument } from '@iwsdk/core';
 import { Group } from 'three';
-import type { Report, VerdictLabel } from '../../shared/types';
+import type { HeadsetCard, Report, VerdictLabel } from '../../shared/types';
 import {
   ACCENT,
   AMBER,
@@ -22,7 +23,7 @@ import {
   text,
   type Button,
 } from './style';
-import type { RoundAction, SummaryView } from './types';
+import type { QuickCardView, RoundAction, SummaryView } from './types';
 
 // Sized for direct touch at about 0.44 m: 1 cm type is 1.3°, buttons 5 cm tall with 1.5 cm between them.
 export const SUMMARY_WIDTH_CM = 42;
@@ -58,9 +59,31 @@ export function summaryFromReport(r: Report): SummaryView {
   };
 }
 
+/** Longest quote shown under a pick; longer ones are cut at a word. */
+export const QUOTE_MAX_CHARS = 90;
+
+function shortQuote(q: string): string {
+  const t = q.trim().replace(/\s+/g, ' ');
+  if (t.length <= QUOTE_MAX_CHARS) return t;
+  const cut = t.slice(0, QUOTE_MAX_CHARS);
+  return `${cut.slice(0, Math.max(cut.lastIndexOf(' '), QUOTE_MAX_CHARS - 20)).trimEnd()}...`;
+}
+
+/** Builds the quick card's view from the server's headset card. */
+export function quickCardFromHeadset(c: HeadsetCard): QuickCardView {
+  const pick = (p: HeadsetCard['top_strength']) => (p ? { title: p.title, quote: p.quote?.trim() ? shortQuote(p.quote) : null } : null);
+  return { oneLine: c.one_line, strength: pick(c.top_strength), fix: pick(c.top_fix) };
+}
+
 export class SummaryCard {
   readonly group = new Group();
   private readonly doc: UIKitDocument;
+  private readonly head;
+  private readonly lead;
+  private readonly bars;
+  private readonly strengthQuote;
+  private readonly fixQuote;
+  private readonly pending;
   private readonly chip;
   private readonly chipText;
   private readonly chipNote;
@@ -80,7 +103,11 @@ export class SummaryCard {
     this.chip.add(this.chipText);
     this.chipNote = text('', { fontSize: SMALL_CM, color: INK_MUTED });
     head.add(this.chip, this.chipNote);
-    root.add(head);
+    this.head = head;
+    // The quick card's one line takes the verdict's place until the report is ready.
+    this.lead = text('', { fontSize: 1.5, fontWeight: 'semi-bold', lineHeight: '125%', width: '100%' });
+    root.add(head, this.lead);
+    show(this.lead, false);
 
     const bars = col({ gap: 0.9, width: '100%' });
     for (let i = 0; i < BARS; i++) {
@@ -93,21 +120,29 @@ export class SummaryCard {
       this.rows.push({ root: r, name, bar: b, score });
     }
     root.add(bars);
+    this.bars = bars;
 
     const point = (label: string) => {
       const box = col({ gap: 0.3, width: '100%' });
       const l = text(label, { fontSize: SMALL_CM, color: INK_MUTED, fontWeight: 'medium' });
       const t = text('', { fontSize: BODY_CM, color: INK, lineHeight: '125%' });
-      box.add(l, t);
+      const q = text('', { fontSize: SMALL_CM, color: INK_MUTED, lineHeight: '125%' });
+      box.add(l, t, q);
+      show(q, false);
       root.add(box);
-      return { box, t };
+      return { box, t, q };
     };
     const s = point('Keep doing');
     this.strength = s.t;
     this.strengthBox = s.box;
+    this.strengthQuote = s.q;
     const f = point('Work on next');
     this.fix = f.t;
     this.fixBox = f.box;
+    this.fixQuote = f.q;
+    this.pending = text('Your full scorecard is almost ready.', { fontSize: SMALL_CM, color: INK_MUTED });
+    root.add(this.pending);
+    show(this.pending, false);
 
     const actions = row({ gap: SUMMARY_BUTTON_GAP_CM, marginTop: 0.4 });
     this.retry = button('Retry this answer', { width: 18.6, height: 5, fontSize: 1.3, primary: true, onClick: () => emit('retry') });
@@ -120,7 +155,32 @@ export class SummaryCard {
     this.group.visible = false;
   }
 
+  /** The quick card: one line, the top strength and the top fix. See full report already works. */
+  showQuick(v: QuickCardView): void {
+    show(this.head, false);
+    show(this.bars, false);
+    set(this.lead, { text: v.oneLine });
+    show(this.lead, v.oneLine.length > 0);
+    const pick = (box: typeof this.strengthBox, t: typeof this.strength, q: typeof this.strengthQuote, p: QuickCardView['strength']) => {
+      show(box, !!p);
+      set(t, { text: p?.title ?? '' });
+      set(q, { text: p?.quote ? `You said: "${p.quote}"` : '' });
+      show(q, !!p?.quote);
+    };
+    pick(this.strengthBox, this.strength, this.strengthQuote, v.strength);
+    pick(this.fixBox, this.fix, this.fixQuote, v.fix);
+    show(this.pending, !!(v.strength || v.fix));
+    show(this.retry.root, false);
+    this.group.visible = true;
+  }
+
   show(v: SummaryView): void {
+    show(this.head, true);
+    show(this.bars, true);
+    show(this.lead, false);
+    show(this.pending, false);
+    show(this.strengthQuote, false);
+    show(this.fixQuote, false);
     if (v.verdict) {
       set(this.chipText, { text: v.verdict.provisional ? `${v.verdict.label} (so far)` : v.verdict.label });
       set(this.chip, { backgroundColor: TONE_COLOR[v.verdict.tone] });
