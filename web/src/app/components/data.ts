@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'preact/hooks';
 import { api, ApiError } from '../../net/api';
 import type { Catalog, LimitReason, Me, RoundPublic } from '../../shared/types';
 import { LIMIT_REASONS } from '../../shared/types';
-import { fakeReady } from '../fake/mode';
+import { fakeReady, isFake } from '../fake/mode';
 
 let mePromise: Promise<Me> | null = null;
 let catalogPromise: Promise<Catalog> | null = null;
@@ -35,6 +35,9 @@ export function resetDataCache(): void {
   mePromise = null;
   catalogPromise = null;
 }
+
+// Fixture mode: let screenshot scripts switch scenarios without a reload.
+if (isFake()) (globalThis as Record<string, unknown>).__irFakeReset = resetDataCache;
 
 export type Async<T> =
   | { status: 'loading'; data?: undefined; error?: undefined }

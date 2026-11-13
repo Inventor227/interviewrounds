@@ -260,6 +260,7 @@ export function createFakeServer(opts: FakeServerOptions = {}): FakeServer {
   const state = { me: opts.me ?? fakeMe(scenario), reportPolls: {} as Record<string, number> };
   const calls: FakeCall[] = [];
   let shareSlug: string | null = null;
+  let lastScoringPoll = 0;
 
   const route = async (method: string, url: URL, body: unknown): Promise<Response> => {
     const key = `${method} ${url.pathname}`;
@@ -305,6 +306,10 @@ export function createFakeServer(opts: FakeServerOptions = {}): FakeServer {
       const id = decodeURIComponent(m[1]!);
       if (id === 'failed' || id === 'abandoned') return fail(404, 'not_ready', 'Report not ready');
       if (id === 'scoring') {
+        // Ready on the fourth poll; a page opened later (after a quiet gap) starts over.
+        const now = Date.now();
+        if (now - lastScoringPoll > 10_000) state.reportPolls[id] = 0;
+        lastScoringPoll = now;
         const n = (state.reportPolls[id] = (state.reportPolls[id] ?? 0) + 1);
         if (n < 4) return fail(404, 'not_ready', 'Report not ready');
       }
@@ -338,13 +343,22 @@ export function createFakeServer(opts: FakeServerOptions = {}): FakeServer {
   return { fetch: fakeFetch as typeof fetch, calls, state };
 }
 
-/** Dev only: answers /api/* from the fake server, everything else from the network. */
-export function installFake(scenario: string): void {
-  const server = createFakeServer({ scenario, delayMs: 250 });
+/**
+ * Dev only: answers /api/* from a fake server, everything else from the network. The scenario
+ * is read again on every request (a client side move to `?fake=<other>` switches it), and each
+ * scenario keeps its own state.
+ */
+export function installFake(scenario: string, current: () => string | null = () => scenario): void {
+  const servers = new Map<string, FakeServer>();
+  const serverFor = (sc: string) => {
+    let s = servers.get(sc);
+    if (!s) servers.set(sc, (s = createFakeServer({ scenario: sc, delayMs: 250 })));
+    return s;
+  };
   const real = globalThis.fetch.bind(globalThis);
   globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
     const href = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
     const path = new URL(href, location.origin).pathname;
-    return path.startsWith('/api/') ? server.fetch(input, init) : real(input, init);
+    return path.startsWith('/api/') ? serverFor(current() ?? scenario).fetch(input, init) : real(input, init);
   }) as typeof fetch;
 }

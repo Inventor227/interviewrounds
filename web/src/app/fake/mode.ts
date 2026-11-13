@@ -26,7 +26,7 @@ export function fakeScenario(search: string = globalThis.location?.search ?? '')
 export const fakeReady: Promise<void> = (() => {
   const scenario = fakeScenario();
   if (!scenario) return Promise.resolve();
-  return import('./server').then((m) => m.installFake(scenario)).catch(() => undefined);
+  return import('./server').then((m) => m.installFake(scenario, () => fakeScenario())).catch(() => undefined);
 })();
 
 export const isFake = (): boolean => fakeScenario() !== null;
