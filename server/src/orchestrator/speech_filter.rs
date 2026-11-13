@@ -1,13 +1,23 @@
 //! Makes model text safe to speak, chunk by chunk: drops markdown marks, list bullets, bracketed text
-//! (stage directions, markers), emoji and URLs, and collapses whitespace. It holds back only what it must:
-//! a line-start bullet candidate (`-`, `1.`) and a word that could still become a URL (`htt`, `www`).
+//! (stage directions, markers), tag-like `<...>`, emoji and URLs, and collapses whitespace. It holds back only what
+//! it must: a line-start bullet candidate (`-`, `1.`), a word that could still become a URL (`htt`, `www`), a lone
+//! `<` until the next character shows whether it opens a tag, and bracketed text until it closes. Bracketed text
+//! that never closes (or runs past `MAX_BRACKET_CHARS`) is released as speech, so an unclosed `(` or `[` never
+//! swallows the rest of a reply. A bare `<` or `>` (as in "p99 < 200 ms") is spoken as it is.
 
 const URL_PREFIXES: [&str; 3] = ["https://", "http://", "www."];
 
+/// Bracketed text longer than this is not a stage direction: it is released as speech.
+const MAX_BRACKET_CHARS: usize = 80;
+
 #[derive(Debug)]
 pub struct SpeechFilter {
-    /// Nesting depth inside (), [], {} or <>.
-    depth: u32,
+    /// Open brackets, innermost last: `(`, `[`, `{` or `<` (tag-like only).
+    stack: Vec<char>,
+    /// Text inside the outermost bracket, held until it closes (then dropped) or is released.
+    bracket: String,
+    /// A `<` waiting for the next character: a letter or `/` opens a tag, anything else is plain text.
+    lt_pending: bool,
     /// At the start of a line (bullets and headings are only recognised there).
     line_start: bool,
     /// Held characters at a line start that may be a bullet (`-`, `+`, `•`, `>`, `12.`, `3)`).
@@ -32,7 +42,9 @@ impl Default for SpeechFilter {
 impl SpeechFilter {
     pub fn new() -> Self {
         SpeechFilter {
-            depth: 0,
+            stack: Vec::new(),
+            bracket: String::new(),
+            lt_pending: false,
             line_start: true,
             line_hold: String::new(),
             word: String::new(),
@@ -54,6 +66,13 @@ impl SpeechFilter {
 
     /// Ends the stream: releases held text (a held word that never became a URL, a lone bullet candidate).
     pub fn finish(&mut self) -> String {
+        if self.lt_pending {
+            self.lt_pending = false;
+            self.normal('<');
+        }
+        if !self.stack.is_empty() {
+            self.release_bracket();
+        }
         if !self.line_hold.is_empty() {
             let held = std::mem::take(&mut self.line_hold);
             self.line_start = false;
@@ -67,23 +86,81 @@ impl SpeechFilter {
     }
 
     fn feed(&mut self, c: char) {
-        if self.depth > 0 {
-            if is_open(c) {
-                self.depth += 1;
-            } else if is_close(c) {
-                self.depth -= 1;
+        if self.lt_pending {
+            self.lt_pending = false;
+            if c.is_ascii_alphabetic() || c == '/' {
+                self.open('<');
+            } else {
+                self.plain('<');
+            }
+        }
+        if !self.stack.is_empty() {
+            self.in_bracket(c);
+            return;
+        }
+        match c {
+            '(' | '[' | '{' => {
+                self.open(c);
+                return;
+            }
+            '<' => {
+                self.lt_pending = true;
+                return;
+            }
+            ')' | ']' | '}' => return,
+            _ => {}
+        }
+        self.plain(c);
+    }
+
+    fn open(&mut self, c: char) {
+        if self.stack.is_empty() {
+            self.release_line_hold_if_any();
+            self.end_word();
+            self.space();
+            self.bracket.clear();
+        }
+        self.stack.push(c);
+        self.bracket.push(c);
+    }
+
+    fn in_bracket(&mut self, c: char) {
+        self.bracket.push(c);
+        let top = *self.stack.last().unwrap_or(&'(');
+        let closes = matches!((top, c), ('(', ')') | ('[', ']') | ('{', '}') | ('<', '>'));
+        if closes {
+            self.stack.pop();
+            if self.stack.is_empty() {
+                self.bracket.clear();
             }
             return;
         }
-        if is_open(c) {
-            self.end_word();
-            self.space();
-            self.depth = 1;
-            return;
+        if matches!(c, '(' | '[' | '{') {
+            self.stack.push(c);
         }
-        if is_close(c) {
-            return;
+        if self.bracket.chars().count() > MAX_BRACKET_CHARS {
+            self.release_bracket();
         }
+    }
+
+    /// The bracket never closed in time: speak its text, without the bracket characters.
+    fn release_bracket(&mut self) {
+        self.stack.clear();
+        let held = std::mem::take(&mut self.bracket);
+        for h in held.chars() {
+            if !matches!(h, '(' | ')' | '[' | ']' | '{' | '}' | '<' | '>') {
+                self.plain(h);
+            }
+        }
+    }
+
+    fn release_line_hold_if_any(&mut self) {
+        if !self.line_hold.is_empty() {
+            self.release_line_hold();
+        }
+    }
+
+    fn plain(&mut self, c: char) {
         if c == '\n' || c == '\r' {
             self.release_line_hold();
             self.end_word();
@@ -151,6 +228,12 @@ impl SpeechFilter {
         if matches!(c, '*' | '#' | '`' | '~' | '|') || is_emoji(c) {
             return;
         }
+        // Snake case and arrows: a word break, never a spoken symbol.
+        let c = if c == '_' || ('\u{2190}'..='\u{21FF}').contains(&c) {
+            ' '
+        } else {
+            c
+        };
         if c.is_whitespace() {
             self.end_word();
             self.space();
@@ -206,14 +289,6 @@ impl SpeechFilter {
     }
 }
 
-fn is_open(c: char) -> bool {
-    matches!(c, '(' | '[' | '{' | '<')
-}
-
-fn is_close(c: char) -> bool {
-    matches!(c, ')' | ']' | '}' | '>')
-}
-
 fn is_emoji(c: char) -> bool {
     let u = c as u32;
     matches!(u,
@@ -255,8 +330,44 @@ mod tests {
     }
 
     #[test]
-    fn unclosed_bracket_drops_the_rest() {
-        assert_eq!(run(&["Okay. (thinking"]), "Okay.");
+    fn unclosed_bracket_is_released_as_speech() {
+        assert_eq!(run(&["Okay. (thinking"]), "Okay. thinking");
+        assert_eq!(
+            run(&[
+                "So [the cache sits in front of the database and every read goes through it first, ",
+                "then the shard map]"
+            ]),
+            "So the cache sits in front of the database and every read goes through it first, then the shard map"
+        );
+    }
+
+    #[test]
+    fn comparisons_are_not_brackets() {
+        assert_eq!(
+            run(&["Keep p99 < 200 ms, then shard."]),
+            "Keep p99 < 200 ms, then shard."
+        );
+        assert_eq!(
+            run(&["If load > 10", "k, we scale."]),
+            "If load > 10k, we scale."
+        );
+        assert_eq!(run(&["a <", " b and c"]), "a < b and c");
+    }
+
+    #[test]
+    fn tags_and_closed_brackets_are_dropped() {
+        assert_eq!(
+            run(&["<emphasis>Okay.</emp", "hasis> (nods) Go on."]),
+            "Okay. Go on."
+        );
+    }
+
+    #[test]
+    fn underscores_and_arrows_become_spaces() {
+        assert_eq!(
+            run(&["The user_id goes A \u{2192} B."]),
+            "The user id goes A B."
+        );
     }
 
     #[test]
