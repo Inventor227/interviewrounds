@@ -3,6 +3,7 @@
 // both cards get voice labels through the dev typed turn, then a Scribe ghost is accepted
 // with a pinch. Screenshots of the sheet and of the wall board, and crisp board textures.
 //   plan/ops-tools/emu.sh <worktree> <worktree>/web/e2e/board-xr.mjs --out plan/shots/board-xr
+import { execFile } from 'node:child_process';
 import { writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { call, enterXR, iwsdk, screenshot, sleep, waitReady } from './emu-lib.mjs';
@@ -59,6 +60,22 @@ async function saveBoard(name) {
   return iwsdk('browser', 'run', path.relative(process.env.EMU_APP_DIR, file), '--timeout', '25000');
 }
 
+const BIN = path.join(process.env.EMU_APP_DIR, 'node_modules/.bin/iwsdk');
+
+/** xr <action> with the real error text (emu-lib's message is cut off by long arguments). */
+function xr(action, input) {
+  return new Promise((resolve, reject) => {
+    execFile(BIN, ['xr', action, '--input-json', JSON.stringify(input)], { cwd: process.env.EMU_APP_DIR, maxBuffer: 64 << 20 }, (err, stdout, stderr) => {
+      let out = stdout;
+      try {
+        out = JSON.parse(stdout);
+      } catch {}
+      if (err) return reject(new Error(`xr ${action} failed (exit ${err.code}): ${String(stderr || stdout).slice(-3000)}`));
+      resolve(out);
+    });
+  });
+}
+
 const fail = (msg, extra) => {
   console.error(msg, extra ? JSON.stringify(extra).slice(0, 2000) : '');
   process.exit(1);
@@ -89,7 +106,7 @@ function along(corners, step) {
 function roughBox(x, y, w, h, seed) {
   const r = rng(seed);
   const sx = x + w * 0.3;
-  return along([[sx, y], [x + w, y], [x + w, y + h], [x, y + h], [x, y], [sx + 0.8, y]], 1).map(([px, py]) => [px + (r() - 0.5) * 0.6, py + (r() - 0.5) * 0.6]);
+  return along([[sx, y], [x + w, y], [x + w, y + h], [x, y + h], [x, y], [sx + 0.8, y]], 1.5).map(([px, py]) => [px + (r() - 0.5) * 0.6, py + (r() - 0.5) * 0.6]);
 }
 
 const board = () =>
@@ -104,9 +121,12 @@ const board = () =>
     };
   });
 
+const r4 = (p) => ({ x: Math.round(p.x * 1e4) / 1e4, y: Math.round(p.y * 1e4) / 1e4, z: Math.round(p.z * 1e4) / 1e4 });
+let dryRunDone = false;
+
 /** Pinch-draws a stroke through board points (cm), 1 cm above the sheet. */
-async function draw(points, segment = 0.07) {
-  const w = await page((p) => globalThis.__boardxr.toWorld(p, 1), points);
+async function draw(points, segment = 0.1) {
+  const w = (await page((p) => globalThis.__boardxr.toWorld(p, 1), points)).map(r4);
   const last = w[w.length - 1];
   const steps = [
     { label: 'reach', position: w[0], anchor: 'grasp', duration: 0.6, pinch: 0 },
@@ -118,7 +138,13 @@ async function draw(points, segment = 0.07) {
     { label: 'release', pinch: 0, duration: 0.15 },
     { label: 'lift', position: { x: last.x, y: last.y + 0.06, z: last.z }, duration: 0.3 },
   ];
-  return call('xr', 'run-sequence', { device: 'hand-right', steps, body: 'fixed', gaze: 'fixed', idleHand: 'keep' });
+  const input = { device: 'hand-right', steps, body: 'auto', gaze: 'fixed', idleHand: 'keep' };
+  if (!dryRunDone) {
+    dryRunDone = true;
+    const plan = await xr('run-sequence', { ...input, dryRun: true });
+    console.log('dry run', JSON.stringify(plan).slice(0, 1500));
+  }
+  return xr('run-sequence', input);
 }
 
 /** A short pinch on a board point (select a card, accept a ghost). */
@@ -127,10 +153,17 @@ const tap = (x, y) => draw([[x, y]]);
 /** Holds the hand over a board point, 3 cm up, without pinching. */
 async function hover(x, y) {
   const [p] = await page((q) => globalThis.__boardxr.toWorld(q, 3), [[x, y]]);
-  return call('xr', 'run-sequence', { device: 'hand-right', steps: [{ label: 'hover', position: p, anchor: 'grasp', duration: 0.5, pinch: 0 }], body: 'fixed', gaze: 'fixed', idleHand: 'keep' });
+  return xr('run-sequence', { device: 'hand-right', steps: [{ label: 'hover', position: r4(p), anchor: 'grasp', duration: 0.5, pinch: 0 }], body: 'auto', gaze: 'fixed', idleHand: 'keep' });
 }
 
+// Seated at the home office desk (top 0.74 m, near edge z -1.7), leaning over the sheet.
+const HEAD = { x: 0, y: 1.2, z: -1.56 };
+const LOOK_DOWN = { pitch: -52, yaw: 0, roll: 0 };
+let look = LOOK_DOWN;
+
 const shot = async (name) => {
+  // Leaning to reach can move the head: sit back up for a steady view.
+  await call('xr', 'set-transform', { device: 'headset', position: HEAD, orientation: look });
   await sleep(600);
   await screenshot(name);
   await saveBoard(name).catch((e) => console.log(`board snapshot ${name}: ${String(e).slice(0, 200)}`));
@@ -146,9 +179,7 @@ await enterXR();
 await sleep(1500);
 await call('xr', 'set-input-mode', { mode: 'hand' });
 
-// Seated at the home office desk (top 0.74 m, near edge z -1.7), looking down at the sheet.
-const HEAD = { x: 0, y: 1.2, z: -1.42 };
-await call('xr', 'set-transform', { device: 'headset', position: HEAD, orientation: { pitch: -48, yaw: 0, roll: 0 } });
+await call('xr', 'set-transform', { device: 'headset', position: HEAD, orientation: LOOK_DOWN });
 const desk = await page((d) => globalThis.__boardxr.placeDesk(d), { origin: { x: 0, y: 0.745, z: -1.74 }, yaw: 0, deskY: 0.745 });
 console.log('desk', JSON.stringify(desk));
 await call('xr', 'set-transform', { device: 'hand-left', position: { x: -0.4, y: 0.85, z: -1.45 }, orientation: 'auto' });
@@ -174,7 +205,7 @@ await shot('xr-02-two-boxes');
   const [a, c] = b.items;
   const from = [a.x + a.w - 0.3, a.y + a.h / 2];
   const to = [c.x + 2, c.y + c.h / 2 + 0.3];
-  await draw(along([from, to], 1));
+  await draw(along([from, to], 1.5));
 }
 await sleep(800);
 b = await board();
@@ -215,7 +246,7 @@ await shot('xr-06-accepted');
 
 // 6. The wall board mirrors the sheet.
 await call('xr', 'set-transform', { device: 'hand-right', position: { x: 0.35, y: 0.85, z: -1.45 }, orientation: 'auto' });
-await call('xr', 'set-transform', { device: 'headset', position: HEAD, orientation: { pitch: 6, yaw: 0, roll: 0 } });
+look = { pitch: 6, yaw: 0, roll: 0 };
 await shot('xr-07-wall');
 
 writeFileSync(path.join(SHOTS, 'board-xr.json'), JSON.stringify({ desk, board: b, sent }, null, 2));
