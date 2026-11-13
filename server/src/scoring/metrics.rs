@@ -63,6 +63,13 @@ impl MarkRec {
     pub fn dur_ms(&self) -> i64 {
         (self.end_ms - self.start_ms).max(0)
     }
+
+    /// Speaking time of the segment: its span, but never less than its words at 250 wpm (a segment whose
+    /// first partial and final arrive together would otherwise add words and no time).
+    pub fn speech_ms(&self) -> i64 {
+        self.dur_ms()
+            .max(word_count(&self.text) as i64 * 60_000 / 250)
+    }
 }
 
 /// One `head.samples` entry: yaw and pitch in degrees relative to the floor panelist's eyes.
@@ -164,7 +171,7 @@ pub fn signal(turns: &[TurnRec], marks: &[MarkRec], timing: bool) -> Signal {
         .collect();
     let answers = user.iter().filter(|t| word_count(t) >= 3).count();
     let speech_sec = if timing && !marks.is_empty() {
-        marks.iter().map(MarkRec::dur_ms).sum::<i64>() as f64 / 1000.0
+        marks.iter().map(MarkRec::speech_ms).sum::<i64>() as f64 / 1000.0
     } else {
         let words: usize = user.iter().map(|t| word_count(t)).sum();
         words as f64 * 60.0 / ESTIMATE_WPM
@@ -202,7 +209,7 @@ pub fn compute(
             .join("\n")
     };
     let user_words = word_count(&user_text);
-    let speaking_ms: i64 = marks.iter().map(MarkRec::dur_ms).sum();
+    let speaking_ms: i64 = marks.iter().map(MarkRec::speech_ms).sum();
     let minutes = speaking_ms as f64 / 60_000.0;
 
     let fillers = count_fillers(&user_text);
@@ -251,7 +258,10 @@ pub fn compute(
         );
     }
 
-    m.gaze_on_speaker_pct = gaze_on_speaker(head);
+    // Head samples are measured only in the headset with a live voice; without timing the field stays null.
+    if ctx.timing {
+        m.gaze_on_speaker_pct = gaze_on_speaker(head);
+    }
     m.hints = ctx
         .hints
         .iter()

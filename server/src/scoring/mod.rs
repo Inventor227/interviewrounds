@@ -6,6 +6,7 @@
 //! the report and stores it (`scored`). A failure retries once, then the session is `failed`; `POST
 //! /api/sessions/{id}/report` puts it back in the queue.
 
+pub mod clock;
 pub mod metrics;
 pub mod report;
 pub mod verdict;
@@ -28,6 +29,7 @@ use crate::config::UsagePhase;
 use crate::content::{Catalog, RoundConfig};
 use crate::fish::{FishClient, FishSessionDetail};
 use crate::orchestrator::{LlmApi, Mode};
+pub use clock::RoundClock;
 use metrics::{HeadSample, HintRec, MarkRec, TurnRec};
 pub use report::{ReportSchema, ScoreEnv, Scored};
 
@@ -85,6 +87,8 @@ pub struct ScoringInput {
     pub meeting_difficulty: Option<String>,
     /// Scores of the last report of the same round type, by competency id.
     pub last_scores: HashMap<String, f64>,
+    /// Maps headset and server wall times to round time.
+    pub clock: RoundClock,
 }
 
 impl ScoringInput {
@@ -152,12 +156,18 @@ impl ScoringInput {
     }
 }
 
-/// Where `report.progress` and `report.ready` go (the session socket once wired; logs otherwise).
+/// Where `report.progress`, `report.ready` and the scoring failure go (the session socket once wired, through
+/// `ws::send_to_session`; logs otherwise).
 #[async_trait]
 pub trait ReportEvents: Send + Sync {
-    /// `stage` is `metrics`, `scoring` or `done`.
+    /// `report.progress {stage, pct}`; `stage` is `metrics`, `scoring` or `done`.
     async fn progress(&self, session_id: &str, stage: &str, pct: u8);
+    /// `report.progress {stage: "card", pct, card}`: the headset card, as soon as it is ready.
+    async fn card(&self, session_id: &str, card: &Value);
+    /// `report.ready {session_id}`.
     async fn ready(&self, session_id: &str);
+    /// `error {code: "report_failed", message}`: scoring gave up; `POST /api/sessions/{id}/report` tries again.
+    async fn failed(&self, session_id: &str);
 }
 
 /// Logs the events.
@@ -169,8 +179,16 @@ impl ReportEvents for LogEvents {
         tracing::debug!(session_id, stage, pct, "report.progress");
     }
 
+    async fn card(&self, session_id: &str, card: &Value) {
+        tracing::info!(session_id, card = %card, "report.progress card");
+    }
+
     async fn ready(&self, session_id: &str) {
         tracing::info!(session_id, "report.ready");
+    }
+
+    async fn failed(&self, session_id: &str) {
+        tracing::warn!(session_id, "report_failed");
     }
 }
 
@@ -186,6 +204,8 @@ pub struct ScoringDeps {
     pub model: String,
     pub effort: String,
     pub max_tokens: u32,
+    /// Model of the quick headset card (`claude-sonnet-5-5`).
+    pub card_model: String,
     pub data_dir: PathBuf,
     pub usage_phase: UsagePhase,
     pub events: Arc<dyn ReportEvents>,
@@ -200,6 +220,8 @@ pub struct ScoringDeps {
 /// `high` took 51 s, `medium` 37 s, so medium keeps the report well under the 45 s ceiling.
 pub const DEFAULT_EFFORT: &str = "medium";
 pub const MAX_TOKENS: u32 = 16_000;
+/// The headset card call: fast model, low effort, about 6 s.
+pub const CARD_MODEL: &str = "claude-sonnet-5-5";
 /// Longest edge of the board image sent to the model.
 pub const BOARD_IMAGE_MAX_EDGE: u32 = 1568;
 
@@ -220,11 +242,12 @@ impl ScoringDeps {
             model: model.to_string(),
             effort: DEFAULT_EFFORT.to_string(),
             max_tokens: MAX_TOKENS,
+            card_model: CARD_MODEL.to_string(),
             data_dir: PathBuf::from("data"),
             usage_phase: UsagePhase::Build,
             events: Arc::new(LogEvents),
             board_wait: Duration::from_secs(5),
-            model_timeout: Duration::from_secs(150),
+            model_timeout: Duration::from_secs(90),
             in_flight: Arc::default(),
         }
     }
@@ -270,6 +293,10 @@ type TurnRow = (
     Option<i64>,
     bool,
 );
+/// `session_events` columns: kind, at_ms, data, created_at.
+type EventRow = (String, Option<i64>, Value, DateTime<Utc>);
+/// `marks` columns: segment_id, panelist_id, first_at_ms, final_at_ms, text, created_at.
+type MarkRow = (String, Option<String>, i64, i64, String, DateTime<Utc>);
 /// `board_ops` columns: src, op, args, t_ms, accepted.
 type OpRow = (String, String, Value, Option<i64>, Option<bool>);
 
@@ -361,29 +388,72 @@ pub async fn load_scoring_input(
         )
         .collect();
 
-    // The browser stamps marks with its wall clock (epoch ms); older clients sent session time.
-    let rel = |ms: i64| {
-        if ms > 100_000_000_000 {
-            (ms - start_epoch_ms).max(0)
-        } else {
-            ms.max(0)
-        }
+    // Pause/resume and hint events (`session_events`, added by a later migration; absent tables read as none).
+    let has_events: bool =
+        sqlx::query_scalar("select to_regclass('public.session_events') is not null")
+            .fetch_one(pool)
+            .await?;
+    let events: Vec<EventRow> = if has_events {
+        sqlx::query_as(
+            "select kind, at_ms, data, created_at from session_events \
+             where session_id = $1 and kind in ('ui.event', 'hint') order by id",
+        )
+        .bind(session_id)
+        .fetch_all(pool)
+        .await?
+    } else {
+        Vec::new()
     };
-    let marks: Vec<(String, Option<String>, i64, i64, String)> = sqlx::query_as(
-        "select segment_id, panelist_id, first_at_ms, final_at_ms, text from marks \
+    let toggles: Vec<(i64, bool)> = events
+        .iter()
+        .filter(|(kind, ..)| kind == "ui.event")
+        .filter_map(|(_, _, data, at)| match data["kind"].as_str() {
+            Some("pause") => Some((at.timestamp_millis(), true)),
+            Some("resume") => Some((at.timestamp_millis(), false)),
+            _ => None,
+        })
+        .collect();
+    let end_wall = input.ended_at.unwrap_or_else(Utc::now).timestamp_millis();
+
+    // Marks carry the headset's clock; the server receive time (`created_at`) gives the offset to ours.
+    let marks: Vec<MarkRow> = sqlx::query_as(
+        "select segment_id, panelist_id, first_at_ms, final_at_ms, text, created_at from marks \
          where session_id = $1 order by first_at_ms, id",
     )
     .bind(session_id)
     .fetch_all(pool)
     .await?;
+    let pairs: Vec<(i64, i64)> = marks
+        .iter()
+        .map(|m| (m.5.timestamp_millis(), m.3))
+        .collect();
+    input.clock = RoundClock::new(
+        start_epoch_ms,
+        clock::pause_spans(&toggles, end_wall),
+        RoundClock::offset_from(&pairs),
+    );
     input.marks = marks
         .into_iter()
-        .map(|(segment_id, panelist_id, first, last, text)| MarkRec {
-            segment_id,
-            panelist_id,
-            start_ms: rel(first),
-            end_ms: rel(last).max(rel(first)),
-            text,
+        .map(|(segment_id, panelist_id, first, last, text, _)| {
+            let start_ms = input.clock.client_to_round(first);
+            MarkRec {
+                segment_id,
+                panelist_id,
+                start_ms,
+                end_ms: input.clock.client_to_round(last).max(start_ms),
+                text,
+            }
+        })
+        .collect();
+    // Hints the interviewer gave (`give_hint`, logged as `hint` events: data {level, accepted?}, at_ms in round
+    // time when the writer had it).
+    input.hints = events
+        .iter()
+        .filter(|(kind, ..)| kind == "hint")
+        .map(|(_, at_ms, data, at)| HintRec {
+            level: data["level"].as_u64().unwrap_or(1).clamp(1, 5) as u8,
+            t_ms: at_ms.unwrap_or_else(|| input.clock.wall_to_round(at.timestamp_millis())),
+            accepted: data["accepted"].as_bool().unwrap_or(true),
         })
         .collect();
 
@@ -510,7 +580,6 @@ pub fn phases_completed(
 
 /// Takes the Fish item times (wall clock) for the turns they match, in order.
 pub fn apply_fish_times(input: &mut ScoringInput, panelist_id: &str, detail: &FishSessionDetail) {
-    let start = input.started_at.map(|t| t.timestamp_millis()).unwrap_or(0);
     let key = |t: &str| -> String {
         t.to_lowercase()
             .chars()
@@ -539,7 +608,7 @@ pub fn apply_fish_times(input: &mut ScoringInput, panelist_id: &str, detail: &Fi
         });
         if let Some(offset) = found {
             let i = cursor + offset;
-            input.turns[i].started_ms = Some((at - start).max(0));
+            input.turns[i].started_ms = Some(input.clock.wall_to_round(at));
             cursor = i + 1;
         }
     }
@@ -645,38 +714,118 @@ pub async fn score(deps: &ScoringDeps, session_id: Uuid) -> anyhow::Result<Score
         model: &deps.model,
         effort: &deps.effort,
         max_tokens: deps.max_tokens,
+        card_model: &deps.card_model,
         timeout: deps.model_timeout,
         events: deps.events.as_ref(),
     };
-    let scored = report::score(&env, &input).await;
-    if let Ok(s) = &scored
-        && let Some(usage) = &s.usage
-    {
-        record_usage(deps, &input, usage).await;
-    }
-    scored
+    report::score(&env, &input).await
 }
 
-/// Scores a session (two attempts) and stores the report; on a second failure the session is `failed`.
+/// Scoring attempts a session may use: two, counted since the last human re-score.
+pub const MAX_ATTEMPTS: i64 = 2;
+/// Re-scores a person may ask for, per session per day.
+pub const MAX_RESCORES_PER_DAY: i64 = 2;
+
+/// Attempts used since the last re-score (each attempt is one `usage_events` row of kind `scoring`).
+pub async fn attempts_used(db: &PgPool, session_id: Uuid) -> Result<i64, sqlx::Error> {
+    sqlx::query_scalar(
+        "select count(*) from usage_events where session_id = $1 and kind = 'scoring' \
+           and created_at > coalesce((select max(created_at) from usage_events \
+                                      where session_id = $1 and kind = 'rescore'), '-infinity')",
+    )
+    .bind(session_id)
+    .fetch_one(db)
+    .await
+}
+
+/// Takes the next attempt for a `scoring` session, if any is left: locks the session row, counts, and writes
+/// the attempt's ledger row (its usage is filled in later). Two servers can never take more than two between
+/// them. Returns the ledger row id.
+async fn claim_attempt(deps: &ScoringDeps, session_id: Uuid) -> anyhow::Result<Option<i64>> {
+    let mut tx = deps.db.begin().await?;
+    let row: Option<(String, Uuid)> =
+        sqlx::query_as("select status, identity_id from sessions where id = $1 for update")
+            .bind(session_id)
+            .fetch_optional(&mut *tx)
+            .await?;
+    let Some((status, identity)) = row else {
+        return Ok(None);
+    };
+    if status != "scoring" {
+        return Ok(None);
+    }
+    let used: i64 = sqlx::query_scalar(
+        "select count(*) from usage_events where session_id = $1 and kind = 'scoring' \
+           and created_at > coalesce((select max(created_at) from usage_events \
+                                      where session_id = $1 and kind = 'rescore'), '-infinity')",
+    )
+    .bind(session_id)
+    .fetch_one(&mut *tx)
+    .await?;
+    if used >= MAX_ATTEMPTS {
+        return Ok(None);
+    }
+    let id: i64 = sqlx::query_scalar(
+        "insert into usage_events (identity_id, session_id, provider, kind, model, usage_phase, cost_usd) \
+         values ($1, $2, 'anthropic', 'scoring', $3, $4, 0) returning id",
+    )
+    .bind(identity)
+    .bind(session_id)
+    .bind(&deps.model)
+    .bind(deps.usage_phase.as_str())
+    .fetch_one(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(Some(id))
+}
+
+/// Marks a session `failed` (when it is still `scoring`) and tells the socket.
+pub async fn mark_failed(deps: &ScoringDeps, session_id: Uuid) {
+    let res =
+        sqlx::query("update sessions set status = 'failed' where id = $1 and status = 'scoring'")
+            .bind(session_id)
+            .execute(&deps.db)
+            .await;
+    if let Err(err) = res {
+        tracing::warn!(session_id = %session_id, error = %err, "could not mark the session failed");
+    }
+    deps.events.failed(&session_id.to_string()).await;
+}
+
+/// Scores a session within its attempt budget (two, then `failed`) and stores the report. Every attempt is
+/// ledgered first, so a crash, a store error or a restart never buys more than two model runs.
 pub async fn score_session(deps: &ScoringDeps, session_id: Uuid) -> anyhow::Result<Value> {
     let started = Instant::now();
-    let mut last_err = anyhow!("not scored");
-    for attempt in 1..=2 {
-        match score(deps, session_id).await {
+    let mut last_err = anyhow!("no scoring attempt left");
+    while let Some(attempt) = claim_attempt(deps, session_id).await? {
+        let result = score(deps, session_id).await;
+        let calls = match &result {
+            Ok(s) => s.calls.clone(),
+            Err(e) => e
+                .downcast_ref::<report::UsageOnError>()
+                .map(|u| u.0.clone())
+                .unwrap_or_default(),
+        };
+        record_usage(deps, session_id, attempt, &calls).await;
+        let stored = match result {
+            Ok(scored) => store_report(
+                &deps.db,
+                session_id,
+                &scored.report,
+                scored.model_called.then_some(deps.model.as_str()),
+            )
+            .await
+            .map(|_| scored)
+            .map_err(anyhow::Error::from),
+            Err(err) => Err(err),
+        };
+        match stored {
             Ok(scored) => {
-                store_report(
-                    &deps.db,
-                    session_id,
-                    &scored.report,
-                    scored.model_called.then_some(deps.model.as_str()),
-                )
-                .await?;
                 let id = session_id.to_string();
                 deps.events.progress(&id, "done", 100).await;
                 deps.events.ready(&id).await;
                 tracing::info!(
                     session_id = %session_id,
-                    attempt,
                     model_called = scored.model_called,
                     ms = started.elapsed().as_millis() as u64,
                     "report stored"
@@ -684,15 +833,12 @@ pub async fn score_session(deps: &ScoringDeps, session_id: Uuid) -> anyhow::Resu
                 return Ok(scored.report);
             }
             Err(err) => {
-                tracing::warn!(session_id = %session_id, attempt, error = %format!("{err:#}"), "scoring failed");
+                tracing::warn!(session_id = %session_id, error = %format!("{err:#}"), "scoring attempt failed");
                 last_err = err;
             }
         }
     }
-    sqlx::query("update sessions set status = 'failed' where id = $1 and status = 'scoring'")
-        .bind(session_id)
-        .execute(&deps.db)
-        .await?;
+    mark_failed(deps, session_id).await;
     Err(last_err)
 }
 
@@ -734,45 +880,75 @@ fn price(model: &str) -> (f64, f64, f64, f64) {
     }
 }
 
-async fn record_usage(deps: &ScoringDeps, input: &ScoringInput, usage: &Usage) {
-    let (pi, po, pr, pw) = price(&deps.model);
-    let cost = (usage.input_tokens as f64 * pi
-        + usage.output_tokens as f64 * po
-        + usage.cache_read_input_tokens as f64 * pr
-        + usage.cache_creation_input_tokens as f64 * pw)
-        / 1_000_000.0;
-    let session = Uuid::parse_str(&input.session_id).ok();
-    let identity = input
-        .identity_id
-        .as_deref()
-        .and_then(|s| Uuid::parse_str(s).ok());
-    let res = sqlx::query(
-        "insert into usage_events (identity_id, session_id, provider, kind, model, usage_phase, \
-             input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_usd) \
-         values ($1, $2, 'anthropic', 'scoring', $3, $4, $5, $6, $7, $8, ($9::float8)::numeric)",
-    )
-    .bind(identity)
-    .bind(session)
-    .bind(&deps.model)
-    .bind(deps.usage_phase.as_str())
-    .bind(usage.input_tokens as i32)
-    .bind(usage.output_tokens as i32)
-    .bind(usage.cache_read_input_tokens as i32)
-    .bind(usage.cache_creation_input_tokens as i32)
-    .bind(cost)
-    .execute(&deps.db)
-    .await;
-    if let Err(err) = res {
-        tracing::warn!(error = %err, "could not record scoring usage");
-        return;
+fn cost(model: &str, u: &Usage) -> f64 {
+    let (pi, po, pr, pw) = price(model);
+    (u.input_tokens as f64 * pi
+        + u.output_tokens as f64 * po
+        + u.cache_read_input_tokens as f64 * pr
+        + u.cache_creation_input_tokens as f64 * pw)
+        / 1_000_000.0
+}
+
+/// Fills the attempt's ledger row with the main call's usage and adds a row per side call; adds the cost to
+/// the session. Calls that failed before reporting usage cost nothing here.
+async fn record_usage(
+    deps: &ScoringDeps,
+    session_id: Uuid,
+    attempt: i64,
+    calls: &[report::CallUsage],
+) {
+    let mut total = 0.0;
+    for call in calls {
+        let c = cost(&call.model, &call.usage);
+        total += c;
+        let u = &call.usage;
+        let res = if call.kind == "scoring" {
+            sqlx::query(
+                "update usage_events set model = $2, input_tokens = $3, output_tokens = $4, \
+                     cache_read_tokens = $5, cache_write_tokens = $6, cost_usd = ($7::float8)::numeric \
+                 where id = $1",
+            )
+            .bind(attempt)
+            .bind(&call.model)
+            .bind(u.input_tokens as i32)
+            .bind(u.output_tokens as i32)
+            .bind(u.cache_read_input_tokens as i32)
+            .bind(u.cache_creation_input_tokens as i32)
+            .bind(c)
+            .execute(&deps.db)
+            .await
+        } else {
+            sqlx::query(
+                "insert into usage_events (identity_id, session_id, provider, kind, model, usage_phase, \
+                     input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_usd) \
+                 select identity_id, id, 'anthropic', $2, $3, $4, $5, $6, $7, $8, ($9::float8)::numeric \
+                 from sessions where id = $1",
+            )
+            .bind(session_id)
+            .bind(call.kind)
+            .bind(&call.model)
+            .bind(deps.usage_phase.as_str())
+            .bind(u.input_tokens as i32)
+            .bind(u.output_tokens as i32)
+            .bind(u.cache_read_input_tokens as i32)
+            .bind(u.cache_creation_input_tokens as i32)
+            .bind(c)
+            .execute(&deps.db)
+            .await
+        };
+        if let Err(err) = res {
+            tracing::warn!(error = %err, kind = call.kind, "could not record scoring usage");
+        }
     }
-    let _ = sqlx::query(
-        "update sessions set cost_usd = cost_usd + ($2::float8)::numeric where id = $1",
-    )
-    .bind(session)
-    .bind(cost)
-    .execute(&deps.db)
-    .await;
+    if total > 0.0 {
+        let _ = sqlx::query(
+            "update sessions set cost_usd = cost_usd + ($2::float8)::numeric where id = $1",
+        )
+        .bind(session_id)
+        .bind(total)
+        .execute(&deps.db)
+        .await;
+    }
 }
 
 /// Polls for `scoring` sessions without a report and scores each once at a time. Restart safe: a session that
@@ -790,7 +966,9 @@ pub fn spawn_worker(deps: ScoringDeps, every: Duration) -> tokio::task::JoinHand
     })
 }
 
-/// Starts scoring for every queued session not already being scored. Returns how many it started.
+/// Starts scoring for every queued session not already being scored. Returns how many it started. A session
+/// whose attempts are used up is marked `failed` without a model call (no automatic re-score loop); a scoring
+/// task that panics also leaves the session `failed`, with the re-score endpoint as the way back.
 pub async fn run_pending(deps: &ScoringDeps) -> anyhow::Result<usize> {
     let ids: Vec<Uuid> = sqlx::query_scalar(
         "select s.id from sessions s where s.status = 'scoring' \
@@ -812,7 +990,14 @@ pub async fn run_pending(deps: &ScoringDeps) -> anyhow::Result<usize> {
         started += 1;
         let deps = deps.clone();
         tokio::spawn(async move {
-            let _ = score_session(&deps, id).await;
+            let inner = {
+                let deps = deps.clone();
+                tokio::spawn(async move { score_session(&deps, id).await })
+            };
+            if let Err(join) = inner.await {
+                tracing::error!(session_id = %id, error = %join, "scoring task died");
+                mark_failed(&deps, id).await;
+            }
             deps.in_flight
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
