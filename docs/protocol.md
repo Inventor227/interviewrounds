@@ -22,7 +22,8 @@ JSON; cookie `ir_id` identifies the device/user; all under same origin.
 - `POST /api/sessions/{id}/retry` → `CreateSessionRes` (2-minute re-ask of the weakest moment)
 - `GET /api/me` → `{identity:{kind:"guest"|"user", name?, email?}, sign_in_available, settings, onboarding_done,
   streak:{current, best, today_done}, daily:{round_id, title}, limits, entitlements}`
-- `GET /api/me/history?role=` → `[{session_id, round_id, title, started_at, headline}]`
+- `GET /api/me/history?role=` → `[{session_id, round_id, title, started_at, headline}]` where `started_at` is a date-time
+  and `headline: string` is the session report's `headline.summary`
 - `GET /api/me/skills?role=` → `{competencies:[{id, name, points:[{session_id, at, score}]}]}`
 - `PUT /api/me/settings` `Settings`; `POST /api/me/onboarding-done`; `DELETE /api/me`
 - `POST /api/meetings/prepare` `MeetingSetup` → `{meeting_plan_id, plan:MeetingPlan}`
@@ -45,9 +46,10 @@ JSON; cookie `ir_id` identifies the device/user; all under same origin.
   `panel.hand_over {from, to, opening_line}`, `board.ack {op_id, rev}`, `board.ghosts {ghosts:[GhostOp]}`,
   `board.apply {op_id, rev, src, op, args}` (server-originated ops), `avatar.point_at {panelist_id, item_id}`,
   `round.ending {closing_line}`, `round.ended {reason}`, `report.progress {stage:"metrics"|"scoring"|"done", pct}`,
-  `report.ready {session_id}`, `error {code, message}`, `pong`
+  `report.ready {session_id}`, `error {code, message, op_id?}` (`op_id` set for `op_rejected`), `pong`
 - Marker texts the browser sends into the voice session as a typed user turn: `[event: start]`, `[event: time_check]`,
-  `[event: handover]`, `[event: resume]`, `[event: silence_check]`, `[event: ending]`.
+  `[event: handover]`, `[event: resume]`, `[event: silence_check]`, `[event: ending]`, `[event: long_answer]` (sent when
+  one candidate turn runs past the round's `interrupt_after_seconds`).
 
 ## Types
 
@@ -64,6 +66,9 @@ Defined by schema (mirror them field for field):
 | `Persona` | `content/schema/persona.schema.json` |
 | `Attendee` | `content/schema/attendee.schema.json` |
 | `MeetingTemplate` | `content/schema/meeting-template.schema.json` |
+| `Rubric` | `content/schema/rubric.schema.json` |
+| `QuestionBank` | `content/schema/bank.schema.json` |
+| `Voices` (`content/voices.json`) | `content/schema/voices.schema.json` |
 | `Settings` | `content/schema/settings.schema.json` |
 | `MeetingSetup` | `content/schema/meeting-setup.schema.json` |
 | `MeetingPlan` (server side, with `attendees[].hidden`) | `content/schema/meeting-plan.schema.json` |
@@ -78,6 +83,8 @@ Derived from the schemas (the server strips prompt-only fields before sending):
   `silence_wait_seconds` and `interrupt_after_seconds`.
 - `PersonaPublic {id, display_name, title, avatar_id, style}`.
 
+- Meetings the user chairs (`user_chairs: true` on the template and the plan, e.g. a performance review where the user is
+  the manager): `chair_attendee` is `null` and no AI attendee chairs; otherwise `chair_attendee` names the chair.
 - `MeetingPlanPublic`: what `POST /api/meetings/prepare` returns as `plan`. It is the `MeetingPlan` with every
   `attendees[].hidden` block removed (stance, concerns, patience, persona, avatar and voice stay on the server). The
   suggested objections the setup page shows are in each attendee's `likely_objections`, which stays.
@@ -96,6 +103,12 @@ Validating with Ajv: use draft 2020-12 (`ajv/dist/2020`) with `allowUnionTypes: 
 - Persona `style` is one of `warm`, `neutral`, `tough`. Sam (described as warm-neutral) is `warm`.
 - Attendee `personality` is one of `supportive`, `neutral`, `skeptical`, `hostile`. Map other words: impatient →
   `skeptical`; defensive → `skeptical`; friendly but firm → `neutral`.
+- Report `session.difficulty` (easy, standard, hard) comes from the session's `style`: warm → `easy`, neutral →
+  `standard`, tough → `hard`. Meeting sessions map their `MeetingSetup.difficulty`: friendly → `easy`, realistic →
+  `standard`, tough → `hard`.
+- Report `session.seniority` is the session's `level` (junior, mid, senior, staff); meeting sessions use `n/a`.
+- Report `session.role` is the round's `role` (`none` for meetings).
+- Report `round_details.template` is `MeetingSetup.template_id`, with `null` → `"custom"`.
 
 ## Board ops
 
@@ -107,8 +120,11 @@ the same rules, pinned by `content/fixtures/board-ops/*.json`.
 1. **Duplicate**: if `op_id` is already in `board.op_ids`, nothing changes (no rev change, no error). Replays after a
    reconnect are safe.
 2. **Reject**: if the args do not match the schema, or the rules below reject the op, nothing changes: `rev` and `op_ids`
-   stay as they were. The server logs it with `accepted: false` and answers `error {code: "op_rejected", message, op_id}`.
-   The Rust apply returns `Err`; the TypeScript `applyOp` returns the board unchanged.
+   stay as they were. The only exception: a pending ghost with the same `op_id` is dropped (a ghost that cannot be applied
+   is never retried). The server logs the op with `accepted: false` (schema-invalid args and unknown op names included;
+   an op without a usable `op_id` or `src` is answered but not logged) and answers
+   `error {code: "op_rejected", message, op_id}`. The Rust apply returns `Err`; the TypeScript `applyOp` returns the board
+   unchanged.
 3. **Commit**: apply the effect, then `rev += 1`, append `op_id` to `op_ids`, and remove the ghost with the same `op_id`
    if there is one. The server answers the sender with `board.ack {op_id, rev}` and sends `board.apply` to other clients.
 4. `rev_base` is informational: ops are applied in arrival order whatever their `rev_base`.
@@ -141,9 +157,10 @@ the same rules, pinned by `content/fixtures/board-ops/*.json`.
 | `code.edit` | `{id, text}` | Sets the line's `text` (unknown line) |
 | `code.move` | `{id, after}` | Takes the line out and inserts it after `after` (`null` = first) (unknown line; `after == id`) |
 | `code.indent` | `{id, delta}` | `indent = clamp(indent + delta, 0, 6)` (unknown line) |
-| `code.delete` | `{id}` | Removes the line (unknown line) |
+| `code.delete` | `{id}` | Removes the line; `trace` entries that name it stay (unknown line) |
 | `code.complexity` | `{slot, value}` | Sets `complexity.time` or `complexity.space` (no `code`) |
 | `code.trace` | `{line, t}` | Appends `{line, t}` to `trace` (unknown line) |
+| `code.approach` | `{lines}` (≤ 6, each ≤ 120 chars) | Replaces `code.approach` with `lines` (no `code`) |
 | `agenda.check` | `{id, done, t}` | Sets `done`; `t` = args `t` when done, else `null` (no `meeting`; unknown item) |
 | `present.show` | `{kind, ref, t}` | Appends to `meeting.shown` (no `meeting`) |
 | `park.add` | `{text}` | Appends to `meeting.parked` (no `meeting`) |
@@ -152,10 +169,19 @@ the same rules, pinned by `content/fixtures/board-ops/*.json`.
 All ops that touch `code` are rejected when `board.code` is `null`; all meeting ops when `board.meeting` is `null`.
 
 **Undo** needs the op log, so `applyOp(board, op)` alone rejects it; the owner of the log (`BoardStore` on the client,
-the session on the server) handles it: rebuild the board by replaying the accepted ops from the round's start board,
-skipping the target (ops that then fail, such as an edge to an undone item, are dropped), then set `rev` to the previous
-rev + 1 and `op_ids` to the previous `op_ids` plus the undo's `op_id`. Rejected when the target was not accepted, was
-already undone, or is itself an undo.
+the session on the server) handles it:
+
+1. Reject (board unchanged) when the target is not an accepted entry of the log, is itself an undo, or is already the
+   target of an accepted undo.
+2. Rebuild the board from the round's start board by replaying, in log order, every accepted op **except undo ops and
+   every op targeted by an accepted undo (including this one)**. Ops that now fail (for example an edge to an undone
+   item) are dropped from the result.
+3. Keep the current `ghosts`, minus any whose `op_id` is now in `op_ids`. Keep the current `focus` unless its item no
+   longer exists, then `null`.
+4. Set `rev` to the current rev + 1 and `op_ids` to the current `op_ids` plus the undo's `op_id` (undone and dropped op
+   ids stay, so their replays are still ignored).
+
+Pinned by `content/fixtures/board-undo/*.json`.
 
 ### Ghosts
 
@@ -179,3 +205,8 @@ rev after the op. Duplicates are not logged twice.
 Each `content/fixtures/board-ops/*.json` is `{name, start, ops, expected}`: apply `ops` to `start` in order (rejected ops
 change nothing); the result must equal `expected`. TypeScript compares parsed JSON with deep equality (array order
 matters, key order does not). Rust compares typed values, where an absent optional field and `null` are both `None`.
+
+Each `content/fixtures/board-undo/*.json` is `{name, start, log, undo, expected}` (`$defs/undo_fixture`). The current
+board is `start` with the `log` replayed in order: accepted entries are applied (undo entries by the undo rule above);
+an entry with `accepted: false` changes nothing except dropping a pending ghost with the same `op_id` (that is how a
+dismissed ghost appears in the log). Apply `undo` to the current board; the result must equal `expected`.
