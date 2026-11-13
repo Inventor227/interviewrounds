@@ -104,6 +104,15 @@ describe('StrokeBuilder', () => {
     expect(hand.points().length).toBeGreaterThanOrEqual(2);
   });
 
+  it('fits a very long scribble into the server limit of 5000 points', () => {
+    const b = new StrokeBuilder('mouse');
+    const r = rng(4);
+    for (let i = 0; i < 20000; i++) b.add(5 + (i % 400) * 0.1 + r(), 5 + Math.floor(i / 400) * 0.6 + r(), i * 8);
+    const pts = b.inkPoints();
+    expect(pts.length).toBeLessThanOrEqual(5000);
+    expect(pts.length).toBeGreaterThan(100);
+  });
+
   it('rounds stored ink points to 1 decimal', () => {
     const b = new StrokeBuilder('mouse');
     b.add(1.234, 2.345, 0);

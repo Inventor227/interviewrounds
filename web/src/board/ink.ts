@@ -1,5 +1,6 @@
 // Ink: smoothing and simplifying hand strokes so jitter never makes a mark.
 import type { Pt } from './model';
+import { MAX_INK_POINTS } from './validate';
 
 /**
  * One Euro filter (Casiez et al. 2012) for one coordinate. Defaults are for metres and
@@ -166,9 +167,19 @@ export class StrokeBuilder {
     return pts.map((p) => [p.x, p.y]);
   }
 
-  /** Simplified and rounded, ready for an ink item (at least 2 points). */
-  inkPoints(epsCm = 0.15): Pt[] {
-    const pts = simplify(this.points(), epsCm).map(([x, y]) => [round1(x), round1(y)] as Pt);
+  /**
+   * Simplified and rounded, ready for an ink item: at least 2 points, and at most
+   * MAX_INK_POINTS (a very long scribble is simplified harder until it fits).
+   */
+  inkPoints(epsCm = 0.15, maxPoints = MAX_INK_POINTS): Pt[] {
+    const raw = this.points();
+    let eps = epsCm;
+    let simple = simplify(raw, eps);
+    while (simple.length > maxPoints) {
+      eps *= 2;
+      simple = simplify(raw, eps);
+    }
+    const pts = simple.map(([x, y]) => [round1(x), round1(y)] as Pt);
     const dedup: Pt[] = [];
     for (const p of pts) {
       const last = dedup[dedup.length - 1];

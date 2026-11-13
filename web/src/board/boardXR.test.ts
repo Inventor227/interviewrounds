@@ -15,7 +15,9 @@ function setup(dominantHand: 'left' | 'right' = 'right') {
   const sent: BoardOp[] = [];
   const rejected: string[] = [];
   const sounds: SfxName[] = [];
+  const focus: (string | null)[] = [];
   const xr = createBoardXR(port, {
+    sendFocus: (id) => focus.push(id),
     store,
     dominantHand,
     send: (op) => sent.push(op),
@@ -24,7 +26,7 @@ function setup(dominantHand: 'left' | 'right' = 'right') {
     makeCanvas: stubCanvas,
   });
   port.frame();
-  return { port, store, sent, rejected, sounds, xr };
+  return { port, store, sent, rejected, sounds, xr, focus };
 }
 
 const step = (pts: [number, number][], n = 0.35) => along(pts, n);
@@ -140,6 +142,23 @@ describe('board in XR', () => {
     // One upload for the committed ink item; the stroke itself went to the gesture mesh.
     expect(xr.sheet.stats.boardUploads - before).toBe(1);
     expect(xr.sheet.stats.gestureUploads).toBeGreaterThan(10);
+  });
+
+  it('sends board.focus once the touched or created card has held for 300 ms', () => {
+    const { port, store, focus } = setup();
+    port.pinchStroke('right', roughBox(8, 8, 10, 6, 0.4, 2));
+    const id = store.board.items[0]!.id;
+    for (let i = 0; i < 25; i++) port.frame();
+    expect(focus).toEqual([id]);
+    // A tap on empty sheet clears it; a quick change back and forth sends only where it ends up.
+    port.pinchStroke('right', [[50, 35]]);
+    for (let i = 0; i < 25; i++) port.frame();
+    expect(focus).toEqual([id, null]);
+    store.setFocus(id, port.now);
+    port.frame();
+    store.setFocus(null, port.now);
+    for (let i = 0; i < 25; i++) port.frame();
+    expect(focus).toEqual([id, null]);
   });
 
   it('stops on destroy', () => {

@@ -7,6 +7,7 @@ import type { BoardOp } from '../shared/types';
 import { GhostLayer } from './ghosts';
 import { VOICE_FOCUS_MS, voiceLabel, type VoiceLabel } from './grammar';
 import { HandAdapter } from './hand';
+import { MAX_TEXT_CHARS } from './validate';
 import { BoardInput } from './input';
 import { HLD_KIT, type Kit } from './kits';
 import { IdGen } from './model';
@@ -26,6 +27,8 @@ export interface BoardXROptions {
   send(op: BoardOp): void;
   /** board.ghost_reject to the server (Scribe ghosts only; local suggestions stay local). */
   sendGhostReject(opId: string): void;
+  /** board.focus {item_id}: the item last touched or created, debounced (the Scribe resolves "that" with it). */
+  sendFocus?(itemId: string | null): void;
   sfx?: Sfx;
   makeCanvas?: MakeCanvas;
   ids?: IdGen;
@@ -62,6 +65,12 @@ export function sfxForOp(op: BoardOp): SfxName | null {
       return null;
   }
 }
+
+/** board.focus is sent once the focus has held this long (ms). */
+export const FOCUS_DEBOUNCE_MS = 300;
+
+/** At most the server's text limit, by characters. */
+const clampText = (t: string) => [...t].slice(0, MAX_TEXT_CHARS).join('');
 
 export function createBoardXR(port: BoardXRPort, opts: BoardXROptions): BoardXR {
   const { store } = opts;
@@ -105,8 +114,26 @@ export function createBoardXR(port: BoardXRPort, opts: BoardXROptions): BoardXR 
   port.sheetAnchor.add(sheet.group);
   port.wallboardTexture?.(sheet.texture);
 
+  // board.focus: on every change of the focus item, sent once it has held FOCUS_DEBOUNCE_MS.
+  // The starting focus is what the server already has.
+  let sentFocus: string | null = store.board.focus;
+  let focusChangedAt = 0;
+  let lastFocus = store.board.focus;
+  const offFocus = store.onChange((b) => {
+    if (b.focus !== lastFocus) {
+      lastFocus = b.focus;
+      focusChangedAt = clock;
+    }
+  });
+  const flushFocus = (t: number) => {
+    if (!opts.sendFocus || lastFocus === sentFocus || t - focusChangedAt < FOCUS_DEBOUNCE_MS) return;
+    sentFocus = lastFocus;
+    opts.sendFocus(lastFocus);
+  };
+
   let shown = false;
   const offFrame = port.onFrame((_dt, t) => {
+    flushFocus(t);
     const placed = port.desk() !== null;
     if (placed && !shown) {
       shown = true;
@@ -126,7 +153,7 @@ export function createBoardXR(port: BoardXRPort, opts: BoardXROptions): BoardXR 
     say(text, t = clock) {
       const hit = voiceLabel(store.board, text, store.freshFocus(t, VOICE_FOCUS_MS));
       if (!hit) return null;
-      const args = { id: hit.id, text: hit.label };
+      const args = { id: hit.id, text: clampText(hit.label) };
       if (hit.mode === 'commit') commit({ op_id: ids.next('op'), src: 'voice_grammar', op: 'item.label', args });
       else store.suggest({ op_id: ids.next('op'), src: 'scribe', op: 'item.label', args });
       return hit;
@@ -134,6 +161,7 @@ export function createBoardXR(port: BoardXRPort, opts: BoardXROptions): BoardXR 
     destroy() {
       offFrame();
       offClock();
+      offFocus();
       input.destroy();
       ghosts.destroy();
       hands.destroy();
