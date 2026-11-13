@@ -61,7 +61,7 @@ await shot('brief-longest-and-hands-lost');
 await page(() => {
   const app = globalThis.__xrApp;
   app.ui.layoutHint(app.headPose());
-  app.ui.showHint('Put your controllers down: your hands do everything', performance.now(), 120000);
+  app.ui.showHint("Can't see your hands. Raise them into view.", performance.now(), 120000);
 });
 await sleep(700);
 await shot('hint-controllers');

@@ -128,9 +128,6 @@ export interface XRApp {
   stats(): RenderStats;
 }
 
-/** Shown once per session when controllers are seen (Meta hands onboarding: tell users to put them away). */
-export const CONTROLLERS_LINE = 'Put your controllers down: your hands do everything';
-
 const TIPS = ['thumb-tip', 'index-finger-tip', 'middle-finger-tip', 'ring-finger-tip', 'pinky-finger-tip'] as const;
 
 type FrameCb = (dt: number, nowMs: number) => void;
@@ -306,7 +303,7 @@ export async function createXRApp(root: HTMLElement, opts: XRAppOptions): Promis
     if (controllers && !controllersHinted) {
       controllersHinted = true;
       ui.layoutHint(headPose());
-      ui.showHint(CONTROLLERS_LINE, now, 7000);
+      ui.showHint('Put your controllers down; use your hands', now, 7000);
     }
     // In a placed room with no hand and no controller in view for 5 s: one calm line, once.
     if (handsLost.update(now, left.tracked || right.tracked || controllers) && desk$.value) {

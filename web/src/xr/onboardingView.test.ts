@@ -32,7 +32,11 @@ describe('the onboarding ghost hand', () => {
   });
 
   it('the_copy_is_short_and_the_hand_shows_only_for_the_box', () => {
-    for (const line of [...Object.values(ONBOARD_COPY), ONBOARD_SKIP]) expect(line.split(' ').length).toBeLessThanOrEqual(5);
+    for (const line of [...Object.values(ONBOARD_COPY.hands), ...Object.values(ONBOARD_COPY.controllers), ONBOARD_SKIP]) expect(line.split(' ').length).toBeLessThanOrEqual(7);
+    expect(ONBOARD_COPY.hands.box).toBe('Pinch and draw a box');
+    expect(ONBOARD_COPY.controllers.box).toBe('Pull the trigger and draw a box');
+    // Nothing here tells anyone to put a controller down.
+    expect(JSON.stringify(ONBOARD_COPY)).not.toMatch(/put .*down/i);
     let skipped = 0;
     const v = new OnboardingView(() => skipped++);
     expect(v.group.visible).toBe(false);

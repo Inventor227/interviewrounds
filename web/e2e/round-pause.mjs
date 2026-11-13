@@ -15,7 +15,7 @@ const L = await import('./round-lib.mjs');
 const { answer, click, enterFromTap, fail, go, look, page, placeDesk, recordRound, roundState, save, setupTab, shot, skipOnboarding, sleep, stage, until, waitState } = L;
 
 const S = L.SETUPS[process.env.EMU_ROOM ?? 'home_office'] ?? L.SETUPS.home_office;
-const LONG_PAUSE_S = Number(process.env.LONG_PAUSE_S ?? 52);
+const LONG_PAUSE_S = Number(process.env.LONG_PAUSE_S ?? 50);
 
 /** XRSession visibility through the emulator's device (what the Quest does for the system menu and the proximity sensor). */
 const visibility = (v) =>
@@ -58,17 +58,28 @@ await page(() => {
   rec.notices = [];
   globalThis.__round.controller.on('notice', (n) => rec.notices.push({ n, at: Date.now(), state: globalThis.__round.controller.state }));
 });
+// The headset comes off at the interviewer's first words: armed in the page, so it lands inside the greeting however
+// slowly the emulator turns.
+const armed = await page(() => {
+  const d = globalThis.IWER_DEVICE ?? globalThis.parent?.IWER_DEVICE;
+  if (!d?.updateVisibilityState) return { error: 'no emulator device on the page' };
+  const c = globalThis.__round.controller;
+  const off = c.on('transcript', (l) => {
+    if (l.role !== 'agent') return;
+    off();
+    globalThis.__rec.cut = { state: c.state, text: l.text };
+    d.updateVisibilityState('hidden');
+  });
+  return { armed: true };
+});
+if (armed?.error) await fail('cannot set the session visibility', armed);
 await placeDesk(S, '00-placing');
-await skipOnboarding();
 
 // ---- 1. the headset comes off during the greeting ----
-await until('the greeting', () => ['greeting', 'live'].includes(globalThis.__round.controller.state));
-const v1 = await visibility('hidden');
-if (v1?.error) await fail('cannot set the session visibility', v1);
 await expectCard('paused in the greeting (headset off)', { state: 'paused', notice: 'paused' });
-const greetingCut = await page(() => ({ states: globalThis.__rec.states, lines: globalThis.__rec.lines.length }));
+const greetingCut = await page(() => ({ states: globalThis.__rec.states, cut: globalThis.__rec.cut, lines: globalThis.__rec.lines.map((l) => l.text) }));
 stage('greeting cut', greetingCut);
-if (!greetingCut.states.includes('greeting') || greetingCut.states.includes('live')) console.error('WARNING: the pause did not land inside the greeting', greetingCut.states);
+if (greetingCut.cut?.state !== 'greeting') console.error('WARNING: the pause did not land inside the greeting', greetingCut);
 await sleep(4000);
 await visibility('visible');
 await expectCard('welcome back, still paused', { state: 'paused', notice: 'welcome_back' });
@@ -132,7 +143,32 @@ stage('welcome back line', { lines: (await agentLines()).slice(-1) });
 await look(S, -14);
 await shot('05-long-pause-resumed');
 const r3 = await answer('Yes. I would put a cache in front of the key value store for the reads.');
-stage('an answer after the reconnect', r3);
+stage('an answer after the long pause', r3);
+
+// ---- 3b. new voices: the path a released (or lost) voice takes ----
+// The typed-turn voice has no voice session for the server to release, so the release is stood in for here: the
+// controller is told its voices are gone, and Resume then runs the real thing against the server: POST /resume on a
+// paused round, the room socket again under the new token, then the welcome back.
+await press('pause');
+await expectCard('paused before the reconnect', { state: 'paused', notice: 'paused' });
+const tokenBefore = await page(() => {
+  globalThis.__round.controller.voicesGone = true;
+  return globalThis.__round.session.client_token.slice(0, 6);
+});
+const reconnectAt = Date.now();
+await press('resume');
+await waitState(['live'], 60000);
+const re = await page((t0) => {
+  const rec = globalThis.__rec;
+  return { notices: rec.notices.filter((x) => x.at >= t0 - 200).map((x) => ({ n: x.n, ms: x.at - t0 })), newToken: globalThis.__round.session.client_token.slice(0, 6), errors: rec.errors };
+}, reconnectAt);
+stage('resumed with new voices', { ms: Date.now() - reconnectAt, tokenChanged: re.newToken !== tokenBefore, ...re });
+if (!re.notices.some((x) => x.n === 'reconnecting') || re.newToken === tokenBefore) await fail('Resume did not get new voices', re);
+await sleep(9000);
+stage('welcome back after the reconnect', { lines: (await agentLines()).slice(-1) });
+const r4 = await answer('The seat state lives in the store, with a short hold while a fan pays.');
+stage('an answer after the reconnect', r4);
+if (r4.ended) await fail('the round ended after the reconnect', r4);
 
 // ---- 4. the system ends the headset session: the page holds the way back ----
 await page(() => void globalThis.__xrApp.world.session.end());

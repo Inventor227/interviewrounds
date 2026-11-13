@@ -9,11 +9,13 @@ import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js
 import { button, panel, set, show, text, type Button } from './ui/style';
 
 export type OnboardViewStep = 'box' | 'name';
+/** What the user draws with right now. The input lane provides the live value (`activeInput`, `onInputChange`). */
+export type ActiveInput = 'hands' | 'controllers';
 
-/** The lines of the two steps (short on purpose: the hand does the teaching). */
-export const ONBOARD_COPY: Record<OnboardViewStep, string> = {
-  box: 'Pinch and draw a box',
-  name: 'Say its name',
+/** The lines of the two steps per input (short on purpose: the ghost does the teaching). */
+export const ONBOARD_COPY: Record<ActiveInput, Record<OnboardViewStep, string>> = {
+  hands: { box: 'Pinch and draw a box', name: 'Say its name' },
+  controllers: { box: 'Pull the trigger and draw a box', name: 'Say its name' },
 };
 export const ONBOARD_SKIP = 'Skip';
 
@@ -101,6 +103,7 @@ export class OnboardingView {
   private readonly line;
   private readonly skip: Button;
   private step: OnboardViewStep | null = null;
+  private input: ActiveInput = 'hands';
   private t0 = 0;
 
   constructor(onSkip: () => void) {
@@ -141,8 +144,19 @@ export class OnboardingView {
     this.t0 = nowMs;
     this.group.visible = step !== null;
     this.hand.visible = this.stroke.visible = step === 'box';
-    if (step) set(this.line, { text: ONBOARD_COPY[step] });
+    if (step) set(this.line, { text: ONBOARD_COPY[this.input][step] });
     show(this.skip.root, step === 'box');
+  }
+
+  /**
+   * Hands or controllers: the line follows at once.
+   * CONTROLLER VARIANT: the ghost is the pinching hand for both today. A ghost controller (trigger pulled, the same
+   * box path from demoAt) belongs here, swapped in for `this.hand` when input is 'controllers'.
+   */
+  setInput(input: ActiveInput): void {
+    if (input === this.input) return;
+    this.input = input;
+    if (this.step) set(this.line, { text: ONBOARD_COPY[input][this.step] });
   }
 
   get showing(): OnboardViewStep | null {

@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest';
 import { HLD_KIT } from './kits';
 import { SHEET } from './model';
 import { DeskPlacement } from '../xr/placement';
-import { CONTROLLERS_LINE } from '../xr/world';
 import { dominantFor, kitFor } from './tray';
 
 describe('kitFor', () => {
@@ -56,9 +55,5 @@ describe('the dominant hand of a round', () => {
     expect(fallback.hand).toBeUndefined();
     expect(dominantFor(fallback.hand, 'left')).toBe('left');
     expect(dominantFor(undefined, undefined)).toBe('right');
-  });
-
-  it('the_controllers_line_is_one_short_line', () => {
-    expect(CONTROLLERS_LINE).toBe('Put your controllers down: your hands do everything');
   });
 });

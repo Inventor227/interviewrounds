@@ -440,9 +440,13 @@ export function createRoundRuntime({ preview }: RuntimeOptions): RoundController
         a.sounds.click();
         for (const cb of [...skips]) cb();
       });
+      // The input lane's `activeInput()` and `onInputChange` once they exist on the app; hands until then.
+      const input = a as unknown as { activeInput?: () => 'hands' | 'controllers'; onInputChange?: (cb: (i: 'hands' | 'controllers') => void) => () => void };
+      view.setInput(input.activeInput?.() ?? 'hands');
       cleanups.push(
         mountOnboardingView(a.world, a.sheetAnchor, view),
         a.onFrame((_dt, t) => view.update(t)),
+        input.onInputChange?.((i) => view.setInput(i)) ?? (() => undefined),
       );
       onboarding = new Onboarding({
         cards: () => s.board.items.filter((i) => i.kind !== 'ink').map((i) => ({ id: i.id, labelled: !!((i as { label?: string | null }).label ?? (i as { text?: string | null }).text) })),
