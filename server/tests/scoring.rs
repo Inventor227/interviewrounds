@@ -24,7 +24,7 @@ use ir_server::orchestrator::{LlmApi, Mode};
 use ir_server::scoring::metrics::{self, HeadSample, HintRec, MarkRec, MetricsContext, TurnRec};
 use ir_server::scoring::report::{self, NOT_ENOUGH_SIGNAL, ReportSchema, ScoreEnv};
 use ir_server::scoring::verdict::{self, Confidence, Length, Verdict};
-use ir_server::scoring::{self, PanelSeat, ReportEvents, ScoringDeps, ScoringInput};
+use ir_server::scoring::{self, BoardOpRec, PanelSeat, ReportEvents, ScoringDeps, ScoringInput};
 use ir_server::{AppState, Config};
 use serde_json::{Value, json};
 use sqlx::PgPool;
@@ -54,6 +54,9 @@ struct ScriptedLlm {
     card: Mutex<Option<String>>,
     meeting: Mutex<Option<String>>,
     panic_main: bool,
+    /// Side calls that never answer.
+    hang_card: bool,
+    hang_meeting: bool,
     requests: Mutex<Vec<MessagesRequest>>,
 }
 
@@ -94,6 +97,14 @@ impl ScriptedLlm {
             .unwrap()
             .iter()
             .filter(|r| !is_card(r) && !is_meeting(r))
+            .count()
+    }
+    fn card_calls(&self) -> usize {
+        self.requests
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|r| is_card(r))
             .count()
     }
     fn all_calls(&self) -> usize {
@@ -154,6 +165,9 @@ impl LlmApi for ScriptedLlm {
         } else {
             None
         };
+        if (self.hang_card && is_card(req)) || (self.hang_meeting && is_meeting(req)) {
+            return Ok(Box::pin(stream::pending()));
+        }
         if let Some(reply) = side {
             return reply
                 .map(stream_of)
@@ -393,6 +407,9 @@ impl Env {
             max_tokens: 16_000,
             card_model: "claude-sonnet-5-5",
             timeout: Duration::from_secs(10),
+            card_timeout: report::CARD_TIMEOUT,
+            meeting_timeout: report::MEETING_TIMEOUT,
+            side_grace: report::SIDE_GRACE,
             events: &self.events,
         }
     }
@@ -909,6 +926,10 @@ fn quotes_must_be_verbatim_and_in_order() {
     // Whole words only: "no" is not inside "know".
     assert_eq!(report::find_quote("I no the limits", line), None);
     assert_eq!(report::find_quote("", line), None);
+    // At most three pieces, and no long jumps between them.
+    assert_eq!(report::find_quote("I ... did ... not ... use", line), None);
+    let long = format!("start {} end", vec!["word"; 50].join(" "));
+    assert_eq!(report::find_quote("start ... end", &long), None);
     assert_eq!(
         report::find_quote("don't", "I dont think so"),
         Some("dont".to_string())
@@ -1080,6 +1101,234 @@ async fn meeting_reactions_come_from_a_second_call() {
     );
 }
 
+fn card_reply() -> Value {
+    json!({
+        "one_line": "You designed around double selling; the scale answer stayed vague.",
+        "top_strength": { "title": "Named the hardest requirement", "segment_id": "s2",
+                          "quote": "the hardest requirement is never selling one seat twice" },
+        "top_fix": { "title": "Name the first bottleneck", "segment_id": "s6",
+                     "quote": "I would just add more servers" }
+    })
+}
+
+#[tokio::test]
+async fn card_is_sent_once_per_run_and_kept_across_attempts() {
+    let env = Env::new();
+    let llm = ScriptedLlm::with_side(
+        vec![Ok("{\"headline\": ".into()), Ok(model_output().to_string())],
+        Some(card_reply()),
+        None,
+    );
+    let slot = report::CardSlot::default();
+    let input = design_input();
+    let senv = env.score_env(llm.as_ref());
+    let first = report::score_with_card(&senv, &input, &slot).await;
+    let err = first.expect_err("bad JSON fails the first attempt");
+    let paid = err
+        .downcast_ref::<report::UsageOnError>()
+        .expect("usage travels with the error");
+    assert_eq!(paid.0.len(), 1);
+    assert_eq!(paid.0[0].kind, "scoring_card");
+
+    let second = report::score_with_card(&senv, &input, &slot).await.unwrap();
+    assert_eq!(llm.card_calls(), 1, "one card call per run");
+    assert!(
+        second.calls.iter().all(|c| c.kind != "scoring_card"),
+        "ledgered once"
+    );
+    let cards = env.events.1.lock().unwrap().clone();
+    assert_eq!(cards.len(), 1, "one card event");
+    // The final report carries the same c1 and c2 the headset showed.
+    for (pick, id) in [("top_strength", "c1"), ("top_fix", "c2")] {
+        let e = second.report["evidence"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|e| e["id"] == id)
+            .unwrap();
+        assert_eq!(cards[0][pick]["evidence_id"], id);
+        assert_eq!(e["quote"], cards[0][pick]["quote"]);
+        assert_eq!(e["t_start_sec"], cards[0][pick]["t_start_sec"]);
+    }
+}
+
+#[tokio::test]
+async fn card_ids_win_over_a_colliding_main_item() {
+    let env = Env::new();
+    let mut out = model_output();
+    // The main call used the id c1 for its architecture quote.
+    out["evidence"][1]["id"] = json!("c1");
+    out["competencies"][1]["evidence_ids"] = json!(["c1"]);
+    out["competencies"][2]["evidence_ids"] = json!(["c1"]);
+    let llm = ScriptedLlm::with_side(vec![Ok(out.to_string())], Some(card_reply()), None);
+    let r = report::score(&env.score_env(llm.as_ref()), &design_input())
+        .await
+        .unwrap()
+        .report;
+    assert!(
+        env.schema.errors(&r).is_empty(),
+        "{:?}",
+        env.schema.errors(&r)
+    );
+    let ev = r["evidence"].as_array().unwrap();
+    let c1 = ev.iter().find(|e| e["id"] == "c1").unwrap();
+    assert_eq!(
+        c1["quote"], "The hardest requirement is never selling one seat twice",
+        "the card's c1"
+    );
+    let renamed = competency(&r, "architecture")["evidence_ids"][0]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert_ne!(renamed, "c1");
+    let moved = ev.iter().find(|e| e["id"] == renamed.as_str()).unwrap();
+    assert_eq!(
+        moved["quote"],
+        "holds a seat for eight minutes with a conditional write in Postgres"
+    );
+    assert_eq!(
+        competency(&r, "tradeoffs")["evidence_ids"],
+        json!([renamed])
+    );
+}
+
+#[tokio::test]
+async fn stalled_side_calls_never_hold_the_report() {
+    let env = Env::new();
+    let mut input = design_input();
+    input.mode = "meeting".into();
+    input.round_id = "meeting.full".into();
+    input.meeting_template = Some("exec_update".into());
+    let mut out = model_output();
+    for (i, id) in ["clarity", "objections", "evidence", "outcome"]
+        .iter()
+        .enumerate()
+    {
+        out["competencies"][i]["id"] = json!(id);
+    }
+    out["round_details"] = json!({ "kind": "meeting", "goal": "Launch approved", "outcome": "need_more_info",
+                                   "goal_reached": "partly", "decision_quote_id": "", "ask_made": true });
+    let llm = Arc::new(ScriptedLlm {
+        replies: Mutex::new(VecDeque::from([Ok(out.to_string())])),
+        hang_card: true,
+        hang_meeting: true,
+        ..ScriptedLlm::default()
+    });
+    let mut senv = env.score_env(llm.as_ref());
+    senv.side_grace = Duration::from_millis(300);
+    let t = Instant::now();
+    let r = report::score(&senv, &input).await.unwrap().report;
+    assert!(
+        t.elapsed() < Duration::from_secs(3),
+        "waited {:?}",
+        t.elapsed()
+    );
+    assert!(env.schema.errors(&r).is_empty());
+    assert_eq!(
+        r["round_details"]["outcome"], "need_more_info",
+        "the main result is kept"
+    );
+    assert!(r["round_details"].get("attendees").is_none());
+    assert!(env.events.1.lock().unwrap().is_empty(), "no card");
+
+    // The card has its own short timeout even while the main call is still running.
+    let llm = Arc::new(ScriptedLlm {
+        replies: Mutex::new(VecDeque::from([Ok(model_output().to_string())])),
+        hang_card: true,
+        ..ScriptedLlm::default()
+    });
+    let mut senv = env.score_env(llm.as_ref());
+    senv.side_grace = Duration::from_secs(30);
+    senv.card_timeout = Duration::from_millis(200);
+    let t = Instant::now();
+    report::score(&senv, &design_input()).await.unwrap();
+    assert!(
+        t.elapsed() < Duration::from_secs(3),
+        "waited {:?}",
+        t.elapsed()
+    );
+}
+
+#[tokio::test]
+async fn board_quotes_count_only_when_the_candidate_wrote_them() {
+    let env = Env::new();
+    let mut input = design_input();
+    input.board_text = Some("Waiting room queue. Rate limiter. Seat service.".into());
+    input.board_ops = vec![
+        BoardOpRec {
+            src: "user".into(),
+            op: "item.create".into(),
+            args: json!({"label": "Waiting room queue"}),
+            t_ms: Some(150_000),
+            accepted: Some(true),
+        },
+        BoardOpRec {
+            src: "interviewer".into(),
+            op: "item.create".into(),
+            args: json!({"label": "Rate limiter"}),
+            t_ms: Some(160_000),
+            accepted: Some(true),
+        },
+        BoardOpRec {
+            src: "scribe".into(),
+            op: "item.create".into(),
+            args: json!({"label": "Seat service"}),
+            t_ms: Some(170_000),
+            accepted: Some(false),
+        },
+    ];
+    let mut out = model_output();
+    for (id, quote) in [
+        ("b1", "Waiting room queue"),
+        ("b2", "Rate limiter"),
+        ("b3", "Seat service"),
+    ] {
+        out["evidence"].as_array_mut().unwrap().push(json!({
+            "id": id, "segment_id": "board", "quote": quote, "polarity": "positive",
+            "competency_ids": ["architecture"], "note": ""
+        }));
+    }
+    let llm = ScriptedLlm::new(vec![Ok(out.to_string())]);
+    let r = report::score(&env.score_env(llm.as_ref()), &input)
+        .await
+        .unwrap()
+        .report;
+    let ids: Vec<&str> = r["evidence"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|e| e["id"].as_str())
+        .collect();
+    assert!(ids.contains(&"b1"));
+    assert!(
+        !ids.contains(&"b2"),
+        "the interviewer's box is not the candidate's work"
+    );
+    assert!(
+        !ids.contains(&"b3"),
+        "a dismissed Scribe suggestion is not the candidate's work"
+    );
+    let b1 = r["evidence"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["id"] == "b1")
+        .unwrap();
+    assert_eq!(b1["t_start_sec"], 150.0);
+}
+
+#[test]
+fn card_line_is_cut_at_a_clause_with_an_ellipsis() {
+    let line = "You framed the problem well and designed a safe seat hold path, but your capacity reasoning needed a push to catch hot rows at scale";
+    let cut = report::clip_line(line, 100);
+    assert!(cut.chars().count() <= 100, "{cut}");
+    assert_eq!(
+        cut,
+        "You framed the problem well and designed a safe seat hold path\u{2026}"
+    );
+    assert_eq!(report::clip_line("Short.", 100), "Short.");
+}
+
 #[test]
 fn round_clock_rebases_marks_and_leaves_out_pauses() {
     use ir_server::scoring::clock::{RoundClock, pause_spans};
@@ -1106,11 +1355,8 @@ fn round_clock_rebases_marks_and_leaves_out_pauses() {
     assert_eq!(clock.client_to_round(start + 194_900), 80_000);
     // Already relative values pass through.
     assert_eq!(clock.client_to_round(12_000), 12_000);
-    // An open pause runs to the end.
-    assert_eq!(
-        pause_spans(&[(start + 10, true)], start + 50),
-        vec![(start + 10, start + 50)]
-    );
+    // Ending while paused: the clock ran again for the closing lines, so an open pause does not count.
+    assert_eq!(pause_spans(&[(start + 10, true)], start + 50), vec![]);
 }
 
 #[tokio::test]
@@ -1586,6 +1832,66 @@ async fn attempts_are_capped_and_rescore_is_limited() {
             .unwrap();
         assert_eq!(rescore().await.unwrap().status(), expected);
     }
+}
+
+#[tokio::test]
+async fn one_card_per_run_and_no_empty_ledger_rows() {
+    let _serial = db_lock().lock().await;
+    let db = pool().await;
+    let data = common::temp_dir("data");
+    let kinds = |id: Uuid| {
+        let db = db.clone();
+        async move {
+            let mut k: Vec<String> =
+                sqlx::query_scalar("select kind from usage_events where session_id = $1")
+                    .bind(id)
+                    .fetch_all(&db)
+                    .await
+                    .unwrap();
+            k.sort();
+            k
+        }
+    };
+
+    // The first attempt fails after the card went out; the second reuses that card.
+    let id = insert_session(&db, &long_design_input()).await;
+    let llm = ScriptedLlm::with_side(
+        vec![Ok("{\"headline\": ".into()), Ok(model_output().to_string())],
+        Some(card_reply()),
+        None,
+    );
+    let events = Arc::new(RecordedEvents::default());
+    let d = deps(&db, llm.clone(), &data).with_events(events.clone());
+    let report = scoring::score_session(&d, id).await.unwrap();
+    assert_eq!(llm.card_calls(), 1);
+    let cards = events.1.lock().unwrap().clone();
+    assert_eq!(cards.len(), 1);
+    let c1 = report["evidence"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["id"] == "c1")
+        .unwrap();
+    assert_eq!(c1["quote"], cards[0]["top_strength"]["quote"]);
+    assert_eq!(kinds(id).await, vec!["scoring", "scoring", "scoring_card"]);
+
+    // Not enough signal: scored without a model call, and no ledger row is left behind.
+    let mut short = long_design_input();
+    short.turns.truncate(3);
+    short.turns[2].text = "Just a few words here.".into();
+    let id = insert_session(&db, &short).await;
+    let llm = ScriptedLlm::new(vec![]);
+    let events = Arc::new(RecordedEvents::default());
+    let d = deps(&db, llm.clone(), &data).with_events(events.clone());
+    let report = scoring::score_session(&d, id).await.unwrap();
+    assert_eq!(report["headline"]["summary"], NOT_ENOUGH_SIGNAL);
+    assert_eq!(llm.all_calls(), 0);
+    assert!(kinds(id).await.is_empty());
+
+    // A session already scored is not reported as failed.
+    scoring::mark_failed(&d, id).await;
+    assert_eq!(status(&db, id).await, "scored");
+    assert!(!events.0.lock().unwrap().contains(&"failed".to_string()));
 }
 
 #[tokio::test]

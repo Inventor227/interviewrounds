@@ -78,7 +78,7 @@ impl RoundClock {
     }
 }
 
-/// Paused spans from pause/resume events (server wall time, in order). A pause with no resume runs to `end_ms`.
+/// Paused spans from pause/resume events (server wall time, in order). A pause with no resume is ignored.
 pub fn pause_spans(events: &[(i64, bool)], end_ms: i64) -> Vec<(i64, i64)> {
     let mut spans = Vec::new();
     let mut open: Option<i64> = None;
@@ -92,8 +92,8 @@ pub fn pause_spans(events: &[(i64, bool)], end_ms: i64) -> Vec<(i64, i64)> {
             _ => {}
         }
     }
-    if let Some(a) = open {
-        spans.push((a, end_ms.max(a)));
-    }
+    // A pause never resumed is the round ending while paused: the clock ran again for the closing lines, so
+    // it does not count (`end_ms` is kept for callers that want to cap it).
+    let _ = (open, end_ms);
     spans
 }
