@@ -83,9 +83,29 @@ export interface Button {
   setOn(on: boolean): void;
 }
 
+interface LivePointer {
+  getButtonsDown(): ReadonlySet<number>;
+  getEnabled(): boolean;
+  getIntersection(): { distance: number; object: { isVoidObject?: boolean } } | undefined;
+}
+
 /** The pointer library keeps its live pointers in a page-wide map, by id. */
-function pointerOf(id: number): { getButtonsDown(): ReadonlySet<number> } | undefined {
-  return (globalThis as { pointerEventspointerMap?: Map<number, { getButtonsDown(): ReadonlySet<number> }> }).pointerEventspointerMap?.get(id);
+function pointerOf(id: number): LivePointer | undefined {
+  return (globalThis as { pointerEventspointerMap?: Map<number, LivePointer> }).pointerEventspointerMap?.get(id);
+}
+
+/** A fingertip presses within this of a panel (the touch pointer's down radius, m). */
+const TOUCH_DOWN_M = 0.02;
+
+/**
+ * True when a touch pointer that just left a button has really lifted: it is up, still tracked, and over something
+ * real further out than the press distance. A tracking drop (the pointer is disabled) or the panel going away under
+ * the finger (nothing real under it) also release the press, but nobody lifted: those cancel.
+ */
+function lifted(p: LivePointer | undefined): boolean {
+  if (!p || p.getButtonsDown().size !== 0 || !p.getEnabled()) return false;
+  const hit = p.getIntersection();
+  return !!hit && !hit.object.isVoidObject && hit.distance > TOUCH_DOWN_M;
 }
 
 /**
@@ -129,12 +149,11 @@ export function button(labelText: string, opts: ButtonOpts = {}): Button {
       if (!armed.has(pid)) return;
       // A fingertip lifts off in one move: it is on the button, then well clear of it, where the nearest thing
       // under it may be the panel behind. The library then says "left" and gives the release to the panel. If the
-      // finger is up once that move is done, it was a lift, not a slide: the press counts.
+      // finger is up once that move is done and clear of the panel, it was a lift, not a slide: the press counts.
       if (e?.pointerType === 'touch') {
         queueMicrotask(() => {
           if (!armed.delete(pid)) return;
-          const lifted = pointerOf(pid)?.getButtonsDown().size === 0;
-          if (lifted) {
+          if (lifted(pointerOf(pid))) {
             opts.onUp?.();
             opts.onClick?.();
           } else (opts.onLeave ?? opts.onUp)?.();
