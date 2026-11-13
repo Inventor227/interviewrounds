@@ -117,7 +117,24 @@ async fn create_session_fake_returns_no_fish_token() {
         app.fish_paths("POST").await.is_empty(),
         "no Fish call for the fake voice"
     );
+    // The prompt cache is prewarmed once, and the prewarm is priced into the ledger (2000 cache-write tokens at
+    // $5 per million on the default model).
+    live::eventually("prewarm recorded", Duration::from_secs(3), || async {
+        count(
+            &app,
+            "select count(*) from usage_events where kind = 'prewarm'",
+        )
+        .await
+            == 1
+    })
+    .await;
     assert_eq!(app.llm.prewarms.load(Ordering::SeqCst), 1);
+    let prewarm: f64 =
+        sqlx::query_scalar("select cost_usd::float8 from usage_events where kind = 'prewarm'")
+            .fetch_one(&app.state.db)
+            .await
+            .unwrap();
+    assert!((prewarm - 0.01).abs() < 1e-9, "{prewarm}");
 
     // Stored: created, token hashed, state snapshot for reloads.
     let uuid = Uuid::parse_str(id).unwrap();
@@ -141,6 +158,8 @@ async fn create_session_fake_returns_no_fish_token() {
     assert!(app.state.registry.get(id).is_some());
 
     // The client token drives the custom LLM endpoint on the fake path, and the turn lands in the ledger.
+    app.set_status(id, ir_server::orchestrator::SessionStatus::Live)
+        .await;
     let body = json!({"model": "x", "stream": true,
         "messages": [{"role": "user", "content": "[event: start]"}],
         "fishaudio_extra_body": {"session_id": id, "panelist_id": "p1"}});
@@ -172,12 +191,11 @@ async fn create_session_fake_returns_no_fish_token() {
             == 1
     })
     .await;
-    let cost: f64 = sqlx::query_scalar(
-        "select cost_usd::float8 from usage_events where provider = 'anthropic'",
-    )
-    .fetch_one(&app.state.db)
-    .await
-    .unwrap();
+    let cost: f64 =
+        sqlx::query_scalar("select cost_usd::float8 from usage_events where kind = 'live_turn'")
+            .fetch_one(&app.state.db)
+            .await
+            .unwrap();
     // 1000 in x $4 + 100 out x $20 per million on the default model.
     assert!((cost - 0.006).abs() < 1e-9, "{cost}");
 }
@@ -354,7 +372,7 @@ async fn resume_keeps_state_and_mints_new_tokens() {
         .await
         .unwrap();
     }
-    sqlx::query("update sessions set status = 'live', started_at = now() where id = $1")
+    sqlx::query("update sessions set status = 'live', started_at = now(), last_socket_at = now() where id = $1")
         .bind(uuid)
         .execute(&app.state.db)
         .await
@@ -618,4 +636,498 @@ async fn content_catalog_is_public_and_stripped() {
             .all(|p| p.get("behaviour").is_none() && p.get("voice_id").is_none())
     );
     let _: &Value = &res.body["meeting_templates"];
+}
+
+#[tokio::test]
+async fn fake_voice_needs_the_dev_key() {
+    let app = live::test_app(Options::default()).await;
+    let cookie = app.guest().await;
+    for key in [None, Some("wrong-key")] {
+        let extra: Vec<(&str, &str)> = key.map(|k| ("x-dev-key", k)).into_iter().collect();
+        let res = app
+            .call_with(
+                Method::POST,
+                "/api/sessions",
+                Some(&cookie),
+                Some(short_req("fake")),
+                &extra,
+            )
+            .await;
+        assert_eq!(res.status, StatusCode::FORBIDDEN, "{}", res.body);
+        assert_eq!(res.body["code"], "dev_only");
+    }
+    assert_eq!(count(&app, "select count(*) from sessions").await, 0);
+    assert_eq!(
+        app.create(&cookie, short_req("fake")).await.status,
+        StatusCode::OK
+    );
+}
+
+#[tokio::test]
+async fn llm_turns_only_while_live_and_fake_turns_are_capped() {
+    let app = live::test_app(Options::default()).await;
+    let cookie = app.guest().await;
+    let res = app.create(&cookie, short_req("fake")).await;
+    let id = res.body["session_id"].as_str().unwrap().to_string();
+    let token = res.body["client_token"].as_str().unwrap().to_string();
+
+    // Created (no socket yet) and paused rounds serve no turns, whoever asks.
+    for bearer in [token.as_str(), "test-llm-secret"] {
+        let res = app.turn(bearer, &id, "[event: start]").await;
+        assert_eq!(res.status, StatusCode::CONFLICT, "{}", res.body);
+        assert_eq!(res.body["code"], "session_not_live");
+    }
+    app.set_status(&id, ir_server::orchestrator::SessionStatus::Paused)
+        .await;
+    assert_eq!(
+        app.turn(&token, &id, "Hello").await.status,
+        StatusCode::CONFLICT
+    );
+
+    app.set_status(&id, ir_server::orchestrator::SessionStatus::Live)
+        .await;
+    assert_eq!(
+        app.turn(&token, &id, "[event: start]").await.status,
+        StatusCode::OK
+    );
+
+    // The client-token path: 2,000 characters per turn ...
+    let long = "a".repeat(2001);
+    let res = app.turn(&token, &id, &long).await;
+    assert_eq!(res.status, StatusCode::PAYLOAD_TOO_LARGE);
+    assert_eq!(res.body["code"], "turn_too_long");
+    assert_eq!(
+        app.turn(&token, &id, &"a".repeat(2000)).await.status,
+        StatusCode::OK
+    );
+    // ... and 150 turns per session.
+    {
+        let handle = app.state.registry.get(&id).unwrap();
+        let mut st = handle.lock().await;
+        while st.turns.iter().filter(|t| t.speaker == "candidate").count() < 150 {
+            st.turns.push(Turn {
+                speaker: "candidate".into(),
+                text: "ok".into(),
+                at_ms: 0,
+                interrupted: false,
+                heard: None,
+            });
+        }
+    }
+    let res = app.turn(&token, &id, "One more.").await;
+    assert_eq!(res.status, StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(res.body["code"], "turn_limit");
+    // The Fish path (shared secret) is not capped this way.
+    assert_eq!(
+        app.turn("test-llm-secret", &id, "One more.").await.status,
+        StatusCode::OK
+    );
+}
+
+#[tokio::test]
+async fn a_cut_turn_is_still_priced() {
+    let app = live::test_app(Options::default()).await;
+    let cookie = app.guest().await;
+    let res = app.create(&cookie, short_req("fake")).await;
+    let id = res.body["session_id"].as_str().unwrap().to_string();
+    let token = res.body["client_token"].as_str().unwrap().to_string();
+    app.set_status(&id, ir_server::orchestrator::SessionStatus::Live)
+        .await;
+    app.llm.hang.store(true, Ordering::SeqCst);
+
+    use futures::StreamExt;
+    use tower::ServiceExt;
+    let body = json!({"model": "x", "stream": true,
+        "messages": [{"role": "user", "content": "Let me think about the cache."}],
+        "fishaudio_extra_body": {"session_id": id, "panelist_id": "p1"}});
+    let req = axum::http::Request::post("/v1/chat/completions")
+        .header(header::AUTHORIZATION, format!("Bearer {token}"))
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(axum::body::Body::from(body.to_string()))
+        .unwrap();
+    let res = app.router.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let mut chunks = res.into_body().into_data_stream();
+    let first = tokio::time::timeout(Duration::from_secs(3), chunks.next()).await;
+    assert!(matches!(first, Ok(Some(Ok(_)))), "the first words arrive");
+    // The caller hangs up mid-reply (a barge-in): the call is cut before its usage arrived.
+    drop(chunks);
+    live::eventually("cut turn recorded", Duration::from_secs(3), || async {
+        count(
+            &app,
+            "select count(*) from usage_events where kind = 'live_turn_cut'",
+        )
+        .await
+            == 1
+    })
+    .await;
+    let (session, cost): (Option<Uuid>, f64) = sqlx::query_as(
+        "select session_id, cost_usd::float8 from usage_events where kind = 'live_turn_cut'",
+    )
+    .fetch_one(&app.state.db)
+    .await
+    .unwrap();
+    assert_eq!(
+        session.map(|s| s.to_string()),
+        Some(id),
+        "charged to its session"
+    );
+    assert!(cost > 0.0);
+}
+
+#[tokio::test]
+async fn model_daily_cap_blocks_new_sessions() {
+    let app = live::test_app(Options {
+        env: &[("MODEL_DAILY_CAP_USD", "1.0")],
+        ..Options::default()
+    })
+    .await;
+    let cookie = app.guest().await;
+    sqlx::query(
+        "insert into usage_events (provider, kind, usage_phase, cost_usd) values ('anthropic', 'live_turn', 'build', 0.6)",
+    )
+    .execute(&app.state.db)
+    .await
+    .unwrap();
+    assert_eq!(
+        app.create(&cookie, short_req("fish")).await.status,
+        StatusCode::OK
+    );
+    // Yesterday's spend does not count.
+    sqlx::query(
+        "insert into usage_events (provider, kind, usage_phase, cost_usd, created_at) \
+         values ('anthropic', 'live_turn', 'build', 5.0, now() - interval '1 day')",
+    )
+    .execute(&app.state.db)
+    .await
+    .unwrap();
+    assert_eq!(
+        app.create(&cookie, short_req("fake")).await.status,
+        StatusCode::OK
+    );
+    sqlx::query(
+        "insert into usage_events (provider, kind, usage_phase, cost_usd) values ('anthropic', 'live_turn', 'build', 0.4)",
+    )
+    .execute(&app.state.db)
+    .await
+    .unwrap();
+    for voice in ["fish", "fake"] {
+        let res = app.create(&cookie, short_req(voice)).await;
+        assert_eq!(res.status, StatusCode::TOO_MANY_REQUESTS, "{}", res.body);
+        assert_eq!(res.body["code"], "model_budget_reached");
+    }
+    let me = app.call(Method::GET, "/api/me", Some(&cookie), None).await;
+    assert_eq!(me.body["limits"]["reason"], "model_budget_reached");
+}
+
+/// A second process on the same database and Fish mock (a server restart).
+async fn restarted(app: &live::TestApp, timing: ir_server::ws::SessionTiming) -> live::TestApp {
+    let pool = ir_server::db::connect_url(&app.db_url).await.unwrap();
+    let cfg = common::test_config(&app.db_url, &common::temp_dir("public"));
+    let state = ir_server::AppState::new(pool, cfg)
+        .with_catalog(live::fixture_catalog())
+        .with_fish(ir_server::fish::FishClient::with_base_url(
+            "k",
+            &app.fish.uri(),
+        ))
+        .with_llm(app.llm.clone())
+        .with_timing(timing);
+    live::TestApp {
+        router: ir_server::router(state.clone()),
+        state,
+        fish: live::fish_mock().await,
+        llm: app.llm.clone(),
+        db_url: app.db_url.clone(),
+    }
+}
+
+#[tokio::test]
+async fn resume_only_within_the_window_and_three_times() {
+    let timing = ir_server::ws::SessionTiming {
+        tick: Duration::from_secs(3600),
+        ..Default::default()
+    };
+    let app = live::test_app(Options {
+        timing: timing.clone(),
+        ..Options::default()
+    })
+    .await;
+    let cookie = app.guest().await;
+    let make = || async {
+        let res = app.create(&cookie, short_req("fish")).await;
+        let id = res.body["session_id"].as_str().unwrap().to_string();
+        let uuid = Uuid::parse_str(&id).unwrap();
+        (id, uuid)
+    };
+
+    // Dropped 2 minutes ago: three resumes, then no more.
+    let (id, uuid) = make().await;
+    sqlx::query(
+        "update sessions set status = 'live', started_at = now() - interval '5 minutes', \
+                 last_socket_at = now() - interval '2 minutes' where id = $1",
+    )
+    .bind(uuid)
+    .execute(&app.state.db)
+    .await
+    .unwrap();
+    let app2 = restarted(&app, timing.clone()).await;
+    for i in 0..3 {
+        let res = app2
+            .call(
+                Method::POST,
+                &format!("/api/sessions/{id}/resume"),
+                Some(&cookie),
+                None,
+            )
+            .await;
+        assert_eq!(res.status, StatusCode::OK, "resume {i}: {}", res.body);
+    }
+    let res = app2
+        .call(
+            Method::POST,
+            &format!("/api/sessions/{id}/resume"),
+            Some(&cookie),
+            None,
+        )
+        .await;
+    assert_eq!(res.status, StatusCode::CONFLICT);
+    assert_eq!(res.body["code"], "resume_limit");
+    // The note is queued once, however many resumes.
+    let handle = app2.state.registry.get(&id).unwrap();
+    let notes = handle
+        .lock()
+        .await
+        .pending_notes
+        .iter()
+        .filter(|n| n.contains("connection dropped"))
+        .count();
+    assert_eq!(notes, 1);
+
+    // Dropped 4 minutes ago: too late, and the startup sweep ends it.
+    let (late, late_uuid) = make().await;
+    sqlx::query(
+        "update sessions set status = 'live', started_at = now() - interval '6 minutes', \
+                 last_socket_at = now() - interval '4 minutes' where id = $1",
+    )
+    .bind(late_uuid)
+    .execute(&app.state.db)
+    .await
+    .unwrap();
+    let app3 = restarted(&app, timing).await;
+    let res = app3
+        .call(
+            Method::POST,
+            &format!("/api/sessions/{late}/resume"),
+            Some(&cookie),
+            None,
+        )
+        .await;
+    assert_eq!(res.status, StatusCode::CONFLICT, "{}", res.body);
+    assert_eq!(res.body["code"], "resume_expired");
+    persist::sweep(&app3.state).await.unwrap();
+    let (status, reason): (String, Option<String>) =
+        sqlx::query_as("select status, ended_reason from sessions where id = $1")
+            .bind(late_uuid)
+            .fetch_one(&app.state.db)
+            .await
+            .unwrap();
+    assert_eq!(
+        (status.as_str(), reason.as_deref()),
+        ("abandoned", Some("disconnected"))
+    );
+}
+
+#[tokio::test]
+async fn join_twice_returns_the_same_voice() {
+    let app = live::test_app(Options::default()).await;
+    let cookie = app.guest().await;
+    let res = app.create(&cookie, full_req("fish")).await;
+    let id = res.body["session_id"].as_str().unwrap().to_string();
+    let path = format!("/api/sessions/{id}/panelists/p2/join");
+    let body = json!({"opening_line": "Hi, I'm Ana."});
+    let first = app
+        .call(Method::POST, &path, Some(&cookie), Some(body.clone()))
+        .await;
+    let second = app
+        .call(Method::POST, &path, Some(&cookie), Some(body))
+        .await;
+    assert_eq!(first.status, StatusCode::OK);
+    assert_eq!(first.body, second.body, "the same voice again");
+    assert_eq!(
+        app.fish_calls("POST", "/v1/agent/sessions").await.len(),
+        2,
+        "floor + one for p2"
+    );
+    let handle = app.state.registry.get(&id).unwrap();
+    let lines = handle
+        .lock()
+        .await
+        .history
+        .iter()
+        .filter(|m| m.text() == "Hi, I'm Ana.")
+        .count();
+    assert_eq!(lines, 1, "the opening line enters the history once");
+    let row = persist::fetch_session(&app.state.db, Uuid::parse_str(&id).unwrap())
+        .await
+        .unwrap()
+        .unwrap();
+    let open: Vec<_> = row
+        .fish_entries()
+        .into_iter()
+        .filter(|e| e.ended_at.is_none())
+        .collect();
+    assert_eq!(open.len(), 1, "one live voice at a time: {open:?}");
+}
+
+#[tokio::test]
+async fn concurrent_creates_take_the_last_slot_once() {
+    let app = live::test_app(Options {
+        env: &[("USAGE_PHASE", "judging")],
+        ..Options::default()
+    })
+    .await;
+    let cookie = app.guest().await;
+    for _ in 0..2 {
+        assert_eq!(
+            app.create(&cookie, short_req("fish")).await.status,
+            StatusCode::OK
+        );
+    }
+    let results =
+        futures::future::join_all((0..4).map(|_| app.create(&cookie, short_req("fish")))).await;
+    let ok = results
+        .iter()
+        .filter(|r| r.status == StatusCode::OK)
+        .count();
+    assert_eq!(
+        ok,
+        1,
+        "{:?}",
+        results.iter().map(|r| r.status).collect::<Vec<_>>()
+    );
+    assert!(
+        results
+            .iter()
+            .filter(|r| r.status != StatusCode::OK)
+            .all(|r| r.body["code"] == "guest_daily_limit")
+    );
+}
+
+#[tokio::test]
+async fn deleting_me_settles_fish_first() {
+    let app = live::test_app(Options::default()).await;
+    let cookie = app.guest().await;
+    let res = app.create(&cookie, short_req("fish")).await;
+    assert_eq!(res.status, StatusCode::OK);
+    let res = app
+        .call(Method::DELETE, "/api/me", Some(&cookie), None)
+        .await;
+    assert_eq!(res.status, StatusCode::NO_CONTENT);
+    assert_eq!(count(&app, "select count(*) from sessions").await, 0);
+    // The minutes stay in the ledger without the identity.
+    let (n, who): (i64, Option<Uuid>) = sqlx::query_as(
+        "select count(*), max(identity_id::text)::uuid from usage_events where provider = 'fish'",
+    )
+    .fetch_one(&app.state.db)
+    .await
+    .unwrap();
+    assert_eq!((n, who), (1, None));
+    assert!(
+        app.fish_paths("POST")
+            .await
+            .iter()
+            .any(|p| p.ends_with("fish-1/end"))
+    );
+}
+
+#[tokio::test]
+async fn an_unended_fish_session_is_not_billed_yet() {
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicBool;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, ResponseTemplate};
+    let app = live::test_app(Options::default()).await;
+    let cookie = app.guest().await;
+    let res = app.create(&cookie, short_req("fish")).await;
+    let id = res.body["session_id"].as_str().unwrap().to_string();
+    let uuid = Uuid::parse_str(&id).unwrap();
+    // Fish refuses to end fish-1 while `fail` is set.
+    let fail = Arc::new(AtomicBool::new(true));
+    let switch = fail.clone();
+    Mock::given(method("POST"))
+        .and(path("/v1/agent/sessions/fish-1/end"))
+        .respond_with(move |_: &wiremock::Request| {
+            ResponseTemplate::new(if switch.load(Ordering::SeqCst) {
+                500
+            } else {
+                204
+            })
+        })
+        .with_priority(1)
+        .mount(&app.fish)
+        .await;
+    persist::end_session(&app.state, uuid, "user_ended")
+        .await
+        .unwrap();
+    assert!(persist::settle_fish(&app.state, uuid).await.is_err());
+    let row = persist::fetch_session(&app.state.db, uuid)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        row.fish_entries()[0].ended_at.is_none(),
+        "still open, so not settled"
+    );
+    let settled: bool = sqlx::query_scalar("select fish_usage_recorded from sessions")
+        .fetch_one(&app.state.db)
+        .await
+        .unwrap();
+    assert!(!settled);
+    assert_eq!(
+        count(
+            &app,
+            "select count(*) from usage_events where provider = 'fish'"
+        )
+        .await,
+        0
+    );
+    // Once Fish answers again, the retry ends and bills it.
+    fail.store(false, Ordering::SeqCst);
+    persist::settle_fish(&app.state, uuid).await.unwrap();
+    assert_eq!(
+        count(
+            &app,
+            "select count(*) from usage_events where provider = 'fish'"
+        )
+        .await,
+        1
+    );
+}
+
+#[tokio::test]
+async fn identity_routes_need_a_known_cookie_except_the_first_visit() {
+    let app = live::test_app(Options::default()).await;
+    let res = app
+        .call(
+            Method::GET,
+            &format!("/api/sessions/{}", Uuid::new_v4()),
+            None,
+            None,
+        )
+        .await;
+    assert_eq!(res.status, StatusCode::UNAUTHORIZED);
+    let res = app
+        .call(
+            Method::GET,
+            "/api/me/history",
+            Some("ir_id=0123456789abcdef0123456789abcdef"),
+            None,
+        )
+        .await;
+    assert_eq!(res.status, StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        count(&app, "select count(*) from identities").await,
+        0,
+        "no guest minted"
+    );
 }

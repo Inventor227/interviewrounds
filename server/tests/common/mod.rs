@@ -83,7 +83,8 @@ pub async fn body_json(res: Response<Body>) -> serde_json::Value {
     serde_json::from_slice(&body_bytes(res).await).expect("json body")
 }
 
-/// A new empty database next to the test one (migrated), so spend totals and counts are per test.
+/// A new empty schema in the test database (migrated on first connect), so spend totals and counts are per test.
+/// A schema costs almost nothing, unlike a database per test, which would fill the throwaway Postgres's tmpfs.
 pub async fn fresh_database() -> String {
     use sqlx::Connection;
     let base = database_url();
@@ -92,10 +93,10 @@ pub async fn fresh_database() -> String {
         .await
         .expect("connect to the test server");
     // The name is a fresh uuid in hex: nothing from outside reaches the SQL.
-    sqlx::query(sqlx::AssertSqlSafe(format!("create database {name}")))
+    sqlx::query(sqlx::AssertSqlSafe(format!("create schema {name}")))
         .execute(&mut conn)
         .await
-        .expect("create database");
-    let (prefix, _) = base.rsplit_once('/').expect("database url has a path");
-    format!("{prefix}/{name}")
+        .expect("create schema");
+    let sep = if base.contains('?') { '&' } else { '?' };
+    format!("{base}{sep}options=-c%20search_path%3D{name}")
 }

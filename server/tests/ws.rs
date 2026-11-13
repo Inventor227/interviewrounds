@@ -242,7 +242,11 @@ fn quick() -> SessionTiming {
         offline_limit: Duration::from_millis(400),
         start_limit: Duration::from_secs(600),
         hello_timeout: Duration::from_secs(2),
-        ending_grace: Duration::from_secs(60),
+        closing_grace: Duration::from_millis(100),
+        ending_limit: Duration::from_secs(20),
+        pause_limit: Duration::from_secs(600),
+        scoring_hold: Duration::from_millis(300),
+        read_timeout: Duration::from_secs(45),
         janitor: Duration::from_secs(60),
     }
 }
@@ -329,25 +333,229 @@ async fn abandoned_after_3_minutes_offline() {
 }
 
 #[tokio::test]
-async fn ending_sends_round_ended_then_4409() {
+async fn ui_end_lets_the_interviewer_close_then_the_socket_waits_for_the_report() {
+    let app = live::test_app(Options {
+        timing: SessionTiming {
+            scoring_hold: Duration::from_secs(30),
+            ..quick()
+        },
+        ..Options::default()
+    })
+    .await;
+    let base = app.serve().await;
+    let (_, id, token) = new_session(&app, "fake").await;
+    let mut ws = hello(&base, &id, &token, 0).await;
+    frame_of(&mut ws, "round.state", WAIT).await.unwrap();
+    // One answer, so the round goes to scoring.
+    assert_eq!(
+        app.turn(&token, &id, "I would cache the reads.")
+            .await
+            .status,
+        StatusCode::OK
+    );
+    send(
+        &mut ws,
+        "ui.event",
+        1,
+        json!({"kind": "end", "reason": "headset_removed"}),
+    )
+    .await;
+
+    // Still open: the goodbye turn is served.
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(
+        app.state.registry.get(&id).is_some(),
+        "not ended before the closing line"
+    );
+    let res = app.turn(&token, &id, "[event: ending]").await;
+    assert_eq!(res.status, StatusCode::OK, "{}", res.body);
+
+    // After the closing line the round ends with the reason the browser gave.
+    let ended = frame_of(&mut ws, "round.ended", WAIT)
+        .await
+        .expect("round.ended");
+    assert_eq!(ended["d"], json!({"reason": "headset_removed"}));
+    let reason: Option<String> =
+        sqlx::query_scalar("select ended_reason from sessions where id = $1")
+            .bind(Uuid::parse_str(&id).unwrap())
+            .fetch_one(&app.state.db)
+            .await
+            .unwrap();
+    assert_eq!(reason.as_deref(), Some("headset_removed"));
+
+    // The socket stays for the report; a reconnect during scoring is let in and replayed.
+    drop(ws);
+    let mut ws = hello(&base, &id, &token, 0).await;
+    let replayed = frame_of(&mut ws, "round.ended", WAIT)
+        .await
+        .expect("replayed");
+    assert_eq!(replayed["d"]["reason"], "headset_removed");
+    assert!(
+        ir_server::ws::send_to_session(
+            &app.state,
+            &id,
+            "report.progress",
+            json!({"stage": "scoring", "pct": 50})
+        )
+        .await
+    );
+    let progress = frame_of(&mut ws, "report.progress", WAIT)
+        .await
+        .expect("progress");
+    assert_eq!(progress["d"]["pct"], 50);
+    ir_server::ws::send_to_session(&app.state, &id, "report.ready", json!({"session_id": id}))
+        .await;
+    let ready = frame_of(&mut ws, "report.ready", WAIT)
+        .await
+        .expect("ready");
+    assert!(ready["seq"].as_u64().unwrap() > 0);
+    assert_eq!(live::close_code(&mut ws, WAIT).await, Some(4409));
+    // The hub is gone: nobody to send to, and new sockets get 4409.
+    live::eventually("hub closed", WAIT, || async {
+        app.state.hubs.get(&id).is_none()
+    })
+    .await;
+    let mut ws = hello(&base, &id, &token, 0).await;
+    assert_eq!(live::close_code(&mut ws, WAIT).await, Some(4409));
+}
+
+#[tokio::test]
+async fn ui_end_without_a_closing_line_ends_after_the_limit_and_post_end_wins() {
+    let app = live::test_app(Options {
+        timing: SessionTiming {
+            ending_limit: Duration::from_millis(400),
+            ..quick()
+        },
+        ..Options::default()
+    })
+    .await;
+    let base = app.serve().await;
+    let status = |id: String| {
+        let db = app.state.db.clone();
+        async move {
+            sqlx::query_as::<_, (String, Option<String>)>(
+                "select status, ended_reason from sessions where id = $1",
+            )
+            .bind(Uuid::parse_str(&id).unwrap())
+            .fetch_one(&db)
+            .await
+            .unwrap()
+        }
+    };
+    // No goodbye arrives: ends after the limit with the ui.event's reason.
+    let (_, a, token_a) = new_session(&app, "fake").await;
+    let mut ws = hello(&base, &a, &token_a, 0).await;
+    frame_of(&mut ws, "round.state", WAIT).await.unwrap();
+    send(&mut ws, "ui.event", 1, json!({"kind": "end"})).await;
+    let ended = frame_of(&mut ws, "round.ended", WAIT)
+        .await
+        .expect("round.ended");
+    assert_eq!(ended["d"]["reason"], "user_ended");
+    assert_eq!(status(a).await.1.as_deref(), Some("user_ended"));
+
+    // POST /end during the goodbye ends it at once with its own reason.
+    let (cookie, b, token_b) = new_session(&app, "fake").await;
+    let mut ws = hello(&base, &b, &token_b, 0).await;
+    frame_of(&mut ws, "round.state", WAIT).await.unwrap();
+    send(&mut ws, "ui.event", 1, json!({"kind": "end"})).await;
+    let res = app
+        .call(
+            Method::POST,
+            &format!("/api/sessions/{b}/end"),
+            Some(&cookie),
+            Some(json!({"reason": "completed"})),
+        )
+        .await;
+    assert_eq!(res.status, StatusCode::ACCEPTED);
+    assert_eq!(status(b).await.1.as_deref(), Some("completed"));
+}
+
+#[tokio::test]
+async fn a_frame_that_fails_to_save_is_not_acked_and_comes_back() {
     let app = live::test_app(Options::default()).await;
     let base = app.serve().await;
     let (_, id, token) = new_session(&app, "fake").await;
     let mut ws = hello(&base, &id, &token, 0).await;
     frame_of(&mut ws, "round.state", WAIT).await.unwrap();
+    sqlx::query("alter table marks rename to marks_away")
+        .execute(&app.state.db)
+        .await
+        .unwrap();
+    let mark = json!({"segment_id": "s1", "panelist_id": "p1", "first_at_ms": 1, "final_at_ms": 2, "text": "hi"});
+    send(&mut ws, "transcript.mark", 1, mark.clone()).await;
+    // Telemetry right behind it must not move the ack past the failed frame.
     send(
         &mut ws,
-        "ui.event",
-        1,
-        json!({"kind": "end", "reason": "user_ended"}),
+        "head.samples",
+        2,
+        json!({"samples": [{"t_ms": 0, "yaw": 0, "pitch": 0, "speaking": false, "target": "p1"}]}),
     )
     .await;
-    let ended = frame_of(&mut ws, "round.ended", WAIT)
+    let err = frame_of(&mut ws, "error", WAIT).await.expect("error frame");
+    assert_eq!(err["d"]["code"], "server_error");
+    assert_eq!(err["ack"], 0);
+    assert_eq!(live::close_code(&mut ws, WAIT).await, Some(1011));
+    let heads: i64 = sqlx::query_scalar("select count(*) from head_batches")
+        .fetch_one(&app.state.db)
         .await
-        .expect("round.ended");
-    assert_eq!(ended["d"], json!({"reason": "user_ended"}));
-    assert!(ended["seq"].as_u64().unwrap() >= 1);
-    assert_eq!(live::close_code(&mut ws, WAIT).await, Some(4409));
+        .unwrap();
+    assert_eq!(heads, 0, "nothing after the failed frame was processed");
+
+    // The client reconnects and replays it; now it is stored and acked.
+    sqlx::query("alter table marks_away rename to marks")
+        .execute(&app.state.db)
+        .await
+        .unwrap();
+    let mut ws = hello(&base, &id, &token, 0).await;
+    let snap = frame_of(&mut ws, "round.state", WAIT).await.unwrap();
+    assert_eq!(snap["ack"], 0);
+    send(&mut ws, "transcript.mark", 1, mark).await;
+    send(&mut ws, "ping", 0, json!({})).await;
+    let pong = frame_of(&mut ws, "pong", WAIT).await.unwrap();
+    assert_eq!(pong["ack"], 1);
+    let marks: i64 = sqlx::query_scalar("select count(*) from marks")
+        .fetch_one(&app.state.db)
+        .await
+        .unwrap();
+    assert_eq!(marks, 1);
+}
+
+#[tokio::test]
+async fn a_long_pause_hits_the_wall_clock_ceiling() {
+    let app = live::test_app(Options {
+        timing: SessionTiming {
+            pause_limit: Duration::from_millis(500),
+            ..quick()
+        },
+        ..Options::default()
+    })
+    .await;
+    let base = app.serve().await;
+    let (_, id, token) = new_session(&app, "fish").await;
+    let mut ws = hello(&base, &id, &token, 0).await;
+    frame_of(&mut ws, "round.state", WAIT).await.unwrap();
+    // Paused with the socket open (headset off): the round clock stops, the wall clock does not.
+    send(&mut ws, "ui.event", 1, json!({"kind": "pause"})).await;
+    let ended = frame_of(&mut ws, "round.ended", Duration::from_secs(4))
+        .await
+        .expect("ended by the ceiling");
+    assert_eq!(ended["d"]["reason"], "time_limit");
+    // Its Fish session is ended and billed.
+    live::eventually("Fish settled", WAIT, || async {
+        let n: i64 =
+            sqlx::query_scalar("select count(*) from usage_events where provider = 'fish'")
+                .fetch_one(&app.state.db)
+                .await
+                .unwrap();
+        n == 1
+    })
+    .await;
+    assert!(
+        app.fish_paths("POST")
+            .await
+            .iter()
+            .any(|p| p.ends_with("fish-1/end"))
+    );
 }
 
 #[tokio::test]
@@ -415,7 +623,8 @@ async fn pause_stops_the_clock_and_time_check_is_flagged_once() {
     let before = handle.lock().await.elapsed_ms(std::time::Instant::now());
     tokio::time::sleep(Duration::from_millis(400)).await;
     let after = handle.lock().await.elapsed_ms(std::time::Instant::now());
-    assert_eq!(before, after);
+    // Two durations are truncated to milliseconds separately, so a stopped clock can read 1 ms apart.
+    assert!(after.abs_diff(before) <= 1, "{before} -> {after}");
     let db_status: String = sqlx::query_scalar("select status from sessions where id = $1")
         .bind(Uuid::parse_str(&id).unwrap())
         .fetch_one(&app.state.db)
@@ -460,4 +669,53 @@ async fn me_offers_resume_after_a_drop() {
         left > chrono::Duration::seconds(170) && left <= chrono::Duration::seconds(180),
         "{left}"
     );
+}
+
+#[tokio::test]
+async fn voice_spoken_is_taken_and_acked() {
+    let app = live::test_app(Options::default()).await;
+    let base = app.serve().await;
+    let (_, id, token) = new_session(&app, "fake").await;
+    let mut ws = hello(&base, &id, &token, 0).await;
+    frame_of(&mut ws, "round.state", WAIT).await.unwrap();
+    send(
+        &mut ws,
+        "voice.spoken",
+        1,
+        json!({"panelist_id": "p1", "text_prefix": "Hi, I'm Daniel. Let's"}),
+    )
+    .await;
+    send(&mut ws, "ping", 0, json!({})).await;
+    let pong = frame_of(&mut ws, "pong", WAIT).await.unwrap();
+    assert_eq!(pong["ack"], 1);
+}
+
+#[tokio::test]
+async fn board_focus_keeps_the_latest_item() {
+    let app = live::test_app(Options::default()).await;
+    let base = app.serve().await;
+    let (_, id, token) = new_session(&app, "fake").await;
+    let mut ws = hello(&base, &id, &token, 0).await;
+    frame_of(&mut ws, "round.state", WAIT).await.unwrap();
+    let stored = || async {
+        sqlx::query_scalar::<_, Option<String>>("select board_focus from sessions where id = $1")
+            .bind(Uuid::parse_str(&id).unwrap())
+            .fetch_one(&app.state.db)
+            .await
+            .unwrap()
+    };
+    for (seq, item) in [(1, json!("c1")), (2, json!("c2"))] {
+        send(&mut ws, "board.focus", seq, json!({"item_id": item})).await;
+    }
+    send(&mut ws, "ping", 0, json!({})).await;
+    assert_eq!(frame_of(&mut ws, "pong", WAIT).await.unwrap()["ack"], 2);
+    assert_eq!(stored().await.as_deref(), Some("c2"));
+    assert_eq!(
+        app.state.hubs.get(&id).unwrap().focus().as_deref(),
+        Some("c2")
+    );
+    send(&mut ws, "board.focus", 3, json!({"item_id": null})).await;
+    send(&mut ws, "ping", 0, json!({})).await;
+    assert_eq!(frame_of(&mut ws, "pong", WAIT).await.unwrap()["ack"], 3);
+    assert_eq!(stored().await, None);
 }

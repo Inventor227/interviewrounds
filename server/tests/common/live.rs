@@ -26,16 +26,27 @@ use tower::ServiceExt;
 use wiremock::matchers::{method, path, path_regex};
 use wiremock::{Mock, MockServer, Request as MockRequest, ResponseTemplate};
 
-/// Model fake: counts prewarms and answers every streamed turn with one line.
+/// Model fake: answers prewarms (`max_tokens: 0`) with cache-write usage, and every streamed turn with one
+/// line; with `hang` set, a turn says one word and then never finishes.
 #[derive(Default)]
 pub struct FakeLlm {
     pub prewarms: AtomicUsize,
+    pub hang: std::sync::atomic::AtomicBool,
     pub requests: Mutex<Vec<MessagesRequest>>,
 }
 
 #[async_trait]
 impl LlmApi for FakeLlm {
-    async fn create(&self, _req: &MessagesRequest) -> Result<MessagesResponse, ClaudeError> {
+    async fn create(&self, req: &MessagesRequest) -> Result<MessagesResponse, ClaudeError> {
+        if req.max_tokens == 0 {
+            self.prewarms.fetch_add(1, Ordering::SeqCst);
+            return Ok(serde_json::from_value(json!({
+                "id": "msg_prewarm", "model": req.model, "content": [], "stop_reason": "max_tokens",
+                "usage": {"input_tokens": 0, "output_tokens": 0, "cache_read_input_tokens": 0,
+                          "cache_creation_input_tokens": 2000}
+            }))
+            .unwrap());
+        }
         Err(ClaudeError::BadRequest("not scripted".into()))
     }
 
@@ -44,6 +55,10 @@ impl LlmApi for FakeLlm {
         req: &MessagesRequest,
     ) -> Result<BoxStream<'static, Result<StreamEvent, ClaudeError>>, ClaudeError> {
         self.requests.lock().unwrap().push(req.clone());
+        if self.hang.load(Ordering::SeqCst) {
+            let first = stream::iter(vec![Ok(StreamEvent::TextDelta("Well, ".into()))]);
+            return Ok(first.chain(stream::pending()).boxed());
+        }
         let events = vec![
             Ok(StreamEvent::TextDelta("Hello there.".into())),
             Ok(StreamEvent::Stop {
@@ -57,10 +72,6 @@ impl LlmApi for FakeLlm {
             }),
         ];
         Ok(stream::iter(events).boxed())
-    }
-
-    fn prewarm(&self, _req: &MessagesRequest) {
-        self.prewarms.fetch_add(1, Ordering::SeqCst);
     }
 }
 
@@ -164,7 +175,21 @@ impl TestApp {
         cookie: Option<&str>,
         body: Option<Value>,
     ) -> Res {
+        self.call_with(m, uri, cookie, body, &[]).await
+    }
+
+    pub async fn call_with(
+        &self,
+        m: Method,
+        uri: &str,
+        cookie: Option<&str>,
+        body: Option<Value>,
+        extra: &[(&str, &str)],
+    ) -> Res {
         let mut req = Request::builder().method(m).uri(uri);
+        for (k, v) in extra {
+            req = req.header(*k, *v);
+        }
         if let Some(c) = cookie {
             req = req.header(header::COOKIE, c);
         }
@@ -195,9 +220,39 @@ impl TestApp {
         set.split(';').next().unwrap().to_string()
     }
 
+    /// Creates a session; the fake voice is sent with the dev key (it is a development path).
     pub async fn create(&self, cookie: &str, body: Value) -> Res {
-        self.call(Method::POST, "/api/sessions", Some(cookie), Some(body))
+        let key: &[(&str, &str)] = if body["voice"] == "fake" {
+            &[("x-dev-key", "test-dev-key")]
+        } else {
+            &[]
+        };
+        self.call_with(Method::POST, "/api/sessions", Some(cookie), Some(body), key)
             .await
+    }
+
+    /// A turn on the custom LLM endpoint with this bearer.
+    pub async fn turn(&self, bearer: &str, session_id: &str, text: &str) -> Res {
+        let body = json!({"model": "x", "stream": true,
+            "messages": [{"role": "user", "content": text}],
+            "fishaudio_extra_body": {"session_id": session_id, "panelist_id": "p1"}});
+        self.call_with(
+            Method::POST,
+            "/v1/chat/completions",
+            None,
+            Some(body),
+            &[("authorization", &format!("Bearer {bearer}"))],
+        )
+        .await
+    }
+
+    pub async fn set_status(
+        &self,
+        session_id: &str,
+        status: ir_server::orchestrator::SessionStatus,
+    ) {
+        let handle = self.state.registry.get(session_id).expect("in memory");
+        handle.lock().await.status = status;
     }
 
     /// Fish API requests the server made, by method and path suffix.

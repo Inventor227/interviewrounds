@@ -1,11 +1,13 @@
 //! `/ws/session/{id}` (docs/protocol.md, WebSocket).
 //!
-//! One `Hub` per live session holds the numbered server frames (replayed after a reconnect), the per-token record
+//! One `Hub` per session holds the numbered server frames (replayed after a reconnect), the per-token record
 //! of processed client frames (`ack`), and drives the round: a `round.state` snapshot every second while the round
 //! is live or paused and on every change, the time check at each phase boundary, saving turns and the live state,
-//! and ending the session on the hard stop, after the closing line, or when the browser has been gone too long.
+//! and ending the session (hard stop, wall-clock ceiling, closing line, browser gone too long).
 //!
 //! The round clock runs only while the round has started, is not paused, and at least one socket is connected.
+//! After the end the hub stays up through scoring (`report.progress`, `report.ready` go out on it) and closes
+//! its sockets with 4409 once the report is done, or after `scoring_hold`.
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, RwLock};
@@ -15,11 +17,12 @@ use axum::extract::ws::{CloseFrame, Message as WsMessage, WebSocket, WebSocketUp
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, header};
 use axum::response::{IntoResponse, Response};
+use chrono::{DateTime, Utc};
 use futures::{SinkExt, StreamExt};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use sqlx::PgPool;
-use tokio::sync::{Mutex, broadcast};
+use tokio::sync::{Mutex, Notify, broadcast};
 use uuid::Uuid;
 
 use crate::app::AppState;
@@ -33,11 +36,48 @@ pub const CLOSE_UNKNOWN_SESSION: u16 = 4404;
 pub const CLOSE_ENDED: u16 = 4409;
 /// Server restart: transient, the browser reconnects.
 pub const CLOSE_RESTART: u16 = 1012;
+/// A frame could not be saved: transient, the browser reconnects and sends it again (it was not acked).
+const CLOSE_RETRY: u16 = 1011;
 /// The socket fell too far behind the broadcast: transient, the reconnect replays what it missed.
 const CLOSE_LAGGED: u16 = 1013;
+/// Nothing heard from the client for too long, or too many frames: transient.
+const CLOSE_GOING_AWAY: u16 = 1001;
+const CLOSE_POLICY: u16 = 1008;
 
-/// Numbered frames kept in memory per session (all of them stay in `session_frames`).
+/// Numbered frames kept in memory per session (all of them stay in `session_frames` until the hub closes).
 const BUFFER_FRAMES: usize = 2000;
+/// Largest replay read from the database.
+const REPLAY_LIMIT: i64 = 5000;
+/// Largest client message.
+pub const MAX_MESSAGE_BYTES: usize = 256 * 1024;
+/// Client frames allowed per second on one socket.
+const FRAMES_PER_SECOND: u32 = 60;
+/// Per-frame stored-size limits.
+const MAX_HEAD_SAMPLES: usize = 100;
+const MAX_TEXT_CHARS: usize = 2000;
+const MAX_OP_ARGS_BYTES: usize = 16 * 1024;
+const MAX_BOARD_OPS: i64 = 5000;
+
+/// Playback reports applied to the live turn logic. Replies to speech can be parked until they are known to
+/// have been played (Fish drafts speculative replies it never plays); the browser reports the first words it
+/// heard (`voice.spoken`), and the end of a session settles what is still parked against Fish's transcript.
+pub trait Playback {
+    /// The browser heard `heard` (the start of a reply) from `panelist_id`. Returns whether a parked reply matched.
+    fn played(&mut self, panelist_id: &str, heard: &str, now: Instant) -> bool;
+    /// At the end: commits the parked reply Fish played last (`fish_last`, its newest assistant line) and drops
+    /// the rest.
+    fn settle_unplayed(&mut self, fish_last: Option<&str>, now: Instant);
+}
+
+/// On this branch replies commit as soon as they are made, so nothing is parked. With the parked-reply turn
+/// logic these call `SessionState::confirm_spoken` and `SessionState::resolve_provisional`.
+impl Playback for SessionState {
+    fn played(&mut self, _panelist_id: &str, _heard: &str, _now: Instant) -> bool {
+        false
+    }
+
+    fn settle_unplayed(&mut self, _fish_last: Option<&str>, _now: Instant) {}
+}
 
 /// Timing of the live session machinery (tests shorten it).
 #[derive(Clone, Debug)]
@@ -50,8 +90,16 @@ pub struct SessionTiming {
     pub start_limit: Duration,
     /// Time allowed for the first frame (`hello`).
     pub hello_timeout: Duration,
-    /// After `round.ending`, the session ends as `completed` if the browser has not ended it by then.
-    pub ending_grace: Duration,
+    /// After an end is requested, the round ends this long after the closing line ...
+    pub closing_grace: Duration,
+    /// ... or this long after the request, whichever comes first.
+    pub ending_limit: Duration,
+    /// Wall-clock ceiling: a round ends once its total pause (user pauses and time offline) passes this.
+    pub pause_limit: Duration,
+    /// How long the socket stays open for the report after the end.
+    pub scoring_hold: Duration,
+    /// A socket that sends nothing (not even a ping) for this long is closed.
+    pub read_timeout: Duration,
     /// How often the background sweep runs.
     pub janitor: Duration,
 }
@@ -63,7 +111,11 @@ impl Default for SessionTiming {
             offline_limit: Duration::from_secs(180),
             start_limit: Duration::from_secs(600),
             hello_timeout: Duration::from_secs(10),
-            ending_grace: Duration::from_secs(60),
+            closing_grace: Duration::from_secs(3),
+            ending_limit: Duration::from_secs(20),
+            pause_limit: Duration::from_secs(600),
+            scoring_hold: Duration::from_secs(120),
+            read_timeout: Duration::from_secs(45),
             janitor: Duration::from_secs(30),
         }
     }
@@ -80,12 +132,25 @@ pub enum Out {
     },
 }
 
+/// An end that was asked for (the browser's "end", or the interviewer's `end_round`): the closing line is
+/// spoken first, then the round ends.
+#[derive(Clone, Debug)]
+struct Ending {
+    since: Instant,
+    reason: String,
+    /// Turn count when it was asked for; the closing line is a reply to `[event: ending]` after it.
+    turns_at: usize,
+    closing_done: Option<Instant>,
+}
+
 struct HubInner {
     next_seq: u64,
     buffer: VecDeque<Arc<Value>>,
     connections: usize,
     disconnected_since: Option<Instant>,
     attached_at: Instant,
+    /// When the round started (first hello), for the wall-clock ceiling.
+    wall_start: Option<DateTime<Utc>>,
     ended: bool,
     last_sig: Option<String>,
     /// Phase index whose boundary already got its `time_check_due` frame.
@@ -93,7 +158,7 @@ struct HubInner {
     saved_turns: usize,
     saved_key: String,
     last_seen_saved: Option<Instant>,
-    ending_since: Option<Instant>,
+    ending: Option<Ending>,
 }
 
 pub struct Hub {
@@ -103,6 +168,15 @@ pub struct Hub {
     acks: std::sync::Mutex<HashMap<i64, u64>>,
     /// `uses_whiteboard` per phase, for the `round.state` phases list.
     whiteboard: Vec<bool>,
+    /// Serialises Fish bookkeeping (join, resume) for this session.
+    pub fish_lock: Mutex<()>,
+    /// Voice handed out per panelist for its open Fish session (a repeated join gets the same one).
+    pub voices: std::sync::Mutex<HashMap<String, (String, Value)>>,
+    /// Last prompt cache prewarm.
+    pub last_prewarm: std::sync::Mutex<Option<Instant>>,
+    /// The board item the user last touched or created (`board.focus`); the Scribe resolves "that" with it.
+    focus: std::sync::Mutex<Option<String>>,
+    report_done: Notify,
 }
 
 fn frame(t: &str, seq: u64, d: Value) -> Value {
@@ -110,20 +184,13 @@ fn frame(t: &str, seq: u64, d: Value) -> Value {
 }
 
 impl Hub {
-    /// Sends a numbered frame (buffered and replayed after reconnects). Returns its seq.
+    /// Sends a numbered frame (stored, then broadcast; replayed after reconnects). Returns its seq.
     pub async fn emit(&self, db: &PgPool, t: &str, d: Value) -> u64 {
-        let (seq, f) = {
-            let mut h = self.inner.lock().await;
-            let seq = h.next_seq;
-            h.next_seq += 1;
-            let f = Arc::new(frame(t, seq, d));
-            h.buffer.push_back(f.clone());
-            while h.buffer.len() > BUFFER_FRAMES {
-                h.buffer.pop_front();
-            }
-            let _ = self.tx.send(Out::Frame(f.clone()));
-            (seq, f)
-        };
+        let mut h = self.inner.lock().await;
+        let seq = h.next_seq;
+        h.next_seq += 1;
+        let f = Arc::new(frame(t, seq, d));
+        // Stored before it is broadcast, so a socket replaying from the database cannot miss it.
         let res = sqlx::query(
             "insert into session_frames (session_id, seq, frame) values ($1, $2, $3) on conflict do nothing",
         )
@@ -135,6 +202,11 @@ impl Hub {
         if let Err(err) = res {
             tracing::warn!(session_id = %self.session_id, error = %err, "could not store a server frame");
         }
+        h.buffer.push_back(f.clone());
+        while h.buffer.len() > BUFFER_FRAMES {
+            h.buffer.pop_front();
+        }
+        let _ = self.tx.send(Out::Frame(f));
         seq
     }
 
@@ -143,15 +215,30 @@ impl Hub {
         let _ = self.tx.send(Out::Frame(Arc::new(frame(t, 0, d))));
     }
 
-    /// Ends the socket side: `round.ended`, then close 4409 for everyone.
-    pub async fn finish(&self, db: &PgPool, reason: &str) {
-        self.inner.lock().await.ended = true;
-        self.emit(db, "round.ended", json!({ "reason": reason }))
+    /// The round is over: `round.ended` now; the sockets stay for the report and close with 4409 once it is
+    /// done (`send_to_session` with `report.ready`) or after `scoring_hold`.
+    pub async fn finish(self: &Arc<Self>, app: &AppState, reason: &str) {
+        {
+            let mut h = self.inner.lock().await;
+            if h.ended {
+                return;
+            }
+            h.ended = true;
+        }
+        self.emit(&app.db, "round.ended", json!({ "reason": reason }))
             .await;
-        let _ = self.tx.send(Out::Close {
-            code: CLOSE_ENDED,
-            reason: "session ended",
-            tokens: None,
+        let (hub, app) = (self.clone(), app.clone());
+        tokio::spawn(async move {
+            tokio::select! {
+                _ = hub.report_done.notified() => {}
+                _ = tokio::time::sleep(app.timing.scoring_hold) => {}
+            }
+            hub.close_all(CLOSE_ENDED, "session ended");
+            app.hubs.remove(&hub.session_id.to_string());
+            let _ = sqlx::query("delete from session_frames where session_id = $1")
+                .bind(hub.session_id)
+                .execute(&app.db)
+                .await;
         });
     }
 
@@ -190,11 +277,39 @@ impl Hub {
         *e = (*e).max(seq);
     }
 
+    /// The board item in focus (latest `board.focus`).
+    pub fn focus(&self) -> Option<String> {
+        self.focus.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
     pub async fn connections(&self) -> usize {
         self.inner.lock().await.connections
     }
 
-    /// How long the round has had no socket (None while one is connected or before the first one).
+    pub async fn is_ended(&self) -> bool {
+        self.inner.lock().await.ended
+    }
+
+    /// An end has been asked for and the closing line may still be spoken.
+    pub async fn is_ending(&self) -> bool {
+        let h = self.inner.lock().await;
+        h.ending.is_some() && !h.ended
+    }
+
+    /// Asks for the end: the round ends after the closing line (or `ending_limit`). Kept: the first reason.
+    pub async fn request_end(&self, reason: &str, turns_now: usize, closing_done: bool) {
+        let mut h = self.inner.lock().await;
+        if h.ending.is_none() {
+            h.ending = Some(Ending {
+                since: Instant::now(),
+                reason: reason.to_string(),
+                turns_at: turns_now,
+                closing_done: closing_done.then(Instant::now),
+            });
+        }
+    }
+
+    /// How long the round has had no socket (None while one is connected, or once ended).
     pub async fn offline_for(&self) -> Option<Duration> {
         let h = self.inner.lock().await;
         if h.connections > 0 || h.ended {
@@ -222,17 +337,18 @@ impl Hub {
             }
         }
         let rows: Result<Vec<Value>, _> = sqlx::query_scalar(
-            "select frame from session_frames where session_id = $1 and seq > $2 order by seq",
+            "select frame from session_frames where session_id = $1 and seq > $2 order by seq limit $3",
         )
         .bind(self.session_id)
         .bind(last_seq as i64)
+        .bind(REPLAY_LIMIT)
         .fetch_all(db)
         .await;
         rows.unwrap_or_default().into_iter().map(Arc::new).collect()
     }
 }
 
-/// Live hubs by session id.
+/// Hubs by session id.
 #[derive(Clone, Default)]
 pub struct Hubs {
     inner: Arc<RwLock<HashMap<String, Arc<Hub>>>>,
@@ -254,7 +370,7 @@ impl Hubs {
             .remove(id)
     }
 
-    /// Closes every live socket (graceful shutdown: 1012, so browsers reconnect to the new server).
+    /// Closes every live socket (graceful shutdown: 1012, so browsers reconnect to the next server).
     pub fn close_all(&self, code: u16, reason: &'static str) {
         for hub in self
             .inner
@@ -266,6 +382,23 @@ impl Hubs {
         }
     }
 }
+
+/// Sends a numbered frame to a session's sockets (scoring uses it for `report.progress`, `report.ready`, and
+/// `error {code: "report_failed"}`). `report.ready` and `report_failed` end the socket's scoring hold: the
+/// sockets then close with 4409. Returns false when the session has no hub (nobody is listening).
+pub async fn send_to_session(app: &AppState, session_id: &str, t: &str, d: Value) -> bool {
+    let Some(hub) = app.hubs.get(session_id) else {
+        return false;
+    };
+    let terminal = t == "report.ready" || (t == "error" && d["code"] == "report_failed");
+    hub.emit(&app.db, t, d).await;
+    if terminal {
+        hub.report_done.notify_one();
+    }
+    true
+}
+
+type Seen = Option<DateTime<Utc>>;
 
 /// Creates the hub of a live session (once) and starts its driver and event forwarder.
 pub async fn attach(app: &AppState, id: Uuid, handle: Arc<Mutex<SessionState>>) -> Arc<Hub> {
@@ -286,6 +419,29 @@ pub async fn attach(app: &AppState, id: Uuid, handle: Arc<Mutex<SessionState>>) 
         .last()
         .and_then(|f| f["seq"].as_u64())
         .map_or(1, |s| s + 1);
+    // A started round reloaded after a restart counts as offline since its last socket.
+    let seen: Option<(Seen, Seen)> =
+        sqlx::query_as("select started_at, last_socket_at from sessions where id = $1")
+            .bind(id)
+            .fetch_optional(&app.db)
+            .await
+            .unwrap_or_default();
+    let (started_at, last_socket_at) = seen.unwrap_or_default();
+    let focus: Option<String> =
+        sqlx::query_scalar("select board_focus from sessions where id = $1")
+            .bind(id)
+            .fetch_optional(&app.db)
+            .await
+            .ok()
+            .flatten()
+            .flatten();
+    let now = Instant::now();
+    let disconnected_since = started_at.map(|_| {
+        let gone = last_socket_at
+            .map(|t| (Utc::now() - t).to_std().unwrap_or_default())
+            .unwrap_or_default();
+        now.checked_sub(gone).unwrap_or(now)
+    });
     let (whiteboard, events) = {
         let st = handle.lock().await;
         (
@@ -301,18 +457,24 @@ pub async fn attach(app: &AppState, id: Uuid, handle: Arc<Mutex<SessionState>>) 
             next_seq,
             buffer: stored.into_iter().map(Arc::new).collect(),
             connections: 0,
-            disconnected_since: None,
-            attached_at: Instant::now(),
+            disconnected_since,
+            attached_at: now,
+            wall_start: started_at,
             ended: false,
             last_sig: None,
             flagged_phase: None,
             saved_turns: 0,
             saved_key: String::new(),
             last_seen_saved: None,
-            ending_since: None,
+            ending: None,
         }),
         acks: std::sync::Mutex::new(HashMap::new()),
         whiteboard,
+        fish_lock: Mutex::new(()),
+        voices: std::sync::Mutex::new(HashMap::new()),
+        last_prewarm: std::sync::Mutex::new(None),
+        focus: std::sync::Mutex::new(focus),
+        report_done: Notify::new(),
     });
     {
         let mut map = app.hubs.inner.write().unwrap_or_else(|e| e.into_inner());
@@ -416,7 +578,7 @@ async fn forward_events(
             }
             Err(broadcast::error::RecvError::Closed) => break,
         };
-        if hub.inner.lock().await.ended {
+        if hub.is_ended().await {
             break;
         }
         let value = serde_json::to_value(&ev).unwrap_or(Value::Null);
@@ -430,12 +592,26 @@ async fn forward_events(
             }
             other => {
                 if matches!(other, ServerEvent::RoundEnding { .. }) {
-                    hub.inner.lock().await.ending_since = Some(Instant::now());
+                    // end_round comes with the closing line already spoken.
+                    hub.request_end("completed", 0, true).await;
                 }
                 hub.emit(&app.db, &t, d).await;
             }
         }
     }
+}
+
+/// The closing line after an end request: an agent turn following `[event: ending]`.
+fn closing_spoken(st: &SessionState, from: usize) -> bool {
+    let turns = &st.turns[from.min(st.turns.len())..];
+    turns
+        .iter()
+        .position(|t| t.speaker == "app" && t.text == EventKind::Ending.marker())
+        .is_some_and(|i| {
+            turns[i + 1..]
+                .iter()
+                .any(|t| t.speaker != "app" && t.speaker != "candidate")
+        })
 }
 
 /// The per-session loop: state ticks, time checks, saving, and the end conditions.
@@ -474,6 +650,14 @@ async fn drive(app: AppState, hub: Arc<Hub>, handle: Arc<Mutex<SessionState>>) {
                 persist::snapshot(&st, now),
             )
         };
+        // The closing line of a requested end, checked against the state outside the hub lock.
+        let closing = {
+            let from = hub.inner.lock().await.ending.as_ref().map(|e| e.turns_at);
+            match from {
+                Some(from) => closing_spoken(&*handle.lock().await, from),
+                None => false,
+            }
+        };
 
         let (connections, save_from, save, write_seen, end) = {
             let mut h = hub.inner.lock().await;
@@ -506,19 +690,36 @@ async fn drive(app: AppState, hub: Arc<Hub>, handle: Arc<Mutex<SessionState>>) {
                 h.last_seen_saved = Some(now);
             }
 
-            let end = if status != SessionStatus::Created && elapsed_ms >= hard_stop_ms {
-                Some("time_limit")
-            } else if h
-                .ending_since
-                .is_some_and(|t| now.duration_since(t) >= timing.ending_grace)
+            if let Some(e) = h.ending.as_mut()
+                && e.closing_done.is_none()
+                && closing
             {
-                Some("completed")
+                e.closing_done = Some(now);
+            }
+            // Total pause so far: wall time since the start minus round time.
+            let paused_ms = h.wall_start.map_or(0, |start| {
+                ((Utc::now() - start).num_milliseconds().max(0) as u64).saturating_sub(elapsed_ms)
+            });
+            let end: Option<String> = if let Some(e) = &h.ending {
+                let done = e
+                    .closing_done
+                    .is_some_and(|t| now.duration_since(t) >= timing.closing_grace)
+                    || now.duration_since(e.since) >= timing.ending_limit;
+                done.then(|| e.reason.clone())
+            } else if status != SessionStatus::Created && elapsed_ms >= hard_stop_ms {
+                Some("time_limit".into())
+            } else if status != SessionStatus::Created
+                && paused_ms >= timing.pause_limit.as_millis() as u64
+            {
+                // The wall-clock ceiling: hard stop plus at most `pause_limit` of pauses.
+                Some("time_limit".into())
             } else if h.connections == 0 && status == SessionStatus::Created {
-                (now.duration_since(h.attached_at) >= timing.start_limit).then_some("disconnected")
+                (now.duration_since(h.attached_at) >= timing.start_limit)
+                    .then(|| "disconnected".into())
             } else if h.connections == 0 {
                 h.disconnected_since
                     .is_some_and(|t| now.duration_since(t) >= timing.offline_limit)
-                    .then_some("disconnected")
+                    .then(|| "disconnected".into())
             } else {
                 None
             };
@@ -541,7 +742,7 @@ async fn drive(app: AppState, hub: Arc<Hub>, handle: Arc<Mutex<SessionState>>) {
                 .await;
         }
         if let Some(reason) = end {
-            if let Err(err) = persist::end_session(&app, hub.session_id, reason).await {
+            if let Err(err) = persist::end_session(&app, hub.session_id, &reason).await {
                 tracing::error!(session_id = %hub.session_id, error = %format!("{err:#}"), "could not end the session");
                 continue;
             }
@@ -574,7 +775,8 @@ pub async fn ws_handler(
     {
         return AppError::Forbidden.into_response();
     }
-    ws.on_upgrade(move |socket| run_socket(app, id, socket))
+    ws.max_message_size(MAX_MESSAGE_BYTES)
+        .on_upgrade(move |socket| run_socket(app, id, socket))
 }
 
 fn text(v: &Value) -> WsMessage {
@@ -652,7 +854,25 @@ async fn run_socket(app: AppState, id: String, socket: WebSocket) {
         }
     };
     if !row.is_open() {
-        let _ = sink.send(close(CLOSE_ENDED, "session ended")).await;
+        // While the report is being made the socket still carries report.progress / report.ready.
+        if let Some(hub) = app.hubs.get(&id).filter(|_| row.status == "scoring") {
+            let mut rx = hub.tx.subscribe();
+            if let Some(msg) = serve_ended(
+                &app,
+                &hub,
+                &record,
+                last_seq,
+                &mut sink,
+                &mut stream,
+                &mut rx,
+            )
+            .await
+            {
+                let _ = sink.send(msg).await;
+            }
+        } else {
+            let _ = sink.send(close(CLOSE_ENDED, "session ended")).await;
+        }
         return;
     }
     let handle = match persist::load_live(&app, uuid).await {
@@ -669,6 +889,17 @@ async fn run_socket(app: AppState, id: String, socket: WebSocket) {
     };
     let hub = attach(&app, uuid, handle.clone()).await;
     let mut rx = hub.tx.subscribe();
+    // A resume may have revoked this token between the check above and the subscription (its kick was sent
+    // before we listened).
+    if !matches!(
+        persist::check_token(&app.db, uuid, &token).await,
+        Ok(Some(_))
+    ) {
+        let _ = sink
+            .send(close(CLOSE_BAD_TOKEN, "token unknown or expired"))
+            .await;
+        return;
+    }
     connect(&app, &hub, &handle, record).await;
 
     let result = serve_socket(
@@ -714,6 +945,9 @@ async fn connect(app: &AppState, hub: &Hub, handle: &Mutex<SessionState>, record
             _ => false,
         }
     };
+    if started {
+        hub.inner.lock().await.wall_start = Some(Utc::now());
+    }
     let res = if started {
         sqlx::query(
             "update sessions set status = 'live', started_at = now(), last_socket_at = now() \
@@ -751,6 +985,105 @@ async fn disconnect(app: &AppState, hub: &Hub, handle: &Mutex<SessionState>) {
     }
 }
 
+/// Counts frames per second on one socket.
+struct FrameBudget {
+    window: Instant,
+    count: u32,
+}
+
+impl FrameBudget {
+    fn take(&mut self) -> bool {
+        let now = Instant::now();
+        if now.duration_since(self.window) >= Duration::from_secs(1) {
+            self.window = now;
+            self.count = 0;
+        }
+        self.count += 1;
+        self.count <= FRAMES_PER_SECOND
+    }
+}
+
+/// Sends the frames numbered above `last_seq`; returns the highest seq sent.
+async fn replay<S>(
+    app: &AppState,
+    hub: &Hub,
+    token_id: i64,
+    last_seq: u64,
+    sink: &mut S,
+) -> Option<u64>
+where
+    S: futures::Sink<WsMessage> + Unpin,
+{
+    let mut sent_up_to = last_seq;
+    for f in hub.frames_after(&app.db, last_seq).await {
+        sent_up_to = sent_up_to.max(f["seq"].as_u64().unwrap_or(0));
+        if sink
+            .send(text(&with_ack(&f, hub.ack_for(token_id))))
+            .await
+            .is_err()
+        {
+            return None;
+        }
+    }
+    Some(sent_up_to)
+}
+
+/// A socket of an ended round waiting for its report: replay, then forward frames until the hub closes it.
+async fn serve_ended<S, R>(
+    app: &AppState,
+    hub: &Hub,
+    record: &TokenRecord,
+    last_seq: u64,
+    sink: &mut S,
+    stream: &mut R,
+    rx: &mut broadcast::Receiver<Out>,
+) -> Option<WsMessage>
+where
+    S: futures::Sink<WsMessage> + Unpin,
+    R: futures::Stream<Item = Result<WsMessage, axum::Error>> + Unpin,
+{
+    hub.set_ack(record.token_id, record.last_client_seq);
+    let mut sent_up_to = replay(app, hub, record.token_id, last_seq, sink).await?;
+    loop {
+        tokio::select! {
+            incoming = tokio::time::timeout(app.timing.read_timeout, stream.next()) => {
+                match incoming {
+                    Ok(Some(Ok(WsMessage::Text(t)))) => {
+                        if let Ok(env) = serde_json::from_str::<Envelope>(t.as_str())
+                            && env.t == "ping"
+                        {
+                            let pong = with_ack(&frame("pong", 0, json!({})), hub.ack_for(record.token_id));
+                            if sink.send(text(&pong)).await.is_err() { return None; }
+                        }
+                    }
+                    Ok(Some(Ok(WsMessage::Close(_)))) | Ok(None) | Ok(Some(Err(_))) => return None,
+                    Ok(Some(Ok(_))) => {}
+                    Err(_) => return Some(close(CLOSE_GOING_AWAY, "no frames")),
+                }
+            }
+            out = rx.recv() => match out {
+                Ok(Out::Frame(f)) => {
+                    let seq = f["seq"].as_u64().unwrap_or(0);
+                    if seq > 0 {
+                        if seq <= sent_up_to { continue; }
+                        sent_up_to = seq;
+                    }
+                    if sink.send(text(&with_ack(&f, hub.ack_for(record.token_id)))).await.is_err() {
+                        return None;
+                    }
+                }
+                Ok(Out::Close { code, reason, tokens }) => {
+                    if tokens.as_ref().is_none_or(|t| t.contains(&record.token_id)) {
+                        return Some(close(code, reason));
+                    }
+                }
+                Err(broadcast::error::RecvError::Lagged(_)) => return Some(close(CLOSE_LAGGED, "reconnect to catch up")),
+                Err(broadcast::error::RecvError::Closed) => return Some(close(CLOSE_ENDED, "session ended")),
+            }
+        }
+    }
+}
+
 /// Runs one connection after `hello`. Returns the close frame to send, if any.
 #[allow(clippy::too_many_arguments)]
 async fn serve_socket<S, R>(
@@ -768,17 +1101,7 @@ where
     R: futures::Stream<Item = Result<WsMessage, axum::Error>> + Unpin,
 {
     // Replay what the client missed, then the current state (with the time check if one is still owed).
-    let mut sent_up_to = last_seq;
-    for f in hub.frames_after(&app.db, last_seq).await {
-        sent_up_to = sent_up_to.max(f["seq"].as_u64().unwrap_or(0));
-        if sink
-            .send(text(&with_ack(&f, hub.ack_for(token_id))))
-            .await
-            .is_err()
-        {
-            return None;
-        }
-    }
+    let mut sent_up_to = replay(app, hub, token_id, last_seq, sink).await?;
     let snapshot = {
         let st = handle.lock().await;
         let now = Instant::now();
@@ -795,27 +1118,40 @@ where
         return None;
     }
 
+    let mut budget = FrameBudget {
+        window: Instant::now(),
+        count: 0,
+    };
     loop {
         tokio::select! {
-            incoming = stream.next() => {
+            incoming = tokio::time::timeout(app.timing.read_timeout, stream.next()) => {
                 let msg = match incoming {
-                    Some(Ok(m)) => m,
-                    _ => return None,
+                    Err(_) => return Some(close(CLOSE_GOING_AWAY, "no frames")),
+                    Ok(Some(Ok(m))) => m,
+                    Ok(_) => return None,
                 };
                 let raw = match msg {
                     WsMessage::Text(t) => t.as_str().to_string(),
                     WsMessage::Close(_) => return None,
                     _ => continue,
                 };
+                if !budget.take() {
+                    return Some(close(CLOSE_POLICY, "too many frames"));
+                }
                 let Ok(env) = serde_json::from_str::<Envelope>(&raw) else {
                     let f = with_ack(&error_frame("bad_frame", "Frames are JSON {t, seq, d}.", None), hub.ack_for(token_id));
                     if sink.send(text(&f)).await.is_err() { return None; }
                     continue;
                 };
-                for reply in handle_frame(app, hub, handle, token_id, env).await {
+                let (replies, failed) = handle_frame(app, hub, handle, token_id, env).await;
+                for reply in replies {
                     if sink.send(text(&with_ack(&reply, hub.ack_for(token_id)))).await.is_err() {
                         return None;
                     }
+                }
+                if failed {
+                    // Not acked, and nothing after it is processed: the client keeps it and sends it again.
+                    return Some(close(CLOSE_RETRY, "try again"));
                 }
             }
             out = rx.recv() => {
@@ -852,25 +1188,32 @@ fn str_field<'a>(d: &'a Value, key: &str) -> Option<&'a str> {
         .filter(|s| !s.is_empty())
 }
 
-/// Handles one client frame. Returns direct replies (unnumbered); numbered replies go through the hub.
+fn clip(s: &str, max_chars: usize) -> &str {
+    match s.char_indices().nth(max_chars) {
+        Some((i, _)) => &s[..i],
+        None => s,
+    }
+}
+
+/// Handles one client frame. Returns direct replies (unnumbered; numbered replies go through the hub) and
+/// whether it failed to save (then it is not acked and the connection closes).
 async fn handle_frame(
     app: &AppState,
     hub: &Arc<Hub>,
     handle: &Arc<Mutex<SessionState>>,
     token_id: i64,
     env: Envelope,
-) -> Vec<Value> {
+) -> (Vec<Value>, bool) {
     match env.t.as_str() {
-        "ping" => return vec![frame("pong", 0, json!({}))],
-        "hello" => return Vec::new(),
+        "ping" => return (vec![frame("pong", 0, json!({}))], false),
+        "hello" => return (Vec::new(), false),
         _ => {}
     }
     if env.seq > 0 && env.seq <= hub.ack_for(token_id) {
         // Already processed under this token (a replay after a reconnect).
-        return Vec::new();
+        return (Vec::new(), false);
     }
-    let result = process(app, hub, handle, &env).await;
-    match result {
+    match process(app, hub, handle, &env).await {
         Ok(replies) => {
             if env.seq > 0 {
                 hub.set_ack(token_id, env.seq);
@@ -878,16 +1221,18 @@ async fn handle_frame(
                 let seq = env.seq;
                 tokio::spawn(async move { persist::save_client_seq(&db, token_id, seq).await });
             }
-            replies
+            (replies, false)
         }
         Err(err) => {
-            // Not acked: the client keeps the frame and sends it again after its next reconnect.
             tracing::warn!(session_id = %hub.session_id, t = %env.t, error = %format!("{err:#}"), "client frame failed");
-            vec![error_frame(
-                "server_error",
-                "That did not save. It will be sent again.",
-                None,
-            )]
+            (
+                vec![error_frame(
+                    "server_error",
+                    "That did not save. It will be sent again.",
+                    None,
+                )],
+                true,
+            )
         }
     }
 }
@@ -930,11 +1275,28 @@ async fn process(
                     d.get("op_id").and_then(Value::as_str),
                 )]);
             };
+            let args_len = d.get("args").map_or(0, |a| a.to_string().len());
+            if args_len > MAX_OP_ARGS_BYTES || op_id.len() > 200 {
+                return Ok(vec![error_frame(
+                    "op_rejected",
+                    "That board op is too large.",
+                    Some(op_id),
+                )]);
+            }
             let t_ms = elapsed_ms(handle).await;
-            let rev = store_board_op(&app.db, id, op_id, src, op, d, t_ms).await?;
-            if let Some(rev) = rev {
-                hub.emit(&app.db, "board.ack", json!({"op_id": op_id, "rev": rev}))
-                    .await;
+            match store_board_op(&app.db, id, op_id, src, op, d, t_ms).await? {
+                Stored::Rev(rev) => {
+                    hub.emit(&app.db, "board.ack", json!({"op_id": op_id, "rev": rev}))
+                        .await;
+                }
+                Stored::Duplicate => {}
+                Stored::Full => {
+                    return Ok(vec![error_frame(
+                        "op_rejected",
+                        "The board is full.",
+                        Some(op_id),
+                    )]);
+                }
             }
             Ok(Vec::new())
         }
@@ -951,17 +1313,18 @@ async fn process(
                  values ($1, $2, $3, $4, $5, $6) on conflict (session_id, segment_id) do nothing",
             )
             .bind(id)
-            .bind(segment)
-            .bind(str_field(d, "panelist_id"))
+            .bind(clip(segment, 200))
+            .bind(str_field(d, "panelist_id").map(|p| clip(p, 64)))
             .bind(d["first_at_ms"].as_i64().unwrap_or(0))
             .bind(d["final_at_ms"].as_i64().unwrap_or(0))
-            .bind(d["text"].as_str().unwrap_or(""))
+            .bind(clip(d["text"].as_str().unwrap_or(""), MAX_TEXT_CHARS))
             .execute(&app.db)
             .await?;
             Ok(Vec::new())
         }
         "head.samples" => {
-            let samples = d["samples"].as_array().cloned().unwrap_or_default();
+            let mut samples = d["samples"].as_array().cloned().unwrap_or_default();
+            samples.truncate(MAX_HEAD_SAMPLES);
             if let (Some(first), Some(last)) = (samples.first(), samples.last()) {
                 sqlx::query(
                     "insert into head_batches (session_id, first_t_ms, last_t_ms, samples) values ($1, $2, $3, $4)",
@@ -990,6 +1353,28 @@ async fn process(
             store_event(app, id, "voice.state", d).await?;
             Ok(Vec::new())
         }
+        "board.focus" => {
+            // Latest wins. With the server board engine this also calls `BoardSession::set_focus`.
+            let item = str_field(d, "item_id").map(|i| clip(i, 200).to_string());
+            *hub.focus.lock().unwrap_or_else(|e| e.into_inner()) = item.clone();
+            sqlx::query("update sessions set board_focus = $2 where id = $1")
+                .bind(id)
+                .bind(&item)
+                .execute(&app.db)
+                .await?;
+            Ok(Vec::new())
+        }
+        "voice.spoken" => {
+            // Telemetry: the start of a reply as the browser played it. Nothing is stored.
+            if let (Some(pid), Some(heard)) =
+                (str_field(d, "panelist_id"), str_field(d, "text_prefix"))
+            {
+                let heard = clip(heard, 200);
+                let matched = handle.lock().await.played(pid, heard, Instant::now());
+                tracing::debug!(session_id = %id, panelist_id = pid, matched, "voice spoken");
+            }
+            Ok(Vec::new())
+        }
         "board.ghost_reject" => {
             store_event(app, id, "board.ghost_reject", d).await?;
             Ok(Vec::new())
@@ -1000,6 +1385,7 @@ async fn process(
             match kind {
                 "pause" | "resume" => {
                     let now = Instant::now();
+                    let connected = hub.connections().await > 0;
                     let changed = {
                         let mut st = handle.lock().await;
                         match (kind, st.status) {
@@ -1010,7 +1396,7 @@ async fn process(
                             }
                             ("resume", SessionStatus::Paused) => {
                                 st.status = SessionStatus::Live;
-                                if hub.connections().await > 0 {
+                                if connected {
                                     run_clock(&mut st, now);
                                 }
                                 Some((state_value(hub, &st, now, false), "live"))
@@ -1025,8 +1411,21 @@ async fn process(
                     }
                 }
                 "end" => {
-                    let reason = d["reason"].as_str().unwrap_or("user_ended");
-                    persist::end_session(app, id, reason).await?;
+                    // The interviewer says goodbye first (the browser sends `[event: ending]`); the round ends
+                    // after that line, after POST /end, or after `ending_limit`.
+                    let reason = d["reason"]
+                        .as_str()
+                        .filter(|r| persist::END_REASONS.contains(r))
+                        .unwrap_or("user_ended");
+                    let turns = {
+                        let mut st = handle.lock().await;
+                        if st.status == SessionStatus::Paused {
+                            st.status = SessionStatus::Live;
+                            run_clock(&mut st, Instant::now());
+                        }
+                        st.turns.len()
+                    };
+                    hub.request_end(reason, turns, false).await;
                 }
                 _ => {}
             }
@@ -1034,15 +1433,21 @@ async fn process(
         }
         other => Ok(vec![error_frame(
             "unknown_type",
-            &format!("Unknown frame type {other}."),
+            &format!("Unknown frame type {}.", clip(other, 40)),
             None,
         )]),
     }
 }
 
-/// Stores a board op as received (`accepted` null until the board engine evaluates it). Returns the rev to ack
-/// with: the count of stored ops so far, which equals the board rev while every op is accepted. A duplicate of a
-/// stored op returns None (its ack was already sent and is replayed by seq).
+enum Stored {
+    Rev(i64),
+    Duplicate,
+    Full,
+}
+
+/// Stores a board op as received (`accepted` null until the board engine evaluates it). The ack carries the
+/// count of stored ops so far, which equals the board rev while every op is accepted. A duplicate of a stored
+/// op is not acked again (its ack was already sent and is replayed by seq).
 async fn store_board_op(
     db: &PgPool,
     id: Uuid,
@@ -1051,7 +1456,7 @@ async fn store_board_op(
     op: &str,
     d: &Value,
     t_ms: i64,
-) -> anyhow::Result<Option<i64>> {
+) -> anyhow::Result<Stored> {
     let mut tx = db.begin().await?;
     sqlx::query("select pg_advisory_xact_lock(hashtext($1::text))")
         .bind(id)
@@ -1065,14 +1470,19 @@ async fn store_board_op(
             .await?;
     if matches!(existing, Some(None) | Some(Some(true))) {
         tx.commit().await?;
-        return Ok(None);
+        return Ok(Stored::Duplicate);
     }
-    let rev: i64 = sqlx::query_scalar(
-        "select coalesce(max(rev), 0) + 1 from board_ops where session_id = $1 and accepted is not false",
+    let (count, rev): (i64, i64) = sqlx::query_as(
+        "select count(*), coalesce(max(rev) filter (where accepted is not false), 0) + 1 \
+         from board_ops where session_id = $1",
     )
     .bind(id)
     .fetch_one(&mut *tx)
     .await?;
+    if count >= MAX_BOARD_OPS {
+        tx.commit().await?;
+        return Ok(Stored::Full);
+    }
     sqlx::query(
         "insert into board_ops (session_id, op_id, rev_base, rev, accepted, src, op, args, at_ms, t_ms) \
          values ($1, $2, $3, $4, null, $5, $6, $7, $8, $9) \
@@ -1085,13 +1495,13 @@ async fn store_board_op(
     .bind(op_id)
     .bind(d.get("rev_base").and_then(Value::as_i64))
     .bind(rev)
-    .bind(src)
-    .bind(op)
+    .bind(clip(src, 40))
+    .bind(clip(op, 40))
     .bind(d.get("args").cloned().unwrap_or_else(|| json!({})))
     .bind(d.get("at_ms").and_then(Value::as_i64))
     .bind(t_ms)
     .execute(&mut *tx)
     .await?;
     tx.commit().await?;
-    Ok(Some(rev))
+    Ok(Stored::Rev(rev))
 }

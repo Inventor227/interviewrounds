@@ -30,16 +30,10 @@ pub trait LlmApi: Send + Sync {
         &self,
         req: &MessagesRequest,
     ) -> Result<BoxStream<'static, Result<StreamEvent, ClaudeError>>, ClaudeError>;
-    /// Writes the prompt cache for this request's prefix in the background (no-op by default).
-    fn prewarm(&self, _req: &MessagesRequest) {}
 }
 
 #[async_trait]
 impl LlmApi for ClaudeClient {
-    fn prewarm(&self, req: &MessagesRequest) {
-        ClaudeClient::prewarm(self, req)
-    }
-
     async fn create(&self, req: &MessagesRequest) -> Result<MessagesResponse, ClaudeError> {
         ClaudeClient::create(self, req).await
     }

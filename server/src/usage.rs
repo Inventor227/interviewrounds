@@ -7,24 +7,36 @@
 //! - judging: guests get 3 quick rounds per device per UTC day and 1 full round per device, under a global spend
 //!   cap (`judge_cap_usd`, recorded plus reserved);
 //! - after: guests get 1 quick round per device in total;
-//! - signed-in free users get 2 rounds, then history and reports only.
+//! - signed-in free users get 2 rounds, then history and reports only;
+//! - in every phase, model spend across everyone per UTC day stops new sessions at `model_daily_cap_usd`.
+//!
+//! Every model call goes through `MeteredLlm`, which prices it into the ledger (prewarms and streams the caller
+//! dropped included; a stream cut before its usage arrived is estimated).
 //!
 //! A Fish session's minutes are only known at the end, so each new Fish session reserves its worst case
 //! (hard stop minutes x concurrent Fish sessions x rate) until the real minutes are recorded.
 
+use std::pin::Pin;
+use std::sync::Arc;
+use std::task::{Context, Poll};
+
+use async_trait::async_trait;
 use axum::Json;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use chrono::{DateTime, Days, NaiveTime, TimeZone, Utc};
+use futures::Stream;
+use futures::stream::BoxStream;
 use serde::Serialize;
 use serde_json::json;
 use sqlx::{PgConnection, PgPool};
 use uuid::Uuid;
 
-use crate::claude::Usage;
+use crate::claude::{ClaudeError, MessagesRequest, MessagesResponse, StreamEvent, Usage};
 use crate::config::{Config, PanelMode, UsagePhase};
 use crate::content::RoundConfig;
 use crate::identity::{Identity, IdentityKind};
+use crate::orchestrator::LlmApi;
 
 pub const GUEST_SHORT_PER_DAY: i64 = 3;
 pub const GUEST_FULL_PER_DEVICE: i64 = 1;
@@ -60,8 +72,21 @@ pub fn price_for(model: &str) -> ModelPrice {
     }
 }
 
+/// Haiku prompts over 100K tokens cost more.
+const HAIKU_LONG_PROMPT: u64 = 100_000;
+
 pub fn claude_cost(model: &str, usage: &Usage) -> f64 {
-    let p = price_for(model);
+    let mut p = price_for(model);
+    let prompt =
+        usage.input_tokens + usage.cache_read_input_tokens + usage.cache_creation_input_tokens;
+    if model.contains("haiku") && prompt > HAIKU_LONG_PROMPT {
+        p = ModelPrice {
+            input: 0.50,
+            output: 2.50,
+            cache_read: 0.05,
+            cache_write: 0.50 * 1.25,
+        };
+    }
     (usage.input_tokens as f64 * p.input
         + usage.output_tokens as f64 * p.output
         + usage.cache_read_input_tokens as f64 * p.cache_read
@@ -125,23 +150,169 @@ pub async fn record_claude(
     Ok(cost)
 }
 
-/// Fire-and-forget ledger entry for a live voice turn (called from the custom LLM endpoint).
-pub fn record_claude_turn(db: &PgPool, cfg: &Config, session_id: &str, model: &str, usage: &Usage) {
-    if usage == &Usage::default() {
+tokio::task_local! {
+    /// The session the model calls of the current request belong to (set around the custom LLM endpoint and
+    /// the session routes), so the ledger can charge them to it.
+    pub static LLM_SESSION: Uuid;
+}
+
+fn current_session() -> Option<Uuid> {
+    LLM_SESSION.try_with(|id| *id).ok()
+}
+
+fn spawn_record(
+    db: PgPool,
+    phase: UsagePhase,
+    session: Option<Uuid>,
+    kind: &'static str,
+    model: String,
+    usage: Usage,
+) {
+    let Ok(rt) = tokio::runtime::Handle::try_current() else {
+        tracing::warn!(model = %model, kind, "no runtime to record model usage");
         return;
-    }
-    let (db, phase, model, usage) = (
-        db.clone(),
-        cfg.usage_phase,
-        model.to_string(),
-        usage.clone(),
-    );
-    let session_id = Uuid::parse_str(session_id).ok();
-    tokio::spawn(async move {
-        if let Err(err) = record_claude(&db, phase, session_id, "live_turn", &model, &usage).await {
-            tracing::warn!(error = %err, "could not record model usage");
+    };
+    rt.spawn(async move {
+        if let Err(err) = record_claude(&db, phase, session, kind, &model, &usage).await {
+            tracing::warn!(error = %err, kind, "could not record model usage");
         }
     });
+}
+
+/// Rough usage of a streamed call that ended before its usage arrived: the newest message as fresh input, the
+/// rest of the prompt as a cache read, and about 4 characters per token.
+fn estimate(req: &MessagesRequest, out_chars: usize) -> Usage {
+    let chars = |v: &serde_json::Value| v.to_string().len() as u64;
+    let prefix = chars(&json!({"system": req.system, "tools": req.tools}));
+    let (older, newest) = match req.messages.split_last() {
+        Some((last, rest)) => (chars(&json!(rest)), chars(&json!(last))),
+        None => (0, 0),
+    };
+    Usage {
+        input_tokens: newest / 4 + 1,
+        output_tokens: out_chars as u64 / 4,
+        cache_read_input_tokens: (prefix + older) / 4,
+        cache_creation_input_tokens: 0,
+    }
+}
+
+/// The model client every caller uses: prices each call into the ledger.
+pub struct MeteredLlm {
+    inner: Arc<dyn LlmApi>,
+    db: PgPool,
+    phase: UsagePhase,
+}
+
+impl MeteredLlm {
+    pub fn new(inner: Arc<dyn LlmApi>, db: PgPool, phase: UsagePhase) -> Self {
+        MeteredLlm { inner, db, phase }
+    }
+}
+
+#[async_trait]
+impl LlmApi for MeteredLlm {
+    async fn create(&self, req: &MessagesRequest) -> Result<MessagesResponse, ClaudeError> {
+        let session = current_session();
+        let res = self.inner.create(req).await;
+        if let Ok(r) = &res {
+            let model = if r.model.is_empty() {
+                req.model.clone()
+            } else {
+                r.model.clone()
+            };
+            let kind = if req.max_tokens == 0 {
+                "prewarm"
+            } else {
+                "model_call"
+            };
+            spawn_record(
+                self.db.clone(),
+                self.phase,
+                session,
+                kind,
+                model,
+                r.usage.clone(),
+            );
+        }
+        res
+    }
+
+    async fn stream(
+        &self,
+        req: &MessagesRequest,
+    ) -> Result<BoxStream<'static, Result<StreamEvent, ClaudeError>>, ClaudeError> {
+        let session = current_session();
+        let inner = self.inner.stream(req).await?;
+        Ok(Box::pin(MeteredStream {
+            inner,
+            meter: Meter {
+                db: self.db.clone(),
+                phase: self.phase,
+                session,
+                model: req.model.clone(),
+                estimate: Some(estimate(req, 0)),
+                out_chars: 0,
+            },
+        }))
+    }
+}
+
+/// Records a stream's usage once: from its stop event, or as an estimate when it is dropped before one.
+struct Meter {
+    db: PgPool,
+    phase: UsagePhase,
+    session: Option<Uuid>,
+    model: String,
+    /// Pending until the stop event arrives.
+    estimate: Option<Usage>,
+    out_chars: usize,
+}
+
+impl Drop for Meter {
+    fn drop(&mut self) {
+        if let Some(mut usage) = self.estimate.take() {
+            usage.output_tokens = self.out_chars as u64 / 4;
+            spawn_record(
+                self.db.clone(),
+                self.phase,
+                self.session,
+                "live_turn_cut",
+                self.model.clone(),
+                usage,
+            );
+        }
+    }
+}
+
+struct MeteredStream {
+    inner: BoxStream<'static, Result<StreamEvent, ClaudeError>>,
+    meter: Meter,
+}
+
+impl Stream for MeteredStream {
+    type Item = Result<StreamEvent, ClaudeError>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let next = self.inner.as_mut().poll_next(cx);
+        if let Poll::Ready(Some(Ok(ev))) = &next {
+            match ev {
+                StreamEvent::TextDelta(t) => self.meter.out_chars += t.len(),
+                StreamEvent::Stop { usage, .. } if self.meter.estimate.take().is_some() => {
+                    let m = &self.meter;
+                    spawn_record(
+                        m.db.clone(),
+                        m.phase,
+                        m.session,
+                        "live_turn",
+                        m.model.clone(),
+                        usage.clone(),
+                    );
+                }
+                _ => {}
+            }
+        }
+        next
+    }
 }
 
 /// One Fish session's measured minutes, and where the number came from (`fish` or `clock`).
@@ -201,6 +372,16 @@ pub async fn fish_build_spend(conn: &mut PgConnection, cfg: &Config) -> Result<f
     Ok(cfg.fish_build_spent_usd + recorded + reserved(conn).await?)
 }
 
+/// Model spend today (UTC), across everyone.
+pub async fn model_spend_today(conn: &mut PgConnection) -> Result<f64, sqlx::Error> {
+    sqlx::query_scalar(
+        "select coalesce(sum(cost_usd), 0)::float8 from usage_events \
+         where provider = 'anthropic' and created_at >= date_trunc('day', now() at time zone 'UTC') at time zone 'UTC'",
+    )
+    .fetch_one(conn)
+    .await
+}
+
 /// All spend in the judging phase (Fish and model calls) + reservations of unrecorded Fish sessions.
 pub async fn judging_spend(conn: &mut PgConnection) -> Result<f64, sqlx::Error> {
     let recorded: f64 = sqlx::query_scalar(
@@ -248,6 +429,8 @@ pub enum CapError {
     BuildBudgetReached,
     #[error("free rounds used")]
     FreeRoundsUsed,
+    #[error("model budget reached")]
+    ModelBudgetReached,
 }
 
 impl CapError {
@@ -259,6 +442,7 @@ impl CapError {
             CapError::JudgeBudgetReached => "judge_budget_reached",
             CapError::BuildBudgetReached => "build_budget_reached",
             CapError::FreeRoundsUsed => "free_rounds_used",
+            CapError::ModelBudgetReached => "model_budget_reached",
         }
     }
 
@@ -281,6 +465,9 @@ impl CapError {
             }
             CapError::FreeRoundsUsed => {
                 "You have used your free live rounds. Your history and reports stay here."
+            }
+            CapError::ModelBudgetReached => {
+                "Rounds are fully booked for today. Please come back tomorrow."
             }
         }
     }
@@ -448,6 +635,10 @@ async fn budget_error(
     extra_usd: f64,
     capped_user: bool,
 ) -> Result<Option<CapError>, sqlx::Error> {
+    // Every phase, everyone: a safety stop on model spend per UTC day.
+    if model_spend_today(conn).await? >= cfg.model_daily_cap_usd {
+        return Ok(Some(CapError::ModelBudgetReached));
+    }
     if cfg.usage_phase == UsagePhase::Judging
         && (identity.kind == IdentityKind::Guest || capped_user)
         && judging_spend(conn).await? + extra_usd >= cfg.judge_cap_usd
@@ -456,7 +647,7 @@ async fn budget_error(
     }
     if cfg.usage_phase == UsagePhase::Build
         && fish
-        && fish_build_spend(conn, cfg).await? + extra_usd > cfg.fish_build_cap_usd
+        && fish_build_spend(conn, cfg).await? + extra_usd >= cfg.fish_build_cap_usd
     {
         return Ok(Some(CapError::BuildBudgetReached));
     }
@@ -570,7 +761,15 @@ mod tests {
         };
         assert!((claude_cost("claude-opus-5-5", &u) - (4.0 + 20.0 + 0.2 + 5.0)).abs() < 1e-9);
         assert!((claude_cost("claude-sonnet-5-5", &u) - (2.0 + 10.0 + 0.1 + 2.5)).abs() < 1e-9);
-        assert!((claude_cost("claude-haiku-5-5", &u) - (0.1 + 0.5 + 0.01 + 0.125)).abs() < 1e-9);
+        // Haiku has a short-prompt tier (up to 100K prompt tokens) and a long-prompt tier above it.
+        let short = Usage {
+            input_tokens: 50_000,
+            output_tokens: 10_000,
+            cache_read_input_tokens: 0,
+            cache_creation_input_tokens: 0,
+        };
+        assert!((claude_cost("claude-haiku-5-5", &short) - (0.005 + 0.005)).abs() < 1e-9);
+        assert!((claude_cost("claude-haiku-5-5", &u) - (0.5 + 2.5 + 0.05 + 0.625)).abs() < 1e-9);
         // Unknown models are never free.
         assert_eq!(price_for("something-new"), price_for("claude-opus-5-5"));
     }

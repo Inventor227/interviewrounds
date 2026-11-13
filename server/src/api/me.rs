@@ -16,6 +16,7 @@ use crate::app::AppState;
 use crate::content::Catalog;
 use crate::error::{AppError, AppResult};
 use crate::identity::{COOKIE, Identity};
+use crate::persist;
 use crate::usage;
 
 /// `settings.schema.json`.
@@ -156,8 +157,16 @@ pub fn daily_round(catalog: &Catalog, date: NaiveDate, role: &str) -> Option<(St
     Some((r.id.clone(), r.title.clone()))
 }
 
-fn round_role<'a>(catalog: &'a Catalog, round_id: &str) -> Option<&'a str> {
-    catalog.round(round_id).map(|r| r.role.as_str())
+/// The round ids of a role (None = every round).
+fn role_rounds(catalog: &Catalog, role: Option<&str>) -> Option<Vec<String>> {
+    role.map(|want| {
+        catalog
+            .rounds
+            .values()
+            .filter(|r| r.role == want)
+            .map(|r| r.id.clone())
+            .collect()
+    })
 }
 
 /// Competency scores of the role's last 10 scored sessions, oldest first.
@@ -167,32 +176,23 @@ pub async fn skills(
     identity: Uuid,
     role: Option<&str>,
 ) -> Result<Value, sqlx::Error> {
-    let rows: Vec<(Uuid, Option<String>, DateTime<Utc>, Value)> = sqlx::query_as(
-        "select s.id, s.round_id, coalesce(s.started_at, s.created_at), r.report \
+    let rounds = role_rounds(catalog, role);
+    let mut picked: Vec<(Uuid, Option<String>, DateTime<Utc>, Value)> = sqlx::query_as(
+        "select s.id, s.round_id, coalesce(s.started_at, s.created_at), \
+                coalesce(r.report -> 'competencies', '[]'::jsonb) \
          from sessions s join reports r on r.session_id = s.id \
-         where s.identity_id = $1 and s.status = 'scored' \
-         order by coalesce(s.started_at, s.created_at) desc limit 200",
+         where s.identity_id = $1 and s.status = 'scored' and ($2::text[] is null or s.round_id = any($2)) \
+         order by coalesce(s.started_at, s.created_at) desc limit 10",
     )
     .bind(identity)
+    .bind(rounds)
     .fetch_all(db)
     .await?;
-    let mut picked: Vec<_> = rows
-        .into_iter()
-        .filter(|(_, round, _, _)| {
-            role.is_none_or(|want| {
-                round
-                    .as_deref()
-                    .and_then(|r| round_role(catalog, r))
-                    .is_some_and(|r| r == want)
-            })
-        })
-        .take(10)
-        .collect();
     picked.reverse();
     let mut competencies: BTreeMap<String, (String, Vec<Value>)> = BTreeMap::new();
     let mut order: Vec<String> = Vec::new();
-    for (session_id, _, at, report) in picked {
-        for c in report["competencies"].as_array().into_iter().flatten() {
+    for (session_id, _, at, competencies_json) in picked {
+        for c in competencies_json.as_array().into_iter().flatten() {
             let (Some(id), Some(score)) = (c["id"].as_str(), c["score"].as_f64()) else {
                 continue;
             };
@@ -305,32 +305,29 @@ pub struct RoleQuery {
     pub role: Option<String>,
 }
 
+/// Session id, round id, start, headline.
+type HistoryRow = (Uuid, Option<String>, DateTime<Utc>, Option<String>);
+
 /// `GET /api/me/history?role=`: sessions with a report, newest first.
 pub async fn history(
     State(app): State<AppState>,
     Extension(identity): Extension<Identity>,
     Query(q): Query<RoleQuery>,
 ) -> AppResult<Json<Value>> {
-    let rows: Vec<(Uuid, Option<String>, DateTime<Utc>, Value)> = sqlx::query_as(
-        "select s.id, s.round_id, coalesce(s.started_at, s.created_at), r.report \
+    let role = q.role.as_deref().filter(|r| !r.is_empty());
+    let rows: Vec<HistoryRow> = sqlx::query_as(
+        "select s.id, s.round_id, coalesce(s.started_at, s.created_at), r.report -> 'headline' ->> 'summary' \
          from sessions s join reports r on r.session_id = s.id \
-         where s.identity_id = $1 order by coalesce(s.started_at, s.created_at) desc limit 200",
+         where s.identity_id = $1 and ($2::text[] is null or s.round_id = any($2)) \
+         order by coalesce(s.started_at, s.created_at) desc limit 200",
     )
     .bind(identity.id)
+    .bind(role_rounds(&app.catalog, role))
     .fetch_all(&app.db)
     .await?;
-    let role = q.role.as_deref().filter(|r| !r.is_empty());
     let list: Vec<Value> = rows
         .into_iter()
-        .filter(|(_, round, _, _)| {
-            role.is_none_or(|want| {
-                round
-                    .as_deref()
-                    .and_then(|r| round_role(&app.catalog, r))
-                    .is_some_and(|r| r == want)
-            })
-        })
-        .map(|(id, round, at, report)| {
+        .map(|(id, round, at, headline)| {
             let round_id = round.unwrap_or_default();
             let title = app
                 .catalog
@@ -342,7 +339,7 @@ pub async fn history(
                 "round_id": round_id,
                 "title": title,
                 "started_at": at,
-                "headline": report["headline"]["summary"].as_str().unwrap_or(""),
+                "headline": headline.unwrap_or_default(),
             })
         })
         .collect();
@@ -400,6 +397,15 @@ pub async fn delete_me(
     State(app): State<AppState>,
     Extension(identity): Extension<Identity>,
 ) -> AppResult<Response> {
+    // Spend first: open rounds end and Fish minutes are settled into the ledger, which outlives the identity.
+    let claimed: Vec<Uuid> =
+        sqlx::query_scalar("select id from identities where claimed_into = $1")
+            .bind(identity.id)
+            .fetch_all(&app.db)
+            .await?;
+    for who in std::iter::once(identity.id).chain(claimed) {
+        persist::settle_identity(&app, who).await?;
+    }
     // Guests claimed into this user go too.
     sqlx::query("delete from identities where id = $1 or claimed_into = $1")
         .bind(identity.id)

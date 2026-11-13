@@ -2,13 +2,17 @@
 //!
 //! Create: check caps -> build the live state -> mint a Fish token for the floor panelist (all panelists when
 //! `PANEL_MODE=joined`) -> prewarm the prompt cache -> persist -> `CreateSessionRes`.
+//!
+//! The fake voice (browser speech, no Fish) is a development path: creating such a session needs the
+//! `X-Dev-Key` header. Fish bookkeeping (join, resume) runs under the hub's Fish lock and re-reads the stored
+//! Fish sessions there, so no minted session is ever lost from the list that gets ended and billed.
 
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use axum::Json;
 use axum::extract::{Extension, Path, State};
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use chrono::Utc;
 use serde::Deserialize;
@@ -22,21 +26,26 @@ use crate::claude::ContentBlock;
 use crate::config::PanelMode;
 use crate::content::RoundConfig;
 use crate::error::{AppError, AppResult};
-use crate::fish::CreateFishSession;
+use crate::fish::{CreateFishSession, FishSessionToken};
 use crate::identity::Identity;
 use crate::orchestrator::markers::{EventKind, UserInput};
 use crate::orchestrator::prompt::prepare_live_turn;
 use crate::orchestrator::speech_filter::SpeechFilter;
 use crate::orchestrator::{
     Level, LiveSettings, Mode, NewSession, PanelSeat, SessionSettings, SessionState, SessionStatus,
-    Style, TurnCommit, VoiceKind,
+    Style, TurnCommit, VoiceKind, constant_time_eq,
 };
 use crate::persist::{self, FishEntry, PanelEntry, SessionRow};
-use crate::usage::{self, Length, StartRequest};
-use crate::ws;
+use crate::usage::{self, LLM_SESSION, Length, StartRequest};
+use crate::ws::{self, Hub};
 
 /// Advisory lock key that serialises the cap check and the insert of new sessions.
 const CREATE_LOCK: i64 = 0x4952_5345_5353;
+/// Resumes allowed per session.
+pub const MAX_RESUMES: i32 = 3;
+/// A prewarm younger than this still holds the prompt cache (5 minutes): no need to write it again.
+const PREWARM_FRESH: Duration = Duration::from_secs(240);
+pub const DEV_KEY_HEADER: &str = "x-dev-key";
 
 /// The note the next interviewer turn sees after a resume (the browser then sends `[event: resume]`).
 pub const RESUME_NOTE: &str = "The candidate's connection dropped and they are back now. Welcome them back in one \
@@ -68,6 +77,14 @@ pub struct EndReq {
     pub reason: String,
 }
 
+fn refuse(status: StatusCode, code: &str, message: &str) -> Response {
+    (
+        status,
+        Json(json!({"status": status.as_u16(), "code": code, "message": message})),
+    )
+        .into_response()
+}
+
 fn length_str(l: Length) -> &'static str {
     match l {
         Length::Short => "short",
@@ -80,6 +97,13 @@ fn enum_str<T: serde::Serialize>(v: &T) -> String {
         .ok()
         .and_then(|v| v.as_str().map(str::to_string))
         .unwrap_or_default()
+}
+
+fn dev_key_ok(app: &AppState, headers: &HeaderMap) -> bool {
+    headers
+        .get(DEV_KEY_HEADER)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|k| constant_time_eq(k.as_bytes(), app.config.dev_key.as_bytes()))
 }
 
 /// The round in the requested length (following `short_version` / `full_version`).
@@ -158,7 +182,7 @@ fn timing(st: &SessionState) -> Value {
     })
 }
 
-fn fish_voice(token: &crate::fish::FishSessionToken) -> Value {
+fn fish_voice(token: &FishSessionToken) -> Value {
     let fish = if token.raw.is_object() {
         token.raw.clone()
     } else {
@@ -172,34 +196,54 @@ fn fish_voice(token: &crate::fish::FishSessionToken) -> Value {
     json!({"transport": "fish", "fish": fish})
 }
 
-/// Mints a Fish session for one panelist (custom LLM calls carry our session and panelist ids back).
-async fn mint_fish(
-    app: &AppState,
-    st: &SessionState,
-    panelist_id: &str,
-    first_message: Option<String>,
-) -> AppResult<(crate::fish::FishSessionToken, FishEntry)> {
+/// What a Fish session needs from the state (read under a short lock; minting happens outside it).
+struct MintSpec {
+    session_id: String,
+    identity_id: String,
+    panelist_id: String,
+    display_name: String,
+    title: String,
+    voice_id: String,
+}
+
+fn mint_spec(app: &AppState, st: &SessionState, panelist_id: &str) -> AppResult<MintSpec> {
     let p = st.panelist(panelist_id).ok_or(AppError::NotFound)?;
     let voice_id = app
         .catalog
         .fish_voice_id(&p.persona)
         .ok_or_else(|| anyhow::anyhow!("no Fish voice for {}", p.persona.id))?
         .to_string();
+    Ok(MintSpec {
+        session_id: st.id.clone(),
+        identity_id: st.identity_id.clone(),
+        panelist_id: panelist_id.to_string(),
+        display_name: p.persona.display_name.clone(),
+        title: p.persona.title.clone(),
+        voice_id,
+    })
+}
+
+/// Mints a Fish session for one panelist (custom LLM calls carry our session and panelist ids back).
+async fn mint_fish(
+    app: &AppState,
+    spec: &MintSpec,
+    first_message: Option<String>,
+) -> AppResult<(FishSessionToken, FishEntry)> {
     let req = CreateFishSession {
         agent_id: app.config.fish_agent_id.clone(),
-        end_user_id: st.identity_id.clone(),
-        voice_id,
-        system_prompt: format!("You are {}, {}.", p.persona.display_name, p.persona.title),
+        end_user_id: spec.identity_id.clone(),
+        voice_id: spec.voice_id.clone(),
+        system_prompt: format!("You are {}, {}.", spec.display_name, spec.title),
         first_message,
-        llm_extra_body: json!({"session_id": st.id, "panelist_id": panelist_id}),
+        llm_extra_body: json!({"session_id": spec.session_id, "panelist_id": spec.panelist_id}),
         record_audio: true,
     };
     let token = app.fish.create_session(&req).await.map_err(|err| {
-        tracing::warn!(session_id = %st.id, panelist_id, error = %err, "could not mint a Fish session");
+        tracing::warn!(session_id = %spec.session_id, panelist_id = %spec.panelist_id, error = %err, "could not mint a Fish session");
         AppError::Unavailable
     })?;
     let entry = FishEntry {
-        panelist_id: panelist_id.to_string(),
+        panelist_id: spec.panelist_id.clone(),
         fish_session_id: token.session_id.clone(),
         started_at: Utc::now(),
         ended_at: None,
@@ -207,59 +251,85 @@ async fn mint_fish(
     Ok((token, entry))
 }
 
-/// Mints the voices a (re)starting session needs: the floor only in swap mode, everyone when joined.
-async fn mint_voices(
-    app: &AppState,
-    st: &SessionState,
-    mode: PanelMode,
-) -> AppResult<(Vec<(String, Value)>, Vec<FishEntry>)> {
-    let mut voices = Vec::new();
-    let mut entries = Vec::new();
-    for p in &st.panel {
-        let wanted = st.settings.voice == VoiceKind::Fish
-            && (mode == PanelMode::Joined || p.panelist_id == st.floor);
-        let voice = if st.settings.voice == VoiceKind::Fake {
-            json!({"transport": "fake"})
-        } else if wanted {
-            let (token, entry) = mint_fish(app, st, &p.panelist_id, None).await?;
-            entries.push(entry);
-            fish_voice(&token)
-        } else {
-            json!({"transport": "fish_pending"})
-        };
-        voices.push((p.panelist_id.clone(), voice));
-    }
-    Ok((voices, entries))
+/// The panelists that get a voice now: the floor only in swap mode, everyone when joined.
+fn voiced(st: &SessionState, mode: PanelMode) -> Vec<String> {
+    st.panel
+        .iter()
+        .filter(|p| mode == PanelMode::Joined || p.panelist_id == st.floor)
+        .map(|p| p.panelist_id.clone())
+        .collect()
 }
 
-fn create_res(
+/// Mints the voices a (re)starting Fish session needs, saving each Fish session to `entries` the moment it
+/// exists (so a failure part way leaves nothing untracked). Returns the voice per panelist.
+async fn mint_voices(
     app: &AppState,
-    st: &SessionState,
-    token: &str,
-    voices: &[(String, Value)],
-    mode: PanelMode,
-    limits: &usage::Limits,
-) -> Value {
-    let panel: Vec<Value> = panel_entries(st)
+    session_id: Uuid,
+    specs: Vec<MintSpec>,
+    entries: &mut Vec<FishEntry>,
+) -> AppResult<Vec<(String, Value, String)>> {
+    let mut out = Vec::new();
+    for spec in specs {
+        let (token, entry) = mint_fish(app, &spec, None).await?;
+        entries.push(entry);
+        persist::save_fish_entries(&app.db, session_id, entries).await?;
+        out.push((spec.panelist_id, fish_voice(&token), token.session_id));
+    }
+    Ok(out)
+}
+
+fn remember_voices(hub: &Hub, voices: &[(String, Value, String)]) {
+    let mut cache = hub.voices.lock().unwrap_or_else(|e| e.into_inner());
+    for (pid, voice, fish_id) in voices {
+        cache.insert(pid.clone(), (fish_id.clone(), voice.clone()));
+    }
+}
+
+/// Ends Fish sessions in the background (each one is retried; settlement retries what is still open).
+fn end_in_background(app: &AppState, ids: Vec<String>) {
+    for fid in ids {
+        let app = app.clone();
+        tokio::spawn(async move {
+            if let Err(err) = persist::end_fish(&app, &fid).await {
+                tracing::warn!(fish_session_id = %fid, error = %err, "could not end Fish session");
+            }
+        });
+    }
+}
+
+fn panel_json(st: &SessionState, voices: &[(String, Value, String)]) -> Vec<Value> {
+    panel_entries(st)
         .into_iter()
         .map(|e| {
-            let voice = voices
-                .iter()
-                .find(|(id, _)| *id == e.panelist_id)
-                .map(|(_, v)| v.clone())
-                .unwrap_or_else(|| json!({"transport": "fish_pending"}));
+            let voice = if st.settings.voice == VoiceKind::Fake {
+                json!({"transport": "fake"})
+            } else {
+                voices
+                    .iter()
+                    .find(|(id, _, _)| *id == e.panelist_id)
+                    .map(|(_, v, _)| v.clone())
+                    .unwrap_or_else(|| json!({"transport": "fish_pending"}))
+            };
             let mut v = json!(e);
             v["voice"] = voice;
             v
         })
-        .collect();
-    let _ = app;
+        .collect()
+}
+
+fn create_res(
+    st: &SessionState,
+    token: &str,
+    voices: &[(String, Value, String)],
+    mode: PanelMode,
+    limits: &usage::Limits,
+) -> Value {
     json!({
         "session_id": st.id,
         "client_token": token,
         "ws_url": format!("/ws/session/{}", st.id),
         "round": round_public(&st.round),
-        "panel": panel,
+        "panel": panel_json(st, voices),
         "floor": st.floor,
         "panel_mode": mode.as_str(),
         "limits": limits,
@@ -267,14 +337,30 @@ fn create_res(
     })
 }
 
-fn prewarm(app: &AppState, st: &SessionState) {
-    let (req, _) = prepare_live_turn(
+/// Writes the prompt cache for the floor panelist's next turn (priced into the ledger), unless it was written
+/// less than 4 minutes ago.
+fn prewarm(app: &AppState, hub: &Hub, st: &SessionState, session_id: Uuid) {
+    {
+        let mut last = hub.last_prewarm.lock().unwrap_or_else(|e| e.into_inner());
+        if last.is_some_and(|t| t.elapsed() < PREWARM_FRESH) {
+            return;
+        }
+        *last = Some(Instant::now());
+    }
+    let (mut req, _) = prepare_live_turn(
         st,
         &st.floor,
         &UserInput::Event(EventKind::Start),
         Instant::now(),
     );
-    app.llm.prewarm(&req);
+    req.max_tokens = 0;
+    req.stream = false;
+    let llm = app.llm.clone();
+    tokio::spawn(LLM_SESSION.scope(session_id, async move {
+        if let Err(err) = llm.create(&req).await {
+            tracing::warn!(session_id = %session_id, error = %err, "prewarm failed");
+        }
+    }));
 }
 
 async fn current_limits(app: &AppState, identity: &Identity) -> AppResult<usage::Limits> {
@@ -286,8 +372,16 @@ async fn current_limits(app: &AppState, identity: &Identity) -> AppResult<usage:
 pub async fn create(
     State(app): State<AppState>,
     Extension(identity): Extension<Identity>,
+    headers: HeaderMap,
     Json(req): Json<CreateSessionReq>,
 ) -> Response {
+    if req.voice == VoiceKind::Fake && !dev_key_ok(&app, &headers) {
+        return refuse(
+            StatusCode::FORBIDDEN,
+            "dev_only",
+            "The text voice is for development only.",
+        );
+    }
     match create_inner(&app, &identity, req).await {
         Ok(Ok(v)) => Json(v).into_response(),
         Ok(Err(cap)) => cap.into_response(),
@@ -424,28 +518,42 @@ async fn create_inner(
     let (token, _, _) = persist::issue_token(&mut tx, session_id, false).await?;
     tx.commit().await?;
 
-    let (voices, entries) = match mint_voices(app, &st, mode).await {
-        Ok(v) => v,
-        Err(err) => {
-            let _ = sqlx::query(
-                "update sessions set status = 'failed', ended_at = now() where id = $1",
-            )
-            .bind(session_id)
-            .execute(&app.db)
-            .await;
-            return Err(err);
+    let mut entries = Vec::new();
+    let voices = if fish {
+        let specs = voiced(&st, mode)
+            .iter()
+            .map(|pid| mint_spec(app, &st, pid))
+            .collect::<AppResult<Vec<_>>>()?;
+        match mint_voices(app, session_id, specs, &mut entries).await {
+            Ok(v) => v,
+            Err(err) => {
+                // Failed sessions do not count; whatever was minted is ended and settled.
+                let _ = sqlx::query(
+                    "update sessions set status = 'failed', ended_at = now() where id = $1",
+                )
+                .bind(session_id)
+                .execute(&app.db)
+                .await;
+                let app2 = app.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = persist::settle_fish(&app2, session_id).await {
+                        tracing::warn!(session_id = %session_id, error = %format!("{e:#}"), "could not settle a failed start");
+                    }
+                });
+                return Err(err);
+            }
         }
+    } else {
+        Vec::new()
     };
-    if !entries.is_empty() {
-        persist::save_fish_entries(&app.db, session_id, &entries).await?;
-    }
-    prewarm(app, &st);
     persist::save_live(&app.db, session_id, &persist::snapshot(&st, now), 0).await?;
 
     let limits = current_limits(app, identity).await?;
-    let res = create_res(app, &st, &token, &voices, mode, &limits);
+    let res = create_res(&st, &token, &voices, mode, &limits);
     let handle = app.registry.insert(st);
-    ws::attach(app, session_id, handle).await;
+    let hub = ws::attach(app, session_id, handle.clone()).await;
+    remember_voices(&hub, &voices);
+    prewarm(app, &hub, &*handle.lock().await, session_id);
     tracing::info!(session_id = %session_id, round_id = %round.id, voice = %enum_str(&req.voice), "session created");
     Ok(Ok(res))
 }
@@ -459,23 +567,88 @@ async fn owned(app: &AppState, identity: &Identity, id: &str) -> AppResult<Sessi
         .ok_or(AppError::NotFound)
 }
 
-async fn live_handle(app: &AppState, row: &SessionRow) -> AppResult<Arc<Mutex<SessionState>>> {
+async fn live_handle(
+    app: &AppState,
+    row: &SessionRow,
+) -> AppResult<(Arc<Mutex<SessionState>>, Arc<Hub>)> {
     if !row.is_open() {
         return Err(AppError::Conflict("This session has ended.".into()));
     }
-    persist::load_live(app, row.id)
+    let handle = persist::load_live(app, row.id)
         .await?
-        .ok_or_else(|| AppError::Conflict("This session has ended.".into()))
+        .ok_or_else(|| AppError::Conflict("This session has ended.".into()))?;
+    let hub = ws::attach(app, row.id, handle.clone()).await;
+    Ok((handle, hub))
 }
 
-/// `POST /api/sessions/{id}/resume`: same session, new client token, new Fish token(s) for the floor.
+/// How long a started round has had no socket: from the hub, or from `last_socket_at` when it is not loaded.
+/// None while a socket is connected or before the round started.
+async fn offline_for(app: &AppState, row: &SessionRow) -> AppResult<Option<Duration>> {
+    if row.started_at.is_none() {
+        return Ok(None);
+    }
+    if let Some(hub) = app.hubs.get(&row.id.to_string()) {
+        return Ok(hub.offline_for().await);
+    }
+    let seen: Option<chrono::DateTime<Utc>> =
+        sqlx::query_scalar("select last_socket_at from sessions where id = $1")
+            .bind(row.id)
+            .fetch_one(&app.db)
+            .await?;
+    Ok(Some(
+        seen.map(|t| (Utc::now() - t).to_std().unwrap_or_default())
+            .unwrap_or(Duration::MAX),
+    ))
+}
+
+/// `POST /api/sessions/{id}/resume`: same session, new client token, new Fish token(s) for the floor. Only
+/// within the 3-minute window after a drop, and at most 3 times per session.
 pub async fn resume(
     State(app): State<AppState>,
     Extension(identity): Extension<Identity>,
     Path(id): Path<String>,
-) -> AppResult<Json<Value>> {
-    let row = owned(&app, &identity, &id).await?;
-    let handle = live_handle(&app, &row).await?;
+) -> Response {
+    match resume_inner(&app, &identity, &id).await {
+        Ok(r) => r,
+        Err(err) => err.into_response(),
+    }
+}
+
+async fn resume_inner(app: &AppState, identity: &Identity, id: &str) -> AppResult<Response> {
+    let row = owned(app, identity, id).await?;
+    if !row.is_open() {
+        return Ok(refuse(
+            StatusCode::CONFLICT,
+            "session_ended",
+            "This session has ended.",
+        ));
+    }
+    if offline_for(app, &row)
+        .await?
+        .is_some_and(|gone| gone >= app.timing.offline_limit)
+    {
+        return Ok(refuse(
+            StatusCode::CONFLICT,
+            "resume_expired",
+            "This round can no longer be resumed.",
+        ));
+    }
+    let counted: Option<i32> = sqlx::query_scalar(
+        "update sessions set resume_count = resume_count + 1 \
+         where id = $1 and resume_count < $2 returning resume_count",
+    )
+    .bind(row.id)
+    .bind(MAX_RESUMES)
+    .fetch_optional(&app.db)
+    .await?;
+    if counted.is_none() {
+        return Ok(refuse(
+            StatusCode::CONFLICT,
+            "resume_limit",
+            "This round has been resumed too many times.",
+        ));
+    }
+    let (handle, hub) = live_handle(app, &row).await?;
     let mode = if row.panel_mode == "joined" {
         PanelMode::Joined
     } else {
@@ -485,60 +658,76 @@ pub async fn resume(
     let mut tx = app.db.begin().await?;
     let (token, _, revoked) = persist::issue_token(&mut tx, row.id, true).await?;
     tx.commit().await?;
-    if let Some(hub) = app.hubs.get(&row.id.to_string()) {
-        hub.kick(revoked);
-    }
+    hub.kick(revoked);
 
-    // The old Fish sessions are gone with the page; end them so they stop billing.
-    let mut entries = row.fish_entries();
-    let now = Utc::now();
-    for e in entries.iter_mut().filter(|e| e.ended_at.is_none()) {
-        e.ended_at = Some(now);
-        let (fish, fid) = (app.fish.clone(), e.fish_session_id.clone());
-        tokio::spawn(async move {
-            if let Err(err) = fish.end_session(&fid).await {
-                tracing::warn!(fish_session_id = %fid, error = %err, "could not end Fish session");
-            }
-        });
-    }
-
-    let mut st = handle.lock().await;
-    let (voices, new_entries) = mint_voices(&app, &st, mode).await?;
-    entries.extend(new_entries);
-    persist::save_fish_entries(&app.db, row.id, &entries).await?;
-    st.pending_notes.push(RESUME_NOTE.to_string());
-    if st.status == SessionStatus::Paused {
-        st.status = SessionStatus::Live;
-    }
-    let status = if st.status == SessionStatus::Created {
-        "created"
+    // New voices: the old Fish sessions went with the page, so they are ended; re-read under the Fish lock.
+    let voices = if row.voice == "fish" {
+        let _fish = hub.fish_lock.lock().await;
+        let fresh = persist::fetch_session(&app.db, row.id)
+            .await?
+            .ok_or(AppError::NotFound)?;
+        let mut entries = fresh.fish_entries();
+        let now = Utc::now();
+        let mut stale = Vec::new();
+        for e in entries.iter_mut().filter(|e| e.ended_at.is_none()) {
+            e.ended_at = Some(now);
+            stale.push(e.fish_session_id.clone());
+        }
+        persist::save_fish_entries(&app.db, row.id, &entries).await?;
+        end_in_background(app, stale);
+        hub.voices.lock().unwrap_or_else(|e| e.into_inner()).clear();
+        let specs = {
+            let st = handle.lock().await;
+            voiced(&st, mode)
+                .iter()
+                .map(|pid| mint_spec(app, &st, pid))
+                .collect::<AppResult<Vec<_>>>()?
+        };
+        let voices = mint_voices(app, row.id, specs, &mut entries).await?;
+        remember_voices(&hub, &voices);
+        voices
     } else {
-        "live"
+        Vec::new()
     };
-    sqlx::query(
-        "update sessions set status = $2 where id = $1 and status in ('created', 'live', 'paused')",
-    )
-    .bind(row.id)
-    .bind(status)
-    .execute(&app.db)
-    .await?;
-    prewarm(&app, &st);
-    persist::save_live(
-        &app.db,
-        row.id,
-        &persist::snapshot(&st, Instant::now()),
-        st.turns.len(),
-    )
-    .await?;
-    let limits = current_limits(&app, &identity).await?;
-    let res = create_res(&app, &st, &token, &voices, mode, &limits);
+
+    let res = {
+        let mut st = handle.lock().await;
+        if !st.pending_notes.iter().any(|n| n == RESUME_NOTE) {
+            st.pending_notes.push(RESUME_NOTE.to_string());
+        }
+        if st.status == SessionStatus::Paused {
+            st.status = SessionStatus::Live;
+        }
+        let status = if st.status == SessionStatus::Created {
+            "created"
+        } else {
+            "live"
+        };
+        sqlx::query(
+            "update sessions set status = $2 where id = $1 and status in ('created', 'live', 'paused')",
+        )
+        .bind(row.id)
+        .bind(status)
+        .execute(&app.db)
+        .await?;
+        prewarm(app, &hub, &st, row.id);
+        persist::save_live(
+            &app.db,
+            row.id,
+            &persist::snapshot(&st, Instant::now()),
+            st.turns.len(),
+        )
+        .await?;
+        let limits = current_limits(app, identity).await?;
+        create_res(&st, &token, &voices, mode, &limits)
+    };
     tracing::info!(session_id = %row.id, "session resumed");
-    Ok(Json(res))
+    Ok(Json(res).into_response())
 }
 
 /// `POST /api/sessions/{id}/panelists/{pid}/join {opening_line?}` (swap mode hand-over). The opening line goes
 /// into the shared history as the new panelist's turn (Fish speaks it as `first_message`, so our endpoint never
-/// sees it), and the floor moves.
+/// sees it), and the floor moves. Joining a panelist that already has a live voice returns that voice.
 pub async fn join(
     State(app): State<AppState>,
     Extension(identity): Extension<Identity>,
@@ -552,16 +741,74 @@ pub async fn join(
             "The panel is joined; hand-overs need no new voice.".into(),
         ));
     }
-    let handle = live_handle(&app, &row).await?;
-    let mut st = handle.lock().await;
-    if st.panelist(&pid).is_none() {
-        return Err(AppError::NotFound);
+    let (handle, hub) = live_handle(&app, &row).await?;
+    let _fish = hub.fish_lock.lock().await;
+    let (line, spec, fake) = {
+        let st = handle.lock().await;
+        if st.panelist(&pid).is_none() {
+            return Err(AppError::NotFound);
+        }
+        let line = req
+            .opening_line
+            .map(|l| l.trim().to_string())
+            .filter(|l| !l.is_empty())
+            .or_else(|| st.pending_handover.get(&pid).cloned());
+        let fake = st.settings.voice == VoiceKind::Fake;
+        let spec = if fake {
+            None
+        } else {
+            Some(mint_spec(&app, &st, &pid)?)
+        };
+        (line, spec, fake)
+    };
+
+    let fresh = persist::fetch_session(&app.db, row.id)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    let mut entries = fresh.fish_entries();
+    if !fake {
+        // Already holding a live voice: the same one again, nothing new is minted or said.
+        let cached = hub
+            .voices
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(&pid)
+            .cloned();
+        if let Some((fish_id, voice)) = cached
+            && entries
+                .iter()
+                .any(|e| e.fish_session_id == fish_id && e.ended_at.is_none())
+        {
+            return Ok(Json(json!({ "voice": voice })));
+        }
     }
-    let line = req
-        .opening_line
-        .map(|l| l.trim().to_string())
-        .filter(|l| !l.is_empty())
-        .or_else(|| st.pending_handover.get(&pid).cloned());
+
+    let voice = match spec {
+        None => json!({"transport": "fake"}),
+        Some(spec) => {
+            // One voice at a time: every open Fish session ends (including a stale one of this panelist).
+            let now = Utc::now();
+            let mut stale = Vec::new();
+            for e in entries.iter_mut().filter(|e| e.ended_at.is_none()) {
+                e.ended_at = Some(now);
+                stale.push(e.fish_session_id.clone());
+            }
+            persist::save_fish_entries(&app.db, row.id, &entries).await?;
+            end_in_background(&app, stale);
+            {
+                let mut cache = hub.voices.lock().unwrap_or_else(|e| e.into_inner());
+                cache.clear();
+            }
+            let (token, entry) = mint_fish(&app, &spec, line.clone()).await?;
+            entries.push(entry);
+            persist::save_fish_entries(&app.db, row.id, &entries).await?;
+            let voice = fish_voice(&token);
+            remember_voices(&hub, &[(pid.clone(), voice.clone(), token.session_id)]);
+            voice
+        }
+    };
+
+    let mut st = handle.lock().await;
     let now = Instant::now();
     match &line {
         Some(line) => {
@@ -587,30 +834,6 @@ pub async fn join(
         }
         None => st.floor = pid.clone(),
     }
-
-    let voice = if st.settings.voice == VoiceKind::Fake {
-        json!({"transport": "fake"})
-    } else {
-        // One voice at a time: the previous one stops billing.
-        let mut entries = row.fish_entries();
-        let ended = Utc::now();
-        for e in entries
-            .iter_mut()
-            .filter(|e| e.ended_at.is_none() && e.panelist_id != pid)
-        {
-            e.ended_at = Some(ended);
-            let (fish, fid) = (app.fish.clone(), e.fish_session_id.clone());
-            tokio::spawn(async move {
-                if let Err(err) = fish.end_session(&fid).await {
-                    tracing::warn!(fish_session_id = %fid, error = %err, "could not end Fish session");
-                }
-            });
-        }
-        let (token, entry) = mint_fish(&app, &st, &pid, line.clone()).await?;
-        entries.push(entry);
-        persist::save_fish_entries(&app.db, row.id, &entries).await?;
-        fish_voice(&token)
-    };
     persist::save_live(
         &app.db,
         row.id,
@@ -621,7 +844,8 @@ pub async fn join(
     Ok(Json(json!({ "voice": voice })))
 }
 
-/// `POST /api/sessions/{id}/end {reason}` -> 202.
+/// `POST /api/sessions/{id}/end {reason}` -> 202. Ends the round now with the client's reason (an ending
+/// already in progress keeps the reason given here).
 pub async fn end(
     State(app): State<AppState>,
     Extension(identity): Extension<Identity>,

@@ -1,6 +1,7 @@
 //! REST API (docs/protocol.md, REST).
 
 pub mod content;
+pub mod llm_gate;
 pub mod me;
 pub mod sessions;
 

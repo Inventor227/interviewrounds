@@ -68,6 +68,8 @@ pub struct Config {
     pub fish_build_cap_usd: f64,
     pub judge_cap_usd: f64,
     pub fish_rate_per_min: f64,
+    /// Model spend per UTC day across everyone (`MODEL_DAILY_CAP_USD`, default 40); new sessions stop beyond it.
+    pub model_daily_cap_usd: f64,
     /// Fish spend made outside this server's ledger during the build (spikes), counted against the build cap.
     pub fish_build_spent_usd: f64,
     /// `PANEL_MODE`: `swap` (default) or `joined`.
@@ -180,12 +182,14 @@ impl Config {
         let fish_build_cap_usd = parse_or(&get, "FISH_BUILD_CAP_USD", 14.0f64)?;
         let judge_cap_usd = parse_or(&get, "JUDGE_CAP_USD", 100.0f64)?;
         let fish_rate_per_min = parse_or(&get, "FISH_RATE_PER_MIN", 0.07f64)?;
+        let model_daily_cap_usd = parse_or(&get, "MODEL_DAILY_CAP_USD", 40.0f64)?;
         let fish_build_spent_usd = parse_or(&get, "FISH_BUILD_SPENT_USD", 0.0f64)?;
         for (var, value) in [
             ("FISH_BUILD_SPENT_USD", fish_build_spent_usd),
             ("FISH_BUILD_CAP_USD", fish_build_cap_usd),
             ("JUDGE_CAP_USD", judge_cap_usd),
             ("FISH_RATE_PER_MIN", fish_rate_per_min),
+            ("MODEL_DAILY_CAP_USD", model_daily_cap_usd),
         ] {
             if !value.is_finite() || value < 0.0 {
                 return Err(ConfigError::Invalid {
@@ -217,6 +221,7 @@ impl Config {
             fish_build_cap_usd,
             judge_cap_usd,
             fish_rate_per_min,
+            model_daily_cap_usd,
             fish_build_spent_usd,
             panel_mode,
             google_client_id: get("GOOGLE_CLIENT_ID"),
@@ -314,6 +319,7 @@ impl fmt::Debug for Config {
             .field("fish_build_cap_usd", &self.fish_build_cap_usd)
             .field("judge_cap_usd", &self.judge_cap_usd)
             .field("fish_rate_per_min", &self.fish_rate_per_min)
+            .field("model_daily_cap_usd", &self.model_daily_cap_usd)
             .field("fish_build_spent_usd", &self.fish_build_spent_usd)
             .field("panel_mode", &self.panel_mode)
             .field("google_client_id", &self.google_client_id)
@@ -363,6 +369,7 @@ mod tests {
         assert_eq!(cfg.fish_build_cap_usd, 14.0);
         assert_eq!(cfg.judge_cap_usd, 100.0);
         assert_eq!(cfg.fish_rate_per_min, 0.07);
+        assert_eq!(cfg.model_daily_cap_usd, 40.0);
         assert_eq!(cfg.live_model, "claude-opus-5-5");
         assert_eq!(cfg.fast_model, "claude-opus-5-5");
         assert_eq!(cfg.scoring_model, "claude-opus-5-5");

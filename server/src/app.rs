@@ -24,6 +24,7 @@ use crate::error::AppError;
 use crate::fish::FishClient;
 use crate::orchestrator::{LlmApi, OrchestratorOptions, Registry, SessionAuth, oai};
 use crate::persist::DbSessionAuth;
+use crate::usage::MeteredLlm;
 use crate::ws::{self, Hubs, SessionTiming};
 
 /// Shared state for every handler.
@@ -53,8 +54,9 @@ impl AppState {
             tracing::warn!(error = %format!("{err:#}"), "content not loaded; no rounds available");
             Catalog::default()
         });
+        let llm: Arc<dyn LlmApi> = Arc::new(ClaudeClient::new(&config));
         AppState {
-            llm: Arc::new(ClaudeClient::new(&config)),
+            llm: Arc::new(MeteredLlm::new(llm, db.clone(), config.usage_phase)),
             fish: FishClient::new(&config),
             registry: Registry::new(),
             session_auth: Arc::new(DbSessionAuth::new(db.clone())),
@@ -84,9 +86,13 @@ impl AppState {
         self
     }
 
-    /// Replaces the model client (tests use a scripted one).
+    /// Replaces the model client (tests use a scripted one). Calls are still priced into the ledger.
     pub fn with_llm(mut self, llm: Arc<dyn LlmApi>) -> Self {
-        self.llm = llm;
+        self.llm = Arc::new(MeteredLlm::new(
+            llm,
+            self.db.clone(),
+            self.config.usage_phase,
+        ));
         self
     }
 
@@ -123,7 +129,13 @@ pub fn router(state: AppState) -> Router {
         .nest("/assets", assets)
         .route("/healthz", get(healthz))
         // Fish custom LLM endpoint (and the fake-voice path from the browser).
-        .route("/v1/chat/completions", post(oai::chat_completions))
+        .route(
+            "/v1/chat/completions",
+            post(oai::chat_completions).layer(middleware::from_fn_with_state(
+                state.clone(),
+                api::llm_gate::gate,
+            )),
+        )
         // Unknown API paths answer JSON 404 instead of the web app.
         .route("/api", any(api_not_found))
         .route("/api/{*rest}", any(api_not_found))
