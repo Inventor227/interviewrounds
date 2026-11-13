@@ -46,6 +46,8 @@ pub struct Config {
     pub live_model: String,
     pub fast_model: String,
     pub scoring_model: String,
+    /// `output_config.effort` for live turns (`LIVE_EFFORT`, default `low`).
+    pub live_effort: String,
     pub usage_phase: UsagePhase,
     pub fish_build_cap_usd: f64,
     pub judge_cap_usd: f64,
@@ -121,6 +123,14 @@ impl Config {
             }
         };
 
+        let live_effort = get("LIVE_EFFORT").unwrap_or_else(|| "low".into());
+        if !["low", "medium", "high", "xhigh", "max"].contains(&live_effort.as_str()) {
+            return Err(ConfigError::Invalid {
+                var: "LIVE_EFFORT",
+                reason: format!("expected low, medium, high, xhigh or max, got {live_effort:?}"),
+            });
+        }
+
         let port = parse_or(&get, "PORT", 8080u16)?;
         let fish_build_cap_usd = parse_or(&get, "FISH_BUILD_CAP_USD", 14.0f64)?;
         let judge_cap_usd = parse_or(&get, "JUDGE_CAP_USD", 100.0f64)?;
@@ -155,6 +165,7 @@ impl Config {
             live_model: get("LIVE_MODEL").unwrap_or_else(|| DEFAULT_MODEL.into()),
             fast_model: get("FAST_MODEL").unwrap_or_else(|| DEFAULT_MODEL.into()),
             scoring_model: get("SCORING_MODEL").unwrap_or_else(|| DEFAULT_MODEL.into()),
+            live_effort,
             usage_phase,
             fish_build_cap_usd,
             judge_cap_usd,
@@ -210,6 +221,7 @@ impl fmt::Debug for Config {
             .field("live_model", &self.live_model)
             .field("fast_model", &self.fast_model)
             .field("scoring_model", &self.scoring_model)
+            .field("live_effort", &self.live_effort)
             .field("usage_phase", &self.usage_phase)
             .field("fish_build_cap_usd", &self.fish_build_cap_usd)
             .field("judge_cap_usd", &self.judge_cap_usd)
@@ -264,6 +276,7 @@ mod tests {
         assert_eq!(cfg.live_model, "claude-opus-5-5");
         assert_eq!(cfg.fast_model, "claude-opus-5-5");
         assert_eq!(cfg.scoring_model, "claude-opus-5-5");
+        assert_eq!(cfg.live_effort, "low");
         assert_eq!(cfg.google_client_id, None);
         assert_eq!(cfg.public_dir, PathBuf::from("public"));
     }
@@ -308,6 +321,16 @@ mod tests {
         ));
 
         let mut env = base();
+        env.insert("LIVE_EFFORT", "none".into());
+        assert!(matches!(
+            load(&env),
+            Err(ConfigError::Invalid {
+                var: "LIVE_EFFORT",
+                ..
+            })
+        ));
+
+        let mut env = base();
         env.insert("FISH_RATE_PER_MIN", "-1".into());
         assert!(matches!(
             load(&env),
@@ -333,11 +356,13 @@ mod tests {
         let mut env = base();
         env.insert("USAGE_PHASE", "judging".into());
         env.insert("LIVE_MODEL", "claude-sonnet-5-5".into());
+        env.insert("LIVE_EFFORT", "medium".into());
         env.insert("GOOGLE_CLIENT_ID", "gid".into());
         env.insert("PORT", "9000".into());
         let cfg = load(&env).unwrap();
         assert_eq!(cfg.usage_phase, UsagePhase::Judging);
         assert_eq!(cfg.live_model, "claude-sonnet-5-5");
+        assert_eq!(cfg.live_effort, "medium");
         assert_eq!(cfg.google_client_id.as_deref(), Some("gid"));
         assert_eq!(cfg.port, 9000);
     }

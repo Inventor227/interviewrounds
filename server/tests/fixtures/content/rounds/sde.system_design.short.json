@@ -1,0 +1,23 @@
+{
+  "id": "sde.system_design.short",
+  "title": "System design",
+  "summary": "Scope and sketch one service, then answer one hard question.",
+  "role": "sde",
+  "round_type": "system_design",
+  "length": "short",
+  "target_minutes": 8,
+  "hard_stop_minutes": 9,
+  "silence_wait_seconds": 40,
+  "interrupt_after_seconds": 90,
+  "panel": { "lead": "persona.daniel", "second": null },
+  "phases": [
+    { "id": "requirements", "title": "Requirements", "minutes": 2, "goal": "Give the prompt, call show_question, let them scope." },
+    { "id": "hld", "title": "Design", "minutes": 4, "goal": "They draw. Ask for one request end to end, then probe one gap.", "uses_whiteboard": true },
+    { "id": "probe", "title": "Probe", "minutes": 2, "goal": "Ask what breaks first at ten times the traffic, then close." }
+  ],
+  "rubric_id": "rubric.system_design",
+  "question_pool": "bank.system_design",
+  "hands": "whiteboard",
+  "board_kit": "hld",
+  "full_version": "sde.system_design.full"
+}
