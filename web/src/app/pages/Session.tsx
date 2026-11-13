@@ -198,7 +198,8 @@ function LiveSession(props: { launch: Taken }) {
       {note && <p class="meta bad">{note}</p>}
       {(preview || dev) && <div class="xr-stage" ref={stage} data-test="session-stage" />}
       {preview && room?.hasBoard && room.attachBoardCanvas && <BoardCanvas room={room} />}
-      {(debug || (dev && fakeVoice)) && <DevConsole source={controller} />}
+      {/* Typed turns: with ?debug=1, and in a development preview with the typed-turn voice. */}
+      {(debug || (dev && fakeVoice && preview)) && <DevConsole source={controller} />}
       {debug && room && <Timings room={room} />}
     </Page>
   );
