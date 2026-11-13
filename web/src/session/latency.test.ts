@@ -28,4 +28,23 @@ describe('LatencyTracker', () => {
     const l = new LatencyTracker();
     expect(l.agentText(100)).toBeNull();
   });
+
+  it('ignores_trailing_text_of_the_interrupted_segment', () => {
+    const l = new LatencyTracker();
+    l.userFinal(1000, 'a1');
+    expect(l.agentText(1010, 'a1')).toBeNull();
+    expect(l.agentText(2400, 'a2')).toMatchObject({ to_first_text_ms: 1400 });
+  });
+
+  it('keeps_a_thinking_that_came_just_before_the_final', () => {
+    const l = new LatencyTracker();
+    l.thinking(900);
+    l.userFinal(1000);
+    expect(l.agentText(1800)).toMatchObject({ to_thinking_ms: -100, to_first_text_ms: 800 });
+    l.thinking(5000); // marker turn, no user final: forgotten at its reply
+    l.agentText(5500);
+    l.userFinal(6000);
+    expect(l.agentText(7000)).toMatchObject({ to_thinking_ms: null });
+  });
 });
+
