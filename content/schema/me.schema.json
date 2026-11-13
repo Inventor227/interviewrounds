@@ -5,7 +5,7 @@
   "description": "Response of GET /api/me. $defs/limits is also the limits field of CreateSessionRes.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["identity", "sign_in_available", "settings", "onboarding_done", "streak", "daily", "limits", "entitlements"],
+  "required": ["identity", "sign_in_available", "settings", "onboarding_done", "streak", "daily", "limits", "entitlements", "resumable"],
   "properties": {
     "identity": {
       "type": "object",
@@ -38,7 +38,18 @@
       "description": "Today's suggested short round; null when there is none."
     },
     "limits": { "$ref": "#/$defs/limits" },
-    "entitlements": { "$ref": "#/$defs/entitlements" }
+    "entitlements": { "$ref": "#/$defs/entitlements" },
+    "resumable": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["session_id", "round_title", "expires_at"],
+      "properties": {
+        "session_id": { "type": "string" },
+        "round_title": { "type": "string" },
+        "expires_at": { "type": "string", "format": "date-time" }
+      },
+      "description": "A started round of this identity whose browser dropped less than 3 minutes ago; null when there is none."
+    }
   },
   "$defs": {
     "limits": {
@@ -50,7 +61,7 @@
         "full_left": { "type": ["integer", "null"], "minimum": 0, "description": "null = no limit." },
         "resets_at": { "type": ["string", "null"], "format": "date-time" },
         "reason": {
-          "enum": [null, "guest_daily_limit", "guest_full_used", "judge_budget_reached", "build_budget_reached", "free_rounds_used"],
+          "enum": [null, "guest_daily_limit", "guest_full_used", "judge_budget_reached", "build_budget_reached", "free_rounds_used", "model_budget_reached"],
           "description": "Why a new session is blocked; null = not blocked."
         }
       }
