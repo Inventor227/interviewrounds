@@ -266,6 +266,9 @@ export function createRoundRuntime({ preview }: RuntimeOptions): RoundController
           const g = s.board.ghosts.find((x) => x.op_id === opId);
           return g ? ghostRect(s.board, g) : null;
         },
+        // The board's pointers (hands and controllers) and what they hold, for scripted runs.
+        pointers: () => ({ sources: board?.hands?.sources() ?? [], over: board?.hands?.pointers() ?? [], overlays: board?.input.overlays.map((o) => o.kind) ?? [] }),
+        tray: () => board?.kit.tray.map((t) => ({ x: t.x, y: t.y, w: t.w, h: t.h })) ?? [],
       };
     }
 

@@ -1,6 +1,6 @@
-// Emulator run for the no-desk path: enter passthrough holding controllers (the hands hint shows), switch to hands,
-// sit in open floor and never touch anything. After 6 s the desk falls back to 0.45 m below the head with a full
-// virtual desk and the line "No desk? We set one up for you."
+// Emulator run for the no-desk path: enter passthrough holding controllers (nothing is said about them), put them
+// down, sit in open floor and never touch anything. After 6 s the desk falls back to 0.45 m below the head with a
+// full virtual desk and the line "No desk? We set one up for you."
 
 import { copyFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
@@ -30,7 +30,7 @@ await startPlacement();
 await call('xr', 'set-input-mode', { mode: 'controller' });
 await call('xr', 'set-transform', { device: 'headset', position: HEAD, orientation: { pitch: -20, yaw: 0, roll: 0 } });
 await sleep(1500);
-await shot(`nodesk-1-controllers-hint`);
+await shot(`nodesk-1-controllers`);
 log.hintsAfterEnter = await page(() => globalThis.__xrApp.ui.hint.history);
 
 await call('xr', 'set-input-mode', { mode: 'hand' });
