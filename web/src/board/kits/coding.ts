@@ -88,21 +88,32 @@ function topLine(view: PanelView, board: Board, panel: Rect): number {
   const lines = code?.lines ?? [];
   const rows = visibleLines(panel);
   if (code !== view.code) {
-    if (view.anchor) {
-      const i = lines.findIndex((l) => l.id === view.anchor);
-      if (i >= 0) view.top = i;
-    }
-    // The newest change: the last line that is new or reads differently.
-    let changed = -1;
     const seen = view.seen;
-    if (seen) for (let i = 0; i < lines.length; i++) if (seen.get(lines[i]!.id) !== `${lines[i]!.indent}|${lines[i]!.text}`) changed = i;
+    const kept = seen ? lines.filter((l) => seen.has(l.id)).length : 0;
+    const idsChanged = !seen || kept !== lines.length || kept !== seen.size;
+    if (seen && kept === 0 && lines.length > 0) {
+      // All new code (a Parsons deal, a rewrite with fresh ids): open it at the top.
+      view.top = 0;
+      view.cue = null;
+    } else {
+      // Lines added or removed above the view: keep showing the same first line. A pure
+      // reorder (the user moved a line) keeps the rows where they are, so what was just
+      // dropped stays where it was dropped.
+      if (idsChanged && view.anchor) {
+        const i = lines.findIndex((l) => l.id === view.anchor);
+        if (i >= 0) view.top = i;
+      }
+      // The newest change: the last line that is new or reads differently.
+      let changed = -1;
+      if (seen) for (let i = 0; i < lines.length; i++) if (seen.get(lines[i]!.id) !== `${lines[i]!.indent}|${lines[i]!.text}`) changed = i;
+      if (changed >= 0 && (changed < view.top || changed >= view.top + rows)) {
+        const held = view.live.size > 0 || view.now() - view.manualAt < FOLLOW_PAUSE_MS;
+        if (held) view.cue = lines[changed]!.id;
+        else view.top = changed < view.top ? changed : changed - rows + 1;
+      }
+    }
     view.seen = code ? new Map(lines.map((l) => [l.id, `${l.indent}|${l.text}`])) : null;
     view.code = code;
-    if (changed >= 0 && (changed < view.top || changed >= view.top + rows)) {
-      const held = view.live.size > 0 || view.now() - view.manualAt < FOLLOW_PAUSE_MS;
-      if (held) view.cue = lines[changed]!.id;
-      else view.top = changed < view.top ? changed : changed - rows + 1;
-    }
   }
   view.top = Math.max(0, Math.min(view.top, lines.length - rows));
   view.anchor = lines[view.top]?.id ?? null;
@@ -194,7 +205,10 @@ function handler(locked: ReadonlySet<string>, scroll: PanelView): KitHandler {
     }
     let row: number | null = null;
     // Steps need the hand to have moved off where it pinched (the marker may stand in for a line scrolled away).
-    if (s.cand != null && s.moved && (release || press.t_ms - s.since >= TRACE_DWELL_MS)) row = s.cand;
+    // When the marker stands in for a line scrolled away, the row it was pinched on is not a step.
+    const offScreen = s.row < top || s.row >= top + rows;
+    const fromStandIn = offScreen && s.steps === 0 && s.cand === top + rowAt(panel, press.start[1], rows);
+    if (s.cand != null && s.moved && !fromStandIn && (release || press.t_ms - s.since >= TRACE_DWELL_MS)) row = s.cand;
     // A pinch on the marker without moving it logs the line it is on (so the first line counts),
     // when that line is on screen.
     else if (release && !s.moved && s.steps === 0 && s.row >= top && s.row < top + rows) row = s.row;

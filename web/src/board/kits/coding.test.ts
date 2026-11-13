@@ -279,6 +279,41 @@ describe('coding kit', () => {
       expect(key()).toBe(String(42 - 16));
     });
 
+    it('a line moved to the top row stays in view (a reorder keeps the rows still)', () => {
+      const { store, adapter, kit, key } = follow(20);
+      // By hand: row 3 dragged up to row 0.
+      const r = codeLineRect(kit.panel!, 3);
+      adapter.stroke([[r.x + 6, r.y + r.h / 2], [r.x + 6, r.y - 1], [r.x + 6, r.y + r.h / 2 - 3 * LINE_H]]);
+      expect(store.board.code!.lines[0]!.id).toBe('l4');
+      expect(key()).toBe('0');
+      // And as an op straight in, with the view scrolled (top 14): the moved line lands on row 0.
+      const v = follow(40);
+      v.adapter.stroke([[v.kit.panel!.x + 20, codeLineRect(v.kit.panel!, 15).y + LINE_H + 0.8]]);
+      expect(v.key()).toBe('14');
+      v.store.apply({ op_id: 'm1', src: 'hand', op: 'code.move', args: { id: 'l20', after: 'l14' } });
+      expect(v.key()).toBe('14');
+      expect(v.store.board.code!.lines[14]!.id).toBe('l20');
+    });
+
+    it('the top row moved down stays where it was dropped, and the lines it passed stay in view', () => {
+      const v = follow(40);
+      v.adapter.stroke([[v.kit.panel!.x + 20, codeLineRect(v.kit.panel!, 15).y + LINE_H + 0.8]]);
+      expect(v.key()).toBe('14');
+      // l15 (row 0) down three rows.
+      v.store.apply({ op_id: 'm2', src: 'hand', op: 'code.move', args: { id: 'l15', after: 'l18' } });
+      expect(v.key()).toBe('14');
+      expect(v.store.board.code!.lines.slice(14, 18).map((l) => l.id)).toEqual(['l16', 'l17', 'l18', 'l15']);
+    });
+
+    it('all new code (a Parsons deal, a rewrite) opens at the top, not scrolled to its end', () => {
+      const { store, kit, key } = follow(20);
+      ins(store, 'l21', 'l20');
+      expect(key()).toBe('5');
+      // The board as the server sends it after a deal: every line id new.
+      const fresh = many(24).map((l) => ({ ...l, id: `p${l.id}` }));
+      expect(kit.panelKey!({ ...store.board, code: { ...store.board.code!, lines: fresh } })).toBe('0');
+    });
+
     it('never scrolls while a line is held; the cue shows instead, and a cancelled press lets it follow again', () => {
       const { store, adapter, kit, key } = follow(20);
       const r = codeLineRect(kit.panel!, 3);
@@ -289,6 +324,53 @@ describe('coding kit', () => {
       ins(store, 'l22', 'l21');
       expect(key()).toBe(String(22 - 16));
     });
+  });
+
+  it('a wiggle on the stand-in trace marker (its line scrolled away) logs nothing; a real walk down does', () => {
+    const lines = Array.from({ length: 30 }, (_, i) => ({ id: `l${i + 1}`, indent: 1, text: `x${i + 1}`, src: 'scribe' as const }));
+    const kit = createCodingKit();
+    const base = codingBoard(lines);
+    const store = new BoardStore({ ...base, code: { ...base.code!, trace: [{ line: 'l2', t: 1 }] } });
+    const adapter = new FakeAdapter();
+    const emitted: BoardOp[] = [];
+    new BoardInput(store, adapter, kit, (op) => {
+      emitted.push(op);
+      store.apply(op, { local: true });
+    }, { now_s: () => 5 });
+    const p = kit.panel!;
+    adapter.stroke([[p.x + 20, codeLineRect(p, 15).y + LINE_H + 0.8]]);
+    const top = Number(kit.panelKey!(store.board));
+    const m = traceMarkerRect(p, store.board, top);
+    const x = m.x + m.w / 2;
+    // Wiggle within row 0 (0.8 cm up and down), held past the dwell.
+    adapter.down(x, m.y + 0.2);
+    adapter.move(x, m.y + 1.0);
+    adapter.wait(TRACE_DWELL_MS + 20);
+    adapter.move(x, m.y + 1.1);
+    adapter.up(x, m.y + 0.3);
+    expect(emitted).toEqual([]);
+    // Walking down to row 2 logs that line.
+    adapter.down(x, m.y + 0.9);
+    adapter.move(x, codeLineRect(p, 2).y + LINE_H / 2);
+    adapter.wait(TRACE_DWELL_MS + 20);
+    adapter.move(x, codeLineRect(p, 2).y + LINE_H / 2 + 0.1);
+    adapter.up(x, codeLineRect(p, 2).y + LINE_H / 2 + 0.1);
+    expect(emitted.map((o) => (o.args as { line: string }).line)).toEqual([`l${top + 3}`]);
+  });
+
+  it('a second down on the same hand ends the old panel press (no stale hold stops the follow)', () => {
+    const many = Array.from({ length: 20 }, (_, i) => ({ id: `l${i + 1}`, indent: 1, text: `x${i + 1}`, src: 'scribe' as const }));
+    const kit = createCodingKit({ now: () => 1e6 });
+    const store = new BoardStore(codingBoard(many));
+    const adapter = new FakeAdapter();
+    new BoardInput(store, adapter, kit, (op) => store.apply(op, { local: true }), { now_s: () => 1 });
+    kit.panelKey!(store.board);
+    const r = codeLineRect(kit.panel!, 3);
+    adapter.down(r.x + 6, r.y + r.h / 2);
+    adapter.down(r.x + 6, r.y + r.h / 2);
+    adapter.up(r.x + 6, r.y + r.h / 2);
+    store.apply({ op_id: 'i', src: 'scribe', op: 'code.insert', args: { line: { id: 'l21', indent: 1, text: 'end', src: 'scribe' }, after: 'l20' } });
+    expect(kit.panelKey!(store.board)).toBe('5');
   });
 
   it('the trace marker, when its line is scrolled away, does not log the row it is drawn on', () => {
