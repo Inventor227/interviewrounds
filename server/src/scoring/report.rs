@@ -147,7 +147,7 @@ pub async fn score_with_card(
     let signal = metrics::signal(&input.turns, &input.marks, input.has_timing());
     let lines = transcript_lines(input);
 
-    if !signal.enough() {
+    if !signal.enough(&input.length) {
         let report = low_signal_report(input, env.catalog, round, rubric, &delivery);
         let errors = env.schema.errors(&report);
         if !errors.is_empty() {

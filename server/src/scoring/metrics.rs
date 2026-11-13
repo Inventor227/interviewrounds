@@ -156,10 +156,15 @@ pub struct Signal {
     pub speech_sec: f64,
 }
 
+/// Least user speech to score a round: 60 s in a short round, 90 s in a full one.
+pub fn min_speech_sec(length: &str) -> f64 {
+    if length == "short" { 60.0 } else { 90.0 }
+}
+
 impl Signal {
-    /// Fewer than 2 answers or under 90 s of speech is not enough to score.
-    pub fn enough(&self) -> bool {
-        self.answers >= 2 && self.speech_sec >= 90.0
+    /// Fewer than 2 answers, or less speech than the round length needs (`min_speech_sec`), is not enough to score.
+    pub fn enough(&self, length: &str) -> bool {
+        self.answers >= 2 && self.speech_sec >= min_speech_sec(length)
     }
 }
 

@@ -661,8 +661,9 @@ async fn short_round_has_no_verdict() {
     assert_eq!(r["session"]["difficulty"], "easy");
     assert!(r["delivery"]["wpm"].is_null(), "fake voice has no timing");
 
-    // Three answers but about a minute of speech (150 words at 150 wpm): still not enough.
-    let answer = vec!["word"; 50].join(" ");
+    // Three answers but under a minute of speech (120 words at 150 wpm is 48 s; a short round needs 60 s): still
+    // not enough.
+    let answer = vec!["word"; 40].join(" ");
     input.turns = (0..3)
         .flat_map(|i| {
             vec![
@@ -2314,4 +2315,58 @@ fn recorded_session() -> ScoringInput {
         board_text: Some("Components: CDN, load balancer, waiting room (virtual queue), seat map cache (Redis), seat service, Postgres (seats, holds, orders), hold sweeper, payment processor (external), webhook handler. Edges: client -> CDN -> load balancer -> waiting room -> seat service -> Postgres; seat map cache <- Postgres (rebuilt every second); payment processor -> webhook handler -> Postgres.".into()),
         ..ScoringInput::default()
     }
+}
+
+#[test]
+fn enough_signal_is_sixty_seconds_in_a_short_round_and_ninety_in_a_full_one() {
+    let s = |answers, speech_sec| metrics::Signal {
+        answers,
+        speech_sec,
+    };
+    assert!(s(2, 75.0).enough("short"));
+    assert!(!s(2, 75.0).enough("full"));
+    assert!(s(2, 60.0).enough("short"));
+    assert!(!s(2, 59.0).enough("short"));
+    assert!(s(3, 90.0).enough("full"));
+    assert!(
+        !s(1, 200.0).enough("short"),
+        "one long answer is still one answer"
+    );
+}
+
+#[tokio::test]
+async fn a_scored_session_is_ledgered_once_even_through_the_metered_client() {
+    let _serial = db_lock().lock().await;
+    let db = pool().await;
+    let data = common::temp_dir("data");
+    let input = long_design_input();
+    let id = insert_session(&db, &input).await;
+    let since: chrono::DateTime<chrono::Utc> = sqlx::query_scalar("select now()")
+        .fetch_one(&db)
+        .await
+        .unwrap();
+    let llm = ScriptedLlm::new(vec![Ok(model_output().to_string())]);
+    // Production scoring goes through the app's metered client.
+    let metered: Arc<dyn LlmApi> = Arc::new(ir_server::usage::MeteredLlm::new(
+        llm.clone(),
+        db.clone(),
+        ir_server::config::UsagePhase::Build,
+    ));
+    let d = deps(&db, metered, &data);
+    scoring::score_session(&d, id).await.unwrap();
+    assert_eq!(llm.calls(), 1);
+    // The metered client records in the background: give it time to (wrongly) do so.
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let rows: Vec<(String, Option<i32>)> = sqlx::query_as(
+        "select kind, input_tokens from usage_events where provider = 'anthropic' and created_at >= $1",
+    )
+    .bind(since)
+    .fetch_all(&db)
+    .await
+    .unwrap();
+    assert_eq!(
+        rows,
+        vec![("scoring".to_string(), Some(9000))],
+        "one row for the one model call"
+    );
 }
