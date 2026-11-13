@@ -187,7 +187,11 @@ export function MicStep(props: { mic: Mic; action?: ComponentChildren; handedOve
       <StepMark ok={ok} bad={blocked} n={1} />
       <div class="step-body" ref={ref} tabIndex={-1} aria-live="polite">
         <h3 class="step-title">{t.title}</h3>
-        {t.body && <p class="step-text">{t.body}</p>}
+        {props.handedOver && s === 'on' ? (
+          <p class="step-text">The round has your mic now.</p>
+        ) : (
+          t.body && <p class="step-text">{t.body}</p>
+        )}
         {s === 'on' && !props.handedOver && (
           <div class="meter" ref={mic.meter} data-test="mic-meter" aria-hidden="true">
             <span />
@@ -441,7 +445,9 @@ export function ReadyPanel(props: {
             <p class="fine" id="enter-note" aria-live="polite" data-test="enter-note">
               {blocked
                 ? 'Turn the microphone on first. Everything else is ready.'
-                : preparing
+                : failed
+                  ? 'Set up did not finish. Use Try again above.'
+                  : preparing
                   ? 'Getting the room ready.'
                   : ready
                     ? (props.hint ?? (preview ? 'Ready.' : 'Ready. Put on your headset if it is not on yet.'))
