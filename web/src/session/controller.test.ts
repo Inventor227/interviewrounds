@@ -141,6 +141,14 @@ function harness(
       log.push('api.createSession');
       return sessionRes({ panel_mode: opts.panelMode ?? 'swap' });
     }),
+    retry: vi.fn(async (_id: string) => {
+      log.push('api.retry');
+      return sessionRes({ panel_mode: opts.panelMode ?? 'swap' });
+    }),
+    resumeSession: vi.fn(async (_id: string) => {
+      log.push('api.resumeSession');
+      return sessionRes({ panel_mode: opts.panelMode ?? 'swap' });
+    }),
     joinPanelist: vi.fn(async () => ({ voice: { transport: 'fake' as const } })),
     endSession: vi.fn(async () => void log.push('api.endSession')),
     report: vi.fn(async () => REPORT),
@@ -522,6 +530,101 @@ function errorsOf(h: ReturnType<typeof harness>): RoundError[] {
   h.ctl.on('error', (e) => errors.push(e));
   return errors;
 }
+
+describe('RoundController two phase start', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('prepare_does_mic_session_and_room_but_not_xr', async () => {
+    const h = harness();
+    const preload = vi.fn(async () => void h.log.push('xr.preload'));
+    h.xr.preload = preload;
+    await h.ctl.prepare({ kind: 'new', req: h.req });
+    expect(h.log).toEqual(['media.getMic', 'media.resumeAudio', 'api.createSession', 'xr.preload', 'socket.connect']);
+    expect(h.xr.enter).not.toHaveBeenCalled();
+    expect(h.ctl.state).toBe('idle');
+    expect(h.ctl.prepared).toBe(true);
+  });
+
+  it('enter_awaits_nothing_before_request_session', async () => {
+    const h = harness();
+    await h.ctl.prepare({ kind: 'new', req: h.req });
+    h.log.length = 0;
+    const p = h.ctl.enter();
+    // Synchronously, before any microtask: the XR request is already made.
+    expect(h.xr.enter).toHaveBeenCalledTimes(1);
+    expect(h.log).toEqual(['xr.enter']);
+    await p;
+    expect(h.log.slice(0, 2)).toEqual(['xr.enter', 'xr.place']);
+  });
+
+  it('prepare_failure_leaves_a_retryable_state', async () => {
+    const h = harness();
+    h.api.createSession.mockRejectedValueOnce(new Error('offline'));
+    await expect(h.ctl.prepare({ kind: 'new', req: h.req })).rejects.toThrow('offline');
+    expect(h.micTrack.stop).toHaveBeenCalled();
+    expect(h.ctl.prepared).toBe(false);
+    await expect(h.ctl.enter()).rejects.toMatchObject({ code: 'not_prepared' });
+
+    await h.ctl.prepare({ kind: 'new', req: h.req });
+    expect(h.ctl.prepared).toBe(true);
+    await h.ctl.enter();
+    expect(h.ctl.state).toBe('greeting');
+  });
+
+  it('a_failed_room_load_reuses_the_session_on_retry', async () => {
+    const h = harness();
+    h.xr.preload = vi.fn().mockRejectedValueOnce(new Error('gl')).mockResolvedValue(undefined);
+    const errors: RoundError[] = [];
+    h.ctl.on('error', (e) => errors.push(e));
+    await expect(h.ctl.prepare({ kind: 'new', req: h.req })).rejects.toMatchObject({ code: 'room_load_failed' });
+    expect(errors.map((e) => e.code)).toEqual(['room_load_failed']);
+    await h.ctl.prepare({ kind: 'new', req: h.req });
+    expect(h.api.createSession).toHaveBeenCalledTimes(1);
+    expect(h.ctl.prepared).toBe(true);
+  });
+
+  it('retry_and_resume_post_in_phase_a', async () => {
+    const r = harness();
+    await r.ctl.prepare({ kind: 'retry', parentSessionId: 's_parent', voice: 'fake' });
+    expect(r.api.retry).toHaveBeenCalledWith('s_parent');
+    expect(r.api.createSession).not.toHaveBeenCalled();
+    expect(r.xr.enter).not.toHaveBeenCalled();
+
+    const m = harness();
+    await m.ctl.prepare({ kind: 'resume', sessionId: 's_drop', voice: 'fake' });
+    expect(m.api.resumeSession).toHaveBeenCalledWith('s_drop');
+    expect(m.xr.enter).not.toHaveBeenCalled();
+  });
+
+  it('prepare_uses_the_stream_the_page_holds', async () => {
+    const h = harness();
+    const track = { stop: vi.fn() };
+    await h.ctl.prepare({ kind: 'new', req: h.req }, { mic: { getTracks: () => [track] } as unknown as MediaStream });
+    expect(h.media.getMic).not.toHaveBeenCalled();
+    await h.ctl.dispose();
+    expect(track.stop).toHaveBeenCalled();
+  });
+
+  it('dispose_frees_the_preloaded_room', async () => {
+    const h = harness();
+    h.xr.preload = vi.fn(async () => {});
+    h.xr.dispose = vi.fn();
+    await h.ctl.prepare({ kind: 'new', req: h.req });
+    await h.ctl.dispose();
+    expect(h.xr.dispose).toHaveBeenCalledTimes(1);
+  });
+
+  it('prepare_twice_is_refused', async () => {
+    const h = harness();
+    await h.ctl.prepare({ kind: 'new', req: h.req });
+    await expect(h.ctl.prepare({ kind: 'new', req: h.req })).rejects.toMatchObject({ code: 'already_started' });
+  });
+});
 
 describe('RoundController lifecycle races', () => {
   beforeEach(() => {
