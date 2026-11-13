@@ -555,11 +555,13 @@ export function createRoundRuntime({ preview }: RuntimeOptions): RoundController
         (globalThis as { __xrApp?: XRApp }).__xrApp = a;
         // Tooling: `globalThis.__irNoRender = true` skips drawing (the room still runs). The emulator renders in
         // software, which starves its audio; a real-voice run turns drawing off while it speaks into the microphone.
-        const r = a.world.renderer;
-        const draw = r.render.bind(r);
-        r.render = (scene, camera) => {
-          if (!(globalThis as { __irNoRender?: boolean }).__irNoRender) draw(scene, camera);
-        };
+        const r = a.world?.renderer;
+        if (r?.render) {
+          const draw = r.render.bind(r);
+          r.render = (scene, camera) => {
+            if (!(globalThis as { __irNoRender?: boolean }).__irNoRender) draw(scene, camera);
+          };
+        }
       }
       timings.mark('room_ready');
 
