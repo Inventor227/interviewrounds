@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createSounds, SOUND_NAMES, type SoundName } from './sound';
+import { createSounds, SAMPLED, SOUND_NAMES, type SoundName } from './sound';
 
 // A recording stand-in for the few Web Audio calls the sounds make.
 function fakeContext() {
@@ -70,15 +70,27 @@ describe('createSounds', () => {
     for (const n of SOUND_NAMES) expect(() => s.play(n)).not.toThrow();
   });
 
-  it('preload_fetches_and_decodes_all_six_samples_once', async () => {
+  it('preload_fetches_and_decodes_every_recorded_sample_once', async () => {
     const { s, f, urls, decoded } = sampled();
     await Promise.all([s.preload(), s.preload()]);
     await s.preload();
-    expect(urls.sort()).toEqual(SOUND_NAMES.map((n) => `/sfx/${n}.ogg`).sort());
-    expect(decoded).toHaveLength(6);
-    for (const n of SOUND_NAMES) s.play(n);
-    expect(f.sources.map((x) => (x.buffer as { name: string }).name)).toEqual(SOUND_NAMES.map((n) => `/sfx/${n}.ogg`));
+    expect(urls.sort()).toEqual(SAMPLED.map((n) => `/sfx/${n}.ogg`).sort());
+    expect(decoded).toHaveLength(SAMPLED.length);
+    for (const n of SAMPLED) s.play(n);
+    expect(f.sources.map((x) => (x.buffer as { name: string }).name)).toEqual(SAMPLED.map((n) => `/sfx/${n}.ogg`));
     expect(f.sources.every((x) => x.started)).toBe(true);
+    expect(f.oscillators()).toBe(0);
+  });
+
+  it('has_a_recorded_sample_and_a_method_for_every_name', async () => {
+    const { s, f, urls } = sampled();
+    await s.preload();
+    expect([...SAMPLED].sort()).toEqual([...SOUND_NAMES].sort());
+    for (const n of ['start', 'tick', 'ghost', 'handover', 'pause', 'resume'] as const) {
+      expect(urls).toContain(`/sfx/${n}.ogg`);
+      s[n]();
+      expect((f.sources.at(-1)!.buffer as { name: string }).name).toBe(`/sfx/${n}.ogg`);
+    }
     expect(f.oscillators()).toBe(0);
   });
 
@@ -103,6 +115,17 @@ describe('createSounds', () => {
     expect(f.sources).toHaveLength(0);
     s.click();
     expect(f.sources).toHaveLength(1); // the others still use their samples
+  });
+
+  it('synthesizes_every_name_when_no_sample_loads', async () => {
+    const { s, f } = sampled([...SOUND_NAMES]);
+    await s.preload();
+    for (const n of SOUND_NAMES) {
+      const before = f.oscillators() + f.sources.length;
+      s.play(n);
+      expect(f.oscillators() + f.sources.length, n).toBeGreaterThan(before);
+    }
+    expect(f.sources.every((x) => !(x.buffer as { name?: string } | null)?.name)).toBe(true);
   });
 
   it('applies_the_settings_volume_to_samples', async () => {
