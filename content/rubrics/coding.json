@@ -1,0 +1,99 @@
+{
+  "id": "rubric.coding",
+  "round_types": [
+    "coding"
+  ],
+  "title": "Coding",
+  "scale": {
+    "1": {
+      "label": "below",
+      "name": "Below the bar",
+      "meaning": "Concerning for this level; this alone would likely block an offer."
+    },
+    "2": {
+      "label": "developing",
+      "name": "Developing",
+      "meaning": "Some signal, but clear gaps for this level."
+    },
+    "3": {
+      "label": "meets_bar",
+      "name": "Meets the bar",
+      "meaning": "What a solid candidate at the chosen level shows."
+    },
+    "4": {
+      "label": "above_bar",
+      "name": "Above the bar",
+      "meaning": "Would read as the next level up."
+    }
+  },
+  "level_bar": {
+    "junior": "Easy to medium problem. Reaches a working approach with some guidance; correct complexity once asked; tests at least the happy path and one edge case.",
+    "mid": "Medium problem. Drives to an optimal or near optimal approach with at most a level two hint; clean structure; names edge cases and traces one.",
+    "senior": "Medium to hard problem. States the optimal approach within about five minutes, compares it with an alternative, codes it cleanly by about ten minutes, tests unprompted and handles the twist.",
+    "staff": "Same bar as senior on the problem, plus crisp reasoning about trade-offs in the twist (memory, streaming, concurrency) and how the code would hold up in production."
+  },
+  "competencies": [
+    {
+      "id": "communication",
+      "name": "Problem understanding",
+      "weight": 1,
+      "looks_for": "Clarifying questions on inputs, limits and edge cases before coding; stating assumptions; narrating choices while working.",
+      "descriptors": {
+        "1": "Starts without clarifying anything; long silences or half thoughts that are dropped without a reason.",
+        "2": "Asks one or two questions; narration is patchy and some decisions go unexplained.",
+        "3": "Clarifies inputs and edge cases up front; explains each choice as it is made.",
+        "4": "Drives the conversation: states assumptions, checks them with the interviewer, and summarises the plan before coding."
+      }
+    },
+    {
+      "id": "problem_solving",
+      "name": "Problem solving",
+      "weight": 1,
+      "looks_for": "Reaching a correct and efficient approach, correct time and space cost, comparing alternatives, and how much hinting was needed.",
+      "descriptors": {
+        "1": "No workable approach, even after hints, or defends a clearly wrong complexity after a counter example.",
+        "2": "Brute force only, or reaches the optimal approach only after level three or higher hints; complexity partly wrong.",
+        "3": "Reaches the optimal approach with at most a level two hint; time and space stated correctly.",
+        "4": "Compares two or more approaches, reaches the optimal one unaided, and handles the twist with a sound idea."
+      }
+    },
+    {
+      "id": "implementation",
+      "name": "Implementation",
+      "weight": 1,
+      "looks_for": "Dictated code or ordered blocks that match the approach, with sound control flow and edge handling. Syntax and typing are not assessed.",
+      "descriptors": {
+        "1": "Cannot express or order the solution.",
+        "2": "Code or ordering works only with notable gaps or logic bugs; drifts from the stated approach.",
+        "3": "Correct, clean structure that matches the approach; minor slips only.",
+        "4": "Clean and idiomatic, with edge cases handled the first time; decoy lines rejected with a reason."
+      }
+    },
+    {
+      "id": "testing",
+      "name": "Testing",
+      "weight": 1,
+      "looks_for": "Checking the solution: tracing an example, naming edge cases, finding and fixing their own bugs.",
+      "descriptors": {
+        "1": "No testing at all, or declares it done with an obvious bug.",
+        "2": "Tests the happy path, and only when asked.",
+        "3": "Traces an example, names relevant edge cases, and finds at least one own bug or confirms none with a trace.",
+        "4": "Tests systematically without being asked and fixes bugs before the interviewer points at them."
+      }
+    }
+  ],
+  "scoring_notes": [
+    "Hints: a level one prompt has no effect; level two costs a little; level three costs more; level four, given only with under about 40 percent of the phase left, costs a lot; a level five give away caps Problem solving at 2.",
+    "Ignoring a hint and continuing down a path it ruled out costs more than the hint itself.",
+    "Short rounds use ordered solution lines instead of dictated code; judge Implementation from the order, decoys rejected, and the dry run.",
+    "Never penalise syntax, language choice, or speech recognition errors in dictated code.",
+    "Red flags are only the items in red_flags. Weak, wrong or incomplete answers lower the matching competency score and are never red flags."
+  ],
+  "red_flags": [
+    "Makes up facts and keeps defending them after being questioned",
+    "Claims to have traced or tested something they never did, and defends it",
+    "Hostile, insulting or disrespectful toward the interviewer",
+    "Refuses to engage with the questions",
+    "Integrity issue, such as reading answers from another source or getting outside help during the round"
+  ]
+}

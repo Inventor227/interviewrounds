@@ -1,0 +1,105 @@
+{
+  "id": "exec_update",
+  "title": "Exec status update",
+  "summary": "Tell an impatient VP the launch is slipping and get one decision from them.",
+  "goal": "Get approval to borrow one engineer from the payments team for four weeks.",
+  "your_role": "Engineering manager",
+  "scenario": "Your launch is slipping three weeks. You need one more engineer to stop it slipping further.",
+  "attendees": [
+    {
+      "name": "Grace",
+      "role": "Chief of Staff",
+      "cares_about": [
+        "clear decisions",
+        "no surprises",
+        "time"
+      ],
+      "personality": "neutral",
+      "likely_objections": [
+        "What exactly do you need decided today?"
+      ],
+      "decision_power": "observer",
+      "knows": "Runs the weekly staff meeting and keeps it to time.",
+      "voice_base": "persona.grace"
+    },
+    {
+      "name": "Martin",
+      "role": "VP of Engineering",
+      "cares_about": [
+        "the bottom line",
+        "dates",
+        "what it costs other teams"
+      ],
+      "personality": "skeptical",
+      "likely_objections": [
+        "Why am I hearing about this now?",
+        "What's the date, and how confident are you?",
+        "What happens if I say no?"
+      ],
+      "decision_power": "approver",
+      "knows": "Promised the launch date to the leadership team. Has 15 minutes for this item.",
+      "voice_base": "persona.viktor"
+    },
+    {
+      "name": "Nadia",
+      "role": "Payments Team Lead",
+      "cares_about": [
+        "her team's own roadmap",
+        "who loses the engineer"
+      ],
+      "personality": "neutral",
+      "likely_objections": [
+        "Which of my engineers, and for how long exactly?",
+        "My team has a compliance deadline in April"
+      ],
+      "decision_power": "influencer",
+      "knows": "Her team has a compliance deadline on April 30.",
+      "voice_base": "persona.ana"
+    }
+  ],
+  "hidden_concerns": [
+    "Bottom line first",
+    "The red items and what caused them",
+    "What exactly is needed from them",
+    "Dates and confidence",
+    "Cost to other teams"
+  ],
+  "success": "Martin makes a clear decision on the engineer and nothing new comes out late.",
+  "tips": [
+    "Lead with the answer: the slip, the cause and your ask.",
+    "Have the cost to the payments team ready before Nadia asks.",
+    "Give a new date with how confident you are in it."
+  ],
+  "key_facts": [
+    {
+      "label": "Original launch",
+      "value": "March 3"
+    },
+    {
+      "label": "New launch",
+      "value": "March 24"
+    },
+    {
+      "label": "Cause",
+      "value": "Payment provider integration took 3 weeks longer"
+    },
+    {
+      "label": "Ask",
+      "value": "1 payments engineer for 4 weeks"
+    },
+    {
+      "label": "Without the engineer",
+      "value": "Another 2 week slip"
+    },
+    {
+      "label": "Payments deadline",
+      "value": "Compliance work due April 30"
+    }
+  ],
+  "ask": "Lend us one payments engineer for four weeks starting Monday.",
+  "walk_away": null,
+  "difficulty": "realistic",
+  "who_speaks_first": "chair",
+  "user_chairs": false,
+  "length": "short"
+}
