@@ -5,7 +5,7 @@ import type { Overlay } from './input';
 import { HLD_KIT } from './kits';
 import { emptyBoard } from './model';
 import { SHEET_CANVAS, Sheet } from './sheet';
-import { sheetToWorld } from './sheetMath';
+import { boardToLocal, sheetToWorld } from './sheetMath';
 import { FakePort, stubCanvas } from './xrtestkit';
 
 function board(): Board {
@@ -83,10 +83,37 @@ describe('Sheet', () => {
     expect(sheet.gestureMesh.visible).toBe(false);
   });
 
-  it('shows the pinch shadow while a hand is over the sheet', () => {
+  it('pinch shadows are small ring meshes: no texture uploads while hands hover', () => {
     const { sheet } = setup();
-    sheet.update(board(), { pointers: [{ hand: 'right', x_cm: 30, y_cm: 30, h_cm: 3, pinched: false }] });
-    expect(sheet.gestureMesh.visible).toBe(true);
+    const b = board();
+    sheet.update(b, {});
+    for (let i = 0; i < 20; i++) {
+      sheet.update(b, {
+        pointers: [
+          { hand: 'right', x_cm: 30 + i, y_cm: 30, h_cm: 3, pinched: false },
+          { hand: 'left', x_cm: 5, y_cm: 5 + i, h_cm: 1, pinched: i > 10 },
+        ],
+      });
+    }
+    expect(sheet.stats.gestureUploads).toBe(0);
+    expect(sheet.stats.boardUploads).toBe(1);
+    const right = sheet.shadow('right');
+    expect(right.visible).toBe(true);
+    const want = boardToLocal(49, 30, 0.25);
+    expect(right.position.distanceTo(want)).toBeLessThan(1e-6);
+    sheet.update(b, {});
+    expect(sheet.shadow('right').visible).toBe(false);
+  });
+
+  it('hovering across cards never repaints or uploads the board texture', () => {
+    const { sheet } = setup();
+    const b = board();
+    sheet.update(b, {});
+    for (const hovers of [['n1'], ['n2'], ['n1', 'n2'], []]) sheet.update(b, { hovers });
+    expect(sheet.stats.boardUploads).toBe(1);
+    expect(sheet.stats.gestureUploads).toBe(0);
+    sheet.update(b, { hovers: ['n2'] });
+    expect(sheet.hoverOutlines().filter((m) => m.visible)).toHaveLength(1);
   });
 
   it('lights the bin while something is held over it', () => {

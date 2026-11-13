@@ -56,15 +56,15 @@ describe('board in XR', () => {
   it('a voice command labels the fresh focus card; a statement only suggests', () => {
     const { port, store, sent, xr } = setup();
     port.pinchStroke('right', roughBox(8, 8, 10, 6, 0.4, 2));
-    expect(xr.say('call that the order service')?.mode).toBe('commit');
+    expect(xr.say('call that the order service', port.now)?.mode).toBe('commit');
     expect(store.board.items[0]).toMatchObject({ label: 'Order service' });
     expect(sent.at(-1)).toMatchObject({ op: 'item.label', src: 'voice_grammar' });
-    expect(xr.say("that's the gateway")?.mode).toBe('suggest');
+    expect(xr.say("that's the gateway", port.now)?.mode).toBe('suggest');
     expect(store.board.items[0]).toMatchObject({ label: 'Order service' });
     expect(store.board.ghosts).toHaveLength(1);
     // Ten seconds later nothing is fresh: no label, no suggestion.
     for (let i = 0; i < 10; i++) port.frame(1000);
-    expect(xr.say('call that the edge cache')).toBeNull();
+    expect(xr.say('call that the edge cache', port.now)).toBeNull();
   });
 
   const G: GhostOp = { op_id: 'g1', src: 'scribe', op: 'item.create', args: { id: 'n9', kind: 'component', type: 'cache', label: 'Redis', x: 40, y: 20, w: 8, h: 5 } };
@@ -110,12 +110,12 @@ describe('board in XR', () => {
   it('a local voice suggestion is accepted as a voice_grammar op and dismissed without telling the server', () => {
     const { port, store, sent, rejected, xr } = setup();
     port.pinchStroke('right', roughBox(8, 8, 10, 6, 0.4, 2));
-    xr.say("that's the gateway");
+    xr.say("that's the gateway", port.now);
     const g = store.board.ghosts[0]!;
     const r = ghostRect(store.board, g)!;
     port.pinchStroke('right', [[r.x + r.w / 2, r.y + r.h / 2]]);
     expect(sent.at(-1)).toMatchObject({ op_id: g.op_id, op: 'item.label', src: 'voice_grammar', args: { text: 'Gateway' } });
-    xr.say("that's the edge");
+    xr.say("that's the edge", port.now);
     const g2 = store.board.ghosts[0]!;
     const r2 = ghostRect(store.board, g2)!;
     port.handAt('right', r2.x + r2.w / 2, r2.y + r2.h / 2);
@@ -158,7 +158,31 @@ describe('board in XR', () => {
     port.frame();
     store.setFocus(null, port.now);
     for (let i = 0; i < 25; i++) port.frame();
-    expect(focus).toEqual([id, null]);
+    // The quick flip is debounced to where it ends (null), re-sent because it was a touch.
+    expect(focus).toEqual([id, null, null]);
+  });
+
+  it('re-sends board.focus when the same card is touched again, so the server focus stays fresh', () => {
+    const { port, store, focus } = setup();
+    port.pinchStroke('right', roughBox(8, 8, 10, 6, 0.4, 2));
+    const id = store.board.items[0]!.id;
+    for (let i = 0; i < 25; i++) port.frame();
+    expect(focus).toEqual([id]);
+    // 25 s later the same card is tapped again.
+    for (let i = 0; i < 25; i++) port.frame(1000);
+    port.pinchStroke('right', [[13, 11]]);
+    for (let i = 0; i < 25; i++) port.frame();
+    expect(focus).toEqual([id, id]);
+  });
+
+  it('a Scribe ghost that cannot be applied any more is reported to the server', () => {
+    const { port, store, sent, rejected } = setup();
+    // An edge ghost between items that do not exist: the accept fails here.
+    store.setGhosts([{ op_id: 'g9', src: 'scribe', op: 'edge.create', args: { id: 'e9', from: 'nx', to: 'ny' } }]);
+    for (let i = 0; i < Math.ceil(GHOST_SETTLE_MS / 100) + 1; i++) port.frame(100);
+    expect(sent).toEqual([]);
+    expect(rejected).toEqual(['g9']);
+    expect(store.board.ghosts).toEqual([]);
   });
 
   it('stops on destroy', () => {

@@ -426,7 +426,10 @@ export class BoardStore {
     if (op?.op === 'undo') return this.undo(op, opts.local === true);
     const r = tryApplyOp(this.board, op);
     // Ops without a usable op_id are answered but never logged (protocol rule 2).
-    if (!r.duplicate && usableId(op)) this.log.push(this.entry(op, r.accepted, opts.local === true));
+    if (!r.duplicate && usableId(op)) {
+      this.log.push(this.entry(op, r.accepted, opts.local === true));
+      this.localGhosts.delete(op.op_id);
+    }
     this.set(r.board);
     return r;
   }
@@ -482,6 +485,7 @@ export class BoardStore {
     const g = this.board.ghosts.find((x) => x.op_id === opId);
     if (!g) return;
     this.log.push({ op: g as BoardOp, accepted: false });
+    this.localGhosts.delete(opId);
     this.set(dropGhost(this.board, opId));
   }
 

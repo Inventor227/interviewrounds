@@ -27,7 +27,10 @@ export interface BoardXROptions {
   send(op: BoardOp): void;
   /** board.ghost_reject to the server (Scribe ghosts only; local suggestions stay local). */
   sendGhostReject(opId: string): void;
-  /** board.focus {item_id}: the item last touched or created, debounced (the Scribe resolves "that" with it). */
+  /**
+   * board.focus {item_id}: on every touch or creation of a card (even the same card again,
+   * so the server's focus stays fresh), debounced 300 ms. The Scribe resolves "that" with it.
+   */
   sendFocus?(itemId: string | null): void;
   sfx?: Sfx;
   makeCanvas?: MakeCanvas;
@@ -40,7 +43,10 @@ export interface BoardXR {
   hands: HandAdapter;
   ghosts: GhostLayer;
   input: BoardInput;
-  /** A finished user speech segment: labels the fresh focus card, suggests a label, or does nothing. */
+  /**
+   * A finished user speech segment: labels the fresh focus card, suggests a label, or does
+   * nothing. `nowMs` is when it was said (performance.now() timeline; default: now).
+   */
   say(text: string, nowMs?: number): VoiceLabel | null;
   destroy(): void;
 }
@@ -89,17 +95,24 @@ export function createBoardXR(port: BoardXRPort, opts: BoardXROptions): BoardXR 
   const projector = new SheetProjector(port.sheetAnchor);
   const hands = new HandAdapter(port, (p) => projector.project(p), { zone: kit.view });
 
-  const commit = (op: BoardOp) => {
+  const commit = (op: BoardOp): boolean => {
     const r = store.apply(op, { local: true });
-    if (!r.accepted) return;
+    if (!r.accepted) return false;
     opts.send(op);
     const s = sfxForOp(op);
     if (s) play(s);
+    return true;
   };
 
   const ghosts = new GhostLayer(hands, store, kit, {
     now,
-    accept: (g) => commit({ op_id: g.op_id, src: store.isLocalGhost(g.op_id) ? 'voice_grammar' : 'scribe', op: g.op, args: g.args } as BoardOp),
+    accept: (g) => {
+      const local = store.isLocalGhost(g.op_id);
+      const ok = commit({ op_id: g.op_id, src: local ? 'voice_grammar' : 'scribe', op: g.op, args: g.args } as BoardOp);
+      // A Scribe ghost that no longer applies (its card was deleted, say): tell the server, so
+      // it is not offered again.
+      if (!ok && !local) opts.sendGhostReject(g.op_id);
+    },
     reject: (id) => {
       const local = store.isLocalGhost(id);
       store.rejectGhost(id);
@@ -114,21 +127,20 @@ export function createBoardXR(port: BoardXRPort, opts: BoardXROptions): BoardXR 
   port.sheetAnchor.add(sheet.group);
   port.wallboardTexture?.(sheet.texture);
 
-  // board.focus: on every change of the focus item, sent once it has held FOCUS_DEBOUNCE_MS.
-  // The starting focus is what the server already has.
-  let sentFocus: string | null = store.board.focus;
-  let focusChangedAt = 0;
-  let lastFocus = store.board.focus;
-  const offFocus = store.onChange((b) => {
-    if (b.focus !== lastFocus) {
-      lastFocus = b.focus;
-      focusChangedAt = clock;
-    }
-  });
+  // board.focus: every touch or creation sets the focus (store.focusAt moves even for the same
+  // card); send once it has held FOCUS_DEBOUNCE_MS. The starting focus is what the server has.
+  let seenFocus = store.board.focus;
+  let seenAt = store.focusAt;
+  let pendingSince: number | null = null;
   const flushFocus = (t: number) => {
-    if (!opts.sendFocus || lastFocus === sentFocus || t - focusChangedAt < FOCUS_DEBOUNCE_MS) return;
-    sentFocus = lastFocus;
-    opts.sendFocus(lastFocus);
+    if (store.board.focus !== seenFocus || store.focusAt !== seenAt) {
+      seenFocus = store.board.focus;
+      seenAt = store.focusAt;
+      pendingSince = t;
+    }
+    if (pendingSince === null || t - pendingSince < FOCUS_DEBOUNCE_MS) return;
+    pendingSince = null;
+    opts.sendFocus?.(seenFocus);
   };
 
   let shown = false;
@@ -141,7 +153,7 @@ export function createBoardXR(port: BoardXRPort, opts: BoardXROptions): BoardXR 
     }
     sheet.group.visible = placed;
     ghosts.update(t);
-    sheet.update(store.board, { highlight: input.hover, overlays: input.overlays, rings: ghosts.rings(t), pointers: hands.pointers() });
+    sheet.update(store.board, { hovers: input.hovers(), overlays: input.overlays, rings: ghosts.rings(t), pointers: hands.pointers() });
   });
 
   return {
@@ -150,7 +162,9 @@ export function createBoardXR(port: BoardXRPort, opts: BoardXROptions): BoardXR 
     hands,
     ghosts,
     input,
-    say(text, t = clock) {
+    // Real time by default: the frame clock stops while the headset is off, and an old focus
+    // must not look fresh then (frames use the same performance.now() timeline).
+    say(text, t = typeof performance !== 'undefined' ? performance.now() : clock) {
       const hit = voiceLabel(store.board, text, store.freshFocus(t, VOICE_FOCUS_MS));
       if (!hit) return null;
       const args = { id: hit.id, text: clampText(hit.label) };
@@ -161,7 +175,6 @@ export function createBoardXR(port: BoardXRPort, opts: BoardXROptions): BoardXR 
     destroy() {
       offFrame();
       offClock();
-      offFocus();
       input.destroy();
       ghosts.destroy();
       hands.destroy();
