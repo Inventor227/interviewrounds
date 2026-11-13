@@ -1,8 +1,8 @@
 // What the user sees while placing the desk: a ghost sheet floating where it would land, a ring filling around the
-// resting fingertip, then the sheet unrolling from the touch point.
+// resting fingertip (or a controller's tip), then the sheet unrolling from the touch point.
 
 import { CanvasTexture, Euler, Group, Mesh, MeshBasicMaterial, PlaneGeometry, SRGBColorSpace, type Object3D, type Texture } from 'three';
-import { fallbackDesk, FINGER_PAD, type DeskPose, type HeadPose, type PlacementStatus } from './placement';
+import { fallbackDesk, type DeskPose, type HeadPose, type PlacementStatus } from './placement';
 import { SHEET_D, SHEET_TILT, SHEET_W, sheetPoint } from './seats';
 import { holdRing } from './ui/style';
 
@@ -33,7 +33,7 @@ export class PlacementView {
     if (st.tip && st.progress > 0) {
       desk = this.touchDesk;
       desk.origin.x = st.tip.x;
-      desk.origin.y = st.tip.y - FINGER_PAD;
+      desk.origin.y = st.tip.y - st.pad;
       desk.origin.z = st.tip.z;
       desk.deskY = desk.origin.y;
       desk.yaw = head.yaw;

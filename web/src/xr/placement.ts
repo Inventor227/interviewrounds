@@ -1,11 +1,14 @@
-// Desk placement: "Touch your desk where the sheet should go."
+// Desk placement: "Touch your desk with one finger", or with a controller's tip.
 //
 // An index fingertip that rests still on the desk for 0.6 s sets the desk: its height (minus the finger pad) is the
-// desk top, the tip is the near edge centre of the sheet, and the head's yaw at that moment is the facing. With no
-// touch within 6 s (wall clock) we fall back to a typical seated desk height below the head; only a rest that is at
-// least half done when the clock runs out may finish, and never past a hard cap. A desk candidate must sit in a
-// plausible band below the eyes, so a hand resting in the lap is not a desk. Pure logic here; the world wires it to
-// hand joints, draws the ring and anchors the result.
+// desk top, the tip is the near edge centre of the sheet, and the head's yaw at that moment is the facing. A
+// controller does the same with its front tip: touch the desk and pull the trigger (at once), or hold the tip still
+// on the desk for the same 0.6 s while it points down at it. The tip is where the controller's aim ray starts, the
+// front face of the controller body, so the desk top is the tip minus a few millimetres, not the grip 5 cm behind it.
+// With no touch within 6 s (wall clock) we fall back to a typical seated desk height below the head; only a rest that
+// is at least half done when the clock runs out may finish, and never past a hard cap. A desk candidate must sit in a
+// plausible band below the eyes, so a hand or a controller resting in the lap is not a desk. Pure logic here; the
+// world wires it to hand joints and controller poses, draws the ring and anchors the result.
 
 import { addScaled, forwardOf, type Vec3 } from './math';
 
@@ -22,6 +25,17 @@ export const HOLD_OFF_PROGRESS = 0.5;
 export const FALLBACK_CAP_MS = 1500;
 /** The finger pad: the tip joint sits this far above the surface it rests on. */
 export const FINGER_PAD = 0.008;
+/**
+ * A controller's contact: its tip (the aim ray's origin) sits this far above the surface the controller's front
+ * rests on. On Meta's Touch Plus model the front face is centred 4 mm from the ray origin (measured on the
+ * controller model in aim-ray space); a tilted controller touches with the lower rim of that face.
+ */
+export const CONTROLLER_PAD = 0.005;
+/**
+ * A controller counts as resting on the desk (the dwell) only while it points down at least this much (the sine of
+ * about 20 degrees): one lying in a lap or held level in the air is not touching a desk with its tip.
+ */
+export const CONTROLLER_DWELL_MIN_DOWN = 0.34;
 export const FALLBACK_MS = 6000;
 /** Typical seated eye-to-desk height. */
 export const FALLBACK_DESK_BELOW_HEAD = 0.45;
@@ -39,6 +53,18 @@ export interface DwellSample {
   headY: number;
   /** All fingertips of the same hand, when known; the index tip must be the lowest. */
   tips?: Vec3[];
+}
+
+/** A held controller as placement sees it. */
+export interface ControllerTouch {
+  hand: 'left' | 'right';
+  tracked: boolean;
+  /** The controller's front tip (the aim ray's origin) in world space. */
+  tip: Vec3;
+  /** The aim ray's direction (unit). */
+  dir: Vec3;
+  /** The trigger is held. */
+  pressed: boolean;
 }
 
 export interface DeskDwell {
@@ -122,13 +148,18 @@ export function restingMs(samples: readonly DwellSample[]): { ms: number; at: Ve
 }
 
 /** The resting touch, once the newest samples have rested for 0.6 s; else null. */
-export function detectDeskDwell(samples: readonly DwellSample[], rest = restingMs(samples)): DeskDwell | null {
+export function detectDeskDwell(samples: readonly DwellSample[], rest = restingMs(samples), pad = FINGER_PAD): DeskDwell | null {
   const r = rest;
   if (r.ms < DWELL_MS || !r.at) return null;
   // Use the lowest point of the rest as the contact height (the pad presses down a little over time).
   let minY = Infinity;
   for (const s of samples) if (s.t_ms >= samples[samples.length - 1]!.t_ms - r.ms) minY = Math.min(minY, s.tip.y);
-  return { deskY: minY - FINGER_PAD, at: { x: r.at.x, y: minY - FINGER_PAD, z: r.at.z } };
+  return { deskY: minY - pad, at: { x: r.at.x, y: minY - pad, z: r.at.z } };
+}
+
+/** True when a tip is in the band below the eyes where a desk can be. */
+export function inDeskBand(tipY: number, headY: number): boolean {
+  return tipY < headY - DWELL_BELOW_HEAD && tipY > headY - DWELL_MAX_BELOW_HEAD;
 }
 
 export interface HandState {
@@ -160,8 +191,10 @@ export interface DeskPose {
   source: 'touch' | 'fallback' | 'preview';
   /** The head at placement time, when known (cards that stand in front of the eyes use it). */
   head?: Vec3;
-  /** The hand that touched the desk: a hint for the dominant side (the tray goes opposite). */
+  /** The hand that touched the desk (or held the controller that did): the dominant side (the tray goes opposite). */
   hand?: 'left' | 'right';
+  /** What touched the desk. */
+  input?: 'hands' | 'controllers';
 }
 
 export type PlacementState = 'waiting' | 'dwelling' | 'done';
@@ -172,6 +205,8 @@ export interface PlacementStatus {
   progress: number;
   /** The tip being watched, for drawing the ring. */
   tip: Vec3 | null;
+  /** How far that tip sits above the surface it rests on (a finger pad, a controller's front). */
+  pad: number;
   hand: 'left' | 'right' | null;
   result: DeskPose | null;
 }
@@ -184,11 +219,16 @@ export function fallbackDesk(head: HeadPose): DeskPose {
 }
 
 /**
- * Feeds hand and head poses each frame; finishes on a 0.6 s rest of either index tip, or falls back at 6 s unless
- * a rest is at least half done (and never later than 6 s plus the cap).
+ * Feeds hand, controller and head poses each frame; finishes on a 0.6 s rest of either index tip or controller tip,
+ * at once on a trigger pull with the controller's tip on the desk, or falls back at 6 s unless a rest is at least
+ * half done (and never later than 6 s plus the cap).
  */
 export class DeskPlacement {
   private readonly hist: Record<'left' | 'right', DwellSample[]> = { left: [], right: [] };
+  /** Which kind of pointer each side's samples came from (a side that changes starts its rest again). */
+  private readonly histKind: Record<'left' | 'right', 'hand' | 'controller' | null> = { left: null, right: null };
+  /** The trigger as last seen per side; null until seen once, so a trigger already held does not count as a pull. */
+  private readonly trigger: Record<'left' | 'right', boolean | null> = { left: null, right: null };
   private result: DeskPose | null = null;
 
   constructor(
@@ -200,36 +240,61 @@ export class DeskPlacement {
     return this.result !== null;
   }
 
-  update(t_ms: number, head: HeadPose, hands: readonly HandState[]): PlacementStatus {
-    if (this.result) return { state: 'done', progress: 1, tip: this.result.origin, hand: null, result: this.result };
+  update(t_ms: number, head: HeadPose, hands: readonly HandState[], controllers: readonly ControllerTouch[] = []): PlacementStatus {
+    if (this.result) return { state: 'done', progress: 1, tip: this.result.origin, pad: 0, hand: null, result: this.result };
     let bestProgress = 0;
     let bestTip: Vec3 | null = null;
+    let bestPad = FINGER_PAD;
     let bestHand: 'left' | 'right' | null = null;
-    let seenLeft = false;
-    let seenRight = false;
-    for (const h of hands) {
-      if (!h.tracked) continue;
-      if (h.hand === 'left') seenLeft = true;
-      else seenRight = true;
-      const hist = this.hist[h.hand];
-      hist.push({ t_ms, tip: { ...h.indexTip }, headY: head.pos.y, tips: h.tips.length ? h.tips.map((p) => ({ ...p })) : undefined });
+    const seen = { left: false, right: false };
+    /** One side's tip this frame: keeps its rest history and finishes on a full rest. */
+    const rest = (side: 'left' | 'right', kind: 'hand' | 'controller', tip: Vec3, tips: Vec3[] | undefined, pad: number): PlacementStatus | null => {
+      seen[side] = true;
+      const hist = this.hist[side];
+      if (this.histKind[side] !== kind) hist.length = 0;
+      this.histKind[side] = kind;
+      hist.push({ t_ms, tip: { ...tip }, headY: head.pos.y, tips });
       // Keep the dwell window plus a little (the walk-back is quadratic in the samples kept).
       while (hist.length > 2 && hist[0]!.t_ms < t_ms - DWELL_MS - 150) hist.shift();
-      const rest = restingMs(hist);
-      const dwell = detectDeskDwell(hist, rest);
-      if (dwell) {
-        this.result = { origin: dwell.at, yaw: head.yaw, deskY: dwell.deskY, source: 'touch', head: { ...head.pos }, hand: h.hand };
-        return { state: 'done', progress: 1, tip: dwell.at, hand: h.hand, result: this.result };
-      }
-      const p = Math.min(1, rest.ms / DWELL_MS);
-      if (rest.at && (p > bestProgress || !bestTip)) {
+      const r = restingMs(hist);
+      const dwell = detectDeskDwell(hist, r, pad);
+      if (dwell) return this.finish(dwell.at, dwell.deskY, head, side, kind);
+      const p = Math.min(1, r.ms / DWELL_MS);
+      if (r.at && (p > bestProgress || !bestTip)) {
         bestProgress = p;
-        bestTip = h.indexTip;
-        bestHand = h.hand;
+        bestTip = tip;
+        bestPad = pad;
+        bestHand = side;
       }
+      return null;
+    };
+    for (const h of hands) {
+      if (!h.tracked) continue;
+      const done = rest(h.hand, 'hand', h.indexTip, h.tips.length ? h.tips.map((p) => ({ ...p })) : undefined, FINGER_PAD);
+      if (done) return done;
     }
-    if (!seenLeft) this.hist.left.length = 0;
-    if (!seenRight) this.hist.right.length = 0;
+    for (const c of controllers) {
+      // A side with a tracked hand is a hand; its controller (lying on the desk, say) is not the pointer.
+      if (!c.tracked || seen[c.hand]) continue;
+      const was = this.trigger[c.hand];
+      this.trigger[c.hand] = c.pressed;
+      // The tip on the desk and a pull of the trigger: placed at once.
+      if (c.pressed && was === false && inDeskBand(c.tip.y, head.pos.y)) {
+        const y = c.tip.y - CONTROLLER_PAD;
+        return this.finish({ x: c.tip.x, y, z: c.tip.z }, y, head, c.hand, 'controller');
+      }
+      // Or the tip held still on the desk, as with a finger, while the controller points down at it.
+      if (c.dir.y > -CONTROLLER_DWELL_MIN_DOWN) continue;
+      const done = rest(c.hand, 'controller', c.tip, undefined, CONTROLLER_PAD);
+      if (done) return done;
+    }
+    for (const side of ['left', 'right'] as const) {
+      if (!seen[side]) {
+        this.hist[side].length = 0;
+        this.histKind[side] = null;
+      }
+      if (!controllers.some((c) => c.tracked && c.hand === side)) this.trigger[side] = null;
+    }
 
     const dwelling = bestProgress > 0;
     // The clock runs regardless of hand motion; only a rest at least half done may hold it, up to the cap.
@@ -237,8 +302,13 @@ export class DeskPlacement {
     const holding = bestProgress >= HOLD_OFF_PROGRESS && elapsed < this.fallbackMs + FALLBACK_CAP_MS;
     if (elapsed >= this.fallbackMs && !holding) {
       this.result = fallbackDesk(head);
-      return { state: 'done', progress: 1, tip: null, hand: null, result: this.result };
+      return { state: 'done', progress: 1, tip: null, pad: 0, hand: null, result: this.result };
     }
-    return { state: dwelling ? 'dwelling' : 'waiting', progress: bestProgress, tip: bestTip, hand: bestHand, result: null };
+    return { state: dwelling ? 'dwelling' : 'waiting', progress: bestProgress, tip: bestTip, pad: bestPad, hand: bestHand, result: null };
+  }
+
+  private finish(at: Vec3, deskY: number, head: HeadPose, hand: 'left' | 'right', kind: 'hand' | 'controller'): PlacementStatus {
+    this.result = { origin: at, yaw: head.yaw, deskY, source: 'touch', head: { ...head.pos }, hand, input: kind === 'hand' ? 'hands' : 'controllers' };
+    return { state: 'done', progress: 1, tip: at, pad: 0, hand, result: this.result };
   }
 }
