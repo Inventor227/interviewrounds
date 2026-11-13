@@ -12,18 +12,20 @@ use std::time::{Duration, Instant};
 use async_trait::async_trait;
 use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
+use axum::{Extension, Router};
 use futures::stream::{self, BoxStream};
 use ir_server::claude::{
     ClaudeClient, ClaudeError, ContentBlock, MessagesRequest, MessagesResponse, StreamEvent,
     Thinking, Usage,
 };
 use ir_server::content::Catalog;
+use ir_server::identity::{Identity, IdentityKind};
 use ir_server::orchestrator::{LlmApi, Mode};
 use ir_server::scoring::metrics::{self, HeadSample, HintRec, MarkRec, MetricsContext, TurnRec};
 use ir_server::scoring::report::{self, NOT_ENOUGH_SIGNAL, ReportSchema, ScoreEnv};
 use ir_server::scoring::verdict::{self, Confidence, Length, Verdict};
 use ir_server::scoring::{self, PanelSeat, ReportEvents, ScoringDeps, ScoringInput};
-use ir_server::{AppState, Config, router};
+use ir_server::{AppState, Config};
 use serde_json::{Value, json};
 use sqlx::PgPool;
 use tower::ServiceExt;
@@ -43,23 +45,95 @@ fn schema() -> ReportSchema {
     ReportSchema::load(content_dir()).expect("report schema loads")
 }
 
-/// Streams scripted texts as one response each; records every request. No script left = a failed call.
+/// Streams scripted replies. The main scorecard call takes the next reply from `replies`; the headset card
+/// (fast model) and the meeting reactions (schema with `attendees`) take theirs from `card` and `meeting`
+/// (missing = a failed call). Records every request.
 #[derive(Default)]
 struct ScriptedLlm {
     replies: Mutex<VecDeque<Result<String, ClaudeError>>>,
+    card: Mutex<Option<String>>,
+    meeting: Mutex<Option<String>>,
+    panic_main: bool,
     requests: Mutex<Vec<MessagesRequest>>,
+}
+
+fn is_card(req: &MessagesRequest) -> bool {
+    req.model.starts_with("claude-sonnet")
+}
+
+fn is_meeting(req: &MessagesRequest) -> bool {
+    req.output_config
+        .as_ref()
+        .and_then(|o| o.format.as_ref())
+        .is_some_and(|f| f["schema"]["properties"].get("attendees").is_some())
 }
 
 impl ScriptedLlm {
     fn new(replies: Vec<Result<String, ClaudeError>>) -> Arc<Self> {
         Arc::new(ScriptedLlm {
             replies: Mutex::new(replies.into()),
-            requests: Mutex::default(),
+            ..ScriptedLlm::default()
         })
     }
+    fn with_side(
+        replies: Vec<Result<String, ClaudeError>>,
+        card: Option<Value>,
+        meeting: Option<Value>,
+    ) -> Arc<Self> {
+        Arc::new(ScriptedLlm {
+            replies: Mutex::new(replies.into()),
+            card: Mutex::new(card.map(|v| v.to_string())),
+            meeting: Mutex::new(meeting.map(|v| v.to_string())),
+            ..ScriptedLlm::default()
+        })
+    }
+    /// Main scorecard calls only.
     fn calls(&self) -> usize {
+        self.requests
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|r| !is_card(r) && !is_meeting(r))
+            .count()
+    }
+    fn all_calls(&self) -> usize {
         self.requests.lock().unwrap().len()
     }
+    fn main_request(&self) -> MessagesRequest {
+        self.requests
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|r| !is_card(r) && !is_meeting(r))
+            .cloned()
+            .expect("a main call")
+    }
+}
+
+fn stream_of(text: String) -> BoxStream<'static, Result<StreamEvent, ClaudeError>> {
+    // Split the JSON into a few deltas, as the API streams it.
+    let mid = text.len() / 2;
+    let mid = (mid..text.len())
+        .find(|i| text.is_char_boundary(*i))
+        .unwrap_or(text.len());
+    let events = vec![
+        Ok(StreamEvent::Block(ContentBlock::Thinking {
+            thinking: String::new(),
+            signature: "sig".into(),
+        })),
+        Ok(StreamEvent::TextDelta(text[..mid].to_string())),
+        Ok(StreamEvent::TextDelta(text[mid..].to_string())),
+        Ok(StreamEvent::Stop {
+            reason: "end_turn".into(),
+            usage: Usage {
+                input_tokens: 9000,
+                output_tokens: 3000,
+                cache_read_input_tokens: 0,
+                cache_creation_input_tokens: 2500,
+            },
+        }),
+    ];
+    Box::pin(stream::iter(events))
 }
 
 #[async_trait]
@@ -73,50 +147,49 @@ impl LlmApi for ScriptedLlm {
         req: &MessagesRequest,
     ) -> Result<BoxStream<'static, Result<StreamEvent, ClaudeError>>, ClaudeError> {
         self.requests.lock().unwrap().push(req.clone());
+        let side = if is_card(req) {
+            Some(self.card.lock().unwrap().clone())
+        } else if is_meeting(req) {
+            Some(self.meeting.lock().unwrap().clone())
+        } else {
+            None
+        };
+        if let Some(reply) = side {
+            return reply
+                .map(stream_of)
+                .ok_or_else(|| ClaudeError::BadRequest("no scripted side reply".into()));
+        }
+        if self.panic_main {
+            panic!("scripted crash");
+        }
         let next = self
             .replies
             .lock()
             .unwrap()
             .pop_front()
             .unwrap_or_else(|| Err(ClaudeError::BadRequest("no scripted reply".into())));
-        let text = next?;
-        // Split the JSON into a few deltas, as the API streams it.
-        let mid = text.len() / 2;
-        let mid = (mid..text.len())
-            .find(|i| text.is_char_boundary(*i))
-            .unwrap_or(text.len());
-        let events = vec![
-            Ok(StreamEvent::Block(ContentBlock::Thinking {
-                thinking: String::new(),
-                signature: "sig".into(),
-            })),
-            Ok(StreamEvent::TextDelta(text[..mid].to_string())),
-            Ok(StreamEvent::TextDelta(text[mid..].to_string())),
-            Ok(StreamEvent::Stop {
-                reason: "end_turn".into(),
-                usage: Usage {
-                    input_tokens: 9000,
-                    output_tokens: 3000,
-                    cache_read_input_tokens: 0,
-                    cache_creation_input_tokens: 2500,
-                },
-            }),
-        ];
-        Ok(Box::pin(stream::iter(events)))
+        Ok(stream_of(next?))
     }
 }
 
-/// Collects `report.progress` and `report.ready`.
+/// Collects `report.progress`, the card, `report.ready` and the failure.
 #[derive(Default)]
-struct RecordedEvents(Mutex<Vec<String>>);
+struct RecordedEvents(Mutex<Vec<String>>, Mutex<Vec<Value>>);
 
 #[async_trait]
 impl ReportEvents for RecordedEvents {
     async fn progress(&self, _session_id: &str, stage: &str, pct: u8) {
         self.0.lock().unwrap().push(format!("{stage}:{pct}"));
     }
+    async fn card(&self, _session_id: &str, card: &Value) {
+        self.0.lock().unwrap().push("card".into());
+        self.1.lock().unwrap().push(card.clone());
+    }
     async fn ready(&self, _session_id: &str) {
         self.0.lock().unwrap().push("ready".into());
+    }
+    async fn failed(&self, _session_id: &str) {
+        self.0.lock().unwrap().push("failed".into());
     }
 }
 
@@ -318,6 +391,7 @@ impl Env {
             model: "claude-opus-5-5",
             effort: "high",
             max_tokens: 16_000,
+            card_model: "claude-sonnet-5-5",
             timeout: Duration::from_secs(10),
             events: &self.events,
         }
@@ -488,8 +562,15 @@ fn looking_at_interviewer_uses_floor_panelist() {
     head.extend((0..5).map(|_| sample(80.0, false, None)));
     assert_eq!(metrics::gaze_on_speaker(&head), Some(0.73));
 
-    let m = metrics::compute(&[], &[], &head, &MetricsContext::default());
+    let live = MetricsContext {
+        timing: true,
+        ..MetricsContext::default()
+    };
+    let m = metrics::compute(&[], &[], &head, &live);
     assert_eq!(m.gaze_on_speaker_pct, Some(0.73));
+    // Without a live voice (fake transport) the field stays null.
+    let m = metrics::compute(&[], &[], &head, &MetricsContext::default());
+    assert_eq!(m.gaze_on_speaker_pct, None);
     // Looking down at the desk (pitch) does not count against them.
     assert_eq!(
         metrics::gaze_on_speaker(&[sample(5.0, true, Some("sheet"))]),
@@ -584,7 +665,14 @@ async fn short_round_has_no_verdict() {
 #[tokio::test]
 async fn report_validates_against_schema() {
     let env = Env::new();
-    let llm = ScriptedLlm::new(vec![Ok(model_output().to_string())]);
+    let card = json!({
+        "one_line": "You designed around double selling; the scale answer stayed vague.",
+        "top_strength": { "title": "Named the hardest requirement", "segment_id": "s2",
+                          "quote": "the hardest requirement is never selling one seat twice" },
+        "top_fix": { "title": "Name the first bottleneck", "segment_id": "s1",
+                     "quote": "Where do you want to start" }
+    });
+    let llm = ScriptedLlm::with_side(vec![Ok(model_output().to_string())], Some(card), None);
     let mut input = design_input();
     input.last_scores = HashMap::from([("requirements".to_string(), 2.0)]);
     let scored = report::score(&env.score_env(llm.as_ref()), &input)
@@ -605,6 +693,10 @@ async fn report_validates_against_schema() {
     assert_eq!(r["headline"]["verdict"]["label"], "leaning_hire"); // 3, 3, 3, 2
     assert_eq!(r["headline"]["verdict"]["index"], 4);
     assert_eq!(r["headline"]["verdict"]["is_provisional"], false);
+    assert_eq!(
+        r["headline"]["verdict"]["rationale"], r["headline"]["summary"],
+        "every verdict carries a one line rationale"
+    );
     // Full coverage, but architecture has a single evidence item: medium.
     assert_eq!(r["headline"]["verdict"]["confidence"], "medium");
     assert_eq!(r["headline"]["overall_score"], 2.75);
@@ -625,14 +717,40 @@ async fn report_validates_against_schema() {
     assert_eq!(e1["t_start_sec"], 10.0);
     assert_eq!(e1["t_end_sec"], 69.0);
     assert_eq!(e1["speaker"], "user");
-    // e4 cites the wrong line, but the quote is in s2, so it is kept with s2's times.
-    let e4 = r["evidence"]
+    // e4 cites s4 but its quote is in s2: no fallback to another line, so it is dropped.
+    assert!(
+        r["evidence"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|e| e["id"] != "e4")
+    );
+    assert_eq!(competency(r, "requirements")["evidence_ids"], json!(["e1"]));
+    // The stored quote is the line's own text, not the model's spelling.
+    assert_eq!(
+        e1["quote"],
+        "The hardest requirement is never selling one seat twice"
+    );
+
+    // The headset card went out on its own: the strength quote checks out (evidence c1); the fix quotes the
+    // interviewer, so it is left out.
+    let cards = env.events.1.lock().unwrap().clone();
+    assert_eq!(cards.len(), 1);
+    assert_eq!(cards[0]["top_strength"]["evidence_id"], "c1");
+    assert_eq!(cards[0]["top_strength"]["t_start_sec"], 10.0);
+    assert!(cards[0]["top_fix"].is_null());
+    let c1 = r["evidence"]
         .as_array()
         .unwrap()
         .iter()
-        .find(|e| e["id"] == "e4")
+        .find(|e| e["id"] == "c1")
         .unwrap();
-    assert_eq!(e4["t_start_sec"], 10.0);
+    assert_eq!(
+        c1["quote"],
+        "The hardest requirement is never selling one seat twice"
+    );
+    assert_eq!(scored.calls.len(), 2, "main call and card call ledgered");
+    assert_eq!(scored.calls[1].model, "claude-sonnet-5-5");
 
     // Drills: the unknown kind is dropped and the bad round id replaced with the real short round.
     let drills = r["next_drills"].as_array().unwrap();
@@ -648,9 +766,13 @@ async fn report_validates_against_schema() {
 
     // The request: one streamed call, adaptive thinking, effort high, fallbacks, structured output, cached
     // rules and rubric, the board image first.
-    let reqs = llm.requests.lock().unwrap();
-    assert_eq!(reqs.len(), 1);
-    let req = &reqs[0];
+    assert_eq!(llm.calls(), 1);
+    assert_eq!(
+        llm.all_calls(),
+        2,
+        "main and card, no meeting call for an interview"
+    );
+    let req = &llm.main_request();
     assert!(req.stream);
     assert_eq!(req.model, "claude-opus-5-5");
     assert_eq!(req.max_tokens, 16_000);
@@ -681,6 +803,11 @@ async fn report_validates_against_schema() {
         "{text}"
     );
     assert!(text.contains("persona.daniel: What breaks first"), "{text}");
+    assert!(
+        text.contains("Delivery (measured by the app"),
+        "delivery goes to the model"
+    );
+    assert!(text.contains("Pace: "));
     assert!(
         text.contains("Concert ticket drop"),
         "the question card is included"
@@ -762,6 +889,230 @@ async fn every_score_cites_evidence_or_is_null() {
     assert_ne!(r["headline"]["verdict"]["label"], "strong_no_hire");
 }
 
+#[test]
+fn quotes_must_be_verbatim_and_in_order() {
+    let line = "I did not use Kafka. I handle failures with retries, and I know the limits.";
+    // Case, punctuation and spacing aside, the line's own text comes back.
+    assert_eq!(
+        report::find_quote("i handle FAILURES with retries", line).as_deref(),
+        Some("I handle failures with retries")
+    );
+    // Pieces must be in order: this would reverse the meaning.
+    assert_eq!(
+        report::find_quote("handle failures ... I did not use Kafka", line),
+        None
+    );
+    assert_eq!(
+        report::find_quote("I did not ... the limits", line).as_deref(),
+        Some("I did not ... the limits")
+    );
+    // Whole words only: "no" is not inside "know".
+    assert_eq!(report::find_quote("I no the limits", line), None);
+    assert_eq!(report::find_quote("", line), None);
+    assert_eq!(
+        report::find_quote("don't", "I dont think so"),
+        Some("dont".to_string())
+    );
+}
+
+#[tokio::test]
+async fn scores_need_the_candidates_own_words() {
+    let env = Env::new();
+    let mut out = model_output();
+    // architecture rests only on the interviewer's line; reliability's quote sits in the wrong line.
+    out["evidence"].as_array_mut().unwrap().push(json!({
+        "id": "e7", "segment_id": "s5", "quote": "What breaks first at ten times the traffic?",
+        "polarity": "positive", "competency_ids": ["architecture"], "note": ""
+    }));
+    out["competencies"][1]["evidence_ids"] = json!(["e7"]);
+    out["evidence"][2]["segment_id"] = json!("s4");
+    let llm = ScriptedLlm::new(vec![Ok(out.to_string())]);
+    let r = report::score(&env.score_env(llm.as_ref()), &design_input())
+        .await
+        .unwrap()
+        .report;
+    assert!(
+        env.schema.errors(&r).is_empty(),
+        "{:?}",
+        env.schema.errors(&r)
+    );
+    let e7 = r["evidence"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["id"] == "e7")
+        .unwrap();
+    assert_eq!(e7["speaker"], "persona.daniel");
+    assert!(
+        competency(&r, "architecture")["score"].is_null(),
+        "interviewer words alone score nothing"
+    );
+    assert!(
+        competency(&r, "reliability")["score"].is_null(),
+        "e3 dropped: quote not in its cited line"
+    );
+    // Two scored (3 and 3) after the drops: a verdict, recomputed on what is left.
+    assert_eq!(r["headline"]["verdict"]["label"], "hire");
+}
+
+#[tokio::test]
+async fn red_flag_needs_negative_candidate_evidence_and_shows_its_reason() {
+    let env = Env::new();
+    let mut out = model_output();
+    out["red_flag"] = json!({ "present": true, "reason": "You kept defending a number you made up.",
+                               "evidence_ids": ["e3"] });
+    let llm = ScriptedLlm::new(vec![Ok(out.to_string())]);
+    let r = report::score(&env.score_env(llm.as_ref()), &design_input())
+        .await
+        .unwrap()
+        .report;
+    assert_eq!(r["headline"]["verdict"]["label"], "strong_no_hire");
+    assert_eq!(
+        r["headline"]["verdict"]["rationale"],
+        "You kept defending a number you made up."
+    );
+    assert!(env.schema.errors(&r).is_empty());
+
+    // Citing positive evidence does not make a red flag.
+    out["red_flag"]["evidence_ids"] = json!(["e1"]);
+    let llm = ScriptedLlm::new(vec![Ok(out.to_string())]);
+    let r = report::score(&env.score_env(llm.as_ref()), &design_input())
+        .await
+        .unwrap()
+        .report;
+    assert_eq!(r["headline"]["verdict"]["label"], "leaning_hire");
+}
+
+#[tokio::test]
+async fn too_few_scored_competencies_are_only_signal_so_far() {
+    let env = Env::new();
+    // Only requirements keeps evidence: one scored competency, a 4.
+    let mut out = model_output();
+    out["competencies"][0]["score"] = json!(4);
+    for i in 1..4 {
+        out["competencies"][i]["evidence_ids"] = json!(["e404"]);
+    }
+    let llm = ScriptedLlm::new(vec![Ok(out.to_string())]);
+    let r = report::score(&env.score_env(llm.as_ref()), &design_input())
+        .await
+        .unwrap()
+        .report;
+    let v = &r["headline"]["verdict"];
+    assert_eq!(
+        v["is_provisional"], true,
+        "one competency is signal so far: {v}"
+    );
+    assert_eq!(v["confidence"], "low");
+    assert!(env.schema.errors(&r).is_empty());
+
+    // Nothing left scored: no verdict, not enough signal.
+    for i in 0..4 {
+        out["competencies"][i]["evidence_ids"] = json!(["e404"]);
+    }
+    let llm = ScriptedLlm::new(vec![Ok(out.to_string())]);
+    let r = report::score(&env.score_env(llm.as_ref()), &design_input())
+        .await
+        .unwrap()
+        .report;
+    assert!(r["headline"]["verdict"].is_null());
+    assert_eq!(r["headline"]["summary"], NOT_ENOUGH_SIGNAL);
+}
+
+#[tokio::test]
+async fn meeting_reactions_come_from_a_second_call() {
+    let env = Env::new();
+    let mut input = design_input();
+    input.mode = "meeting".into();
+    input.round_id = "meeting.full".into();
+    input.meeting_template = Some("exec_update".into());
+    let mut out = model_output();
+    for (i, id) in ["clarity", "objections", "evidence", "outcome"]
+        .iter()
+        .enumerate()
+    {
+        out["competencies"][i]["id"] = json!(id);
+    }
+    out["round_details"] = json!({ "kind": "meeting", "goal": "Launch approved", "outcome": "need_more_info",
+                                   "goal_reached": "partly", "decision_quote_id": "", "ask_made": true });
+    let meeting = json!({
+        "attendees": [{ "name": "Grace", "stance_start": -1, "stance_end": 5, "one_line": "Solid, but show me numbers.",
+            "concerns": [
+                { "concern": "Double selling", "status": "resolved", "segment_id": "s4",
+                  "quote": "a conditional write in Postgres" },
+                { "concern": "Scale", "status": "open", "segment_id": "s6", "quote": "something never said" }
+            ] }],
+        "objections": [{ "by": "Grace", "segment_id": "s5", "objection": "Ten times the traffic",
+                         "handled": "poorly", "better_response": "Name the bottleneck first." }],
+        "next_steps": [{ "owner": "you", "action": "Send the load test", "due": "" }]
+    });
+    let llm = ScriptedLlm::with_side(vec![Ok(out.to_string())], None, Some(meeting));
+    let r = report::score(&env.score_env(llm.as_ref()), &input)
+        .await
+        .unwrap()
+        .report;
+    assert!(
+        env.schema.errors(&r).is_empty(),
+        "{:?}",
+        env.schema.errors(&r)
+    );
+    assert_eq!(llm.all_calls(), 3, "main, card and meeting calls");
+    let d = &r["round_details"];
+    assert_eq!(d["template"], "exec_update");
+    let grace = &d["attendees"][0];
+    assert_eq!(grace["stance_end"], 2, "clamped to the scale");
+    assert_eq!(grace["concerns"][0]["evidence_ids"], json!(["m1"]));
+    assert_eq!(
+        grace["concerns"][1]["evidence_ids"],
+        json!([]),
+        "unverified quote gets no evidence"
+    );
+    let m1 = r["evidence"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["id"] == "m1")
+        .unwrap();
+    assert_eq!(m1["quote"], "a conditional write in Postgres");
+    assert_eq!(d["objections"][0]["t_sec"], 202.0);
+    assert_eq!(
+        d["next_steps"][0],
+        json!({ "owner": "you", "action": "Send the load test" })
+    );
+}
+
+#[test]
+fn round_clock_rebases_marks_and_leaves_out_pauses() {
+    use ir_server::scoring::clock::{RoundClock, pause_spans};
+    let start = 1_800_000_000_000i64;
+    // The headset clock runs 5 s behind the server; a 2 minute pause from 60 s to 180 s.
+    let pauses = pause_spans(
+        &[(start + 60_000, true), (start + 180_000, false)],
+        start + 900_000,
+    );
+    let offset = RoundClock::offset_from(&[
+        (start + 30_100, start + 25_000),
+        (start + 200_150, start + 195_000),
+        (start + 210_090, start + 205_000),
+    ]);
+    assert_eq!(offset, 5_100);
+    let clock = RoundClock::new(start, pauses, offset);
+    assert_eq!(clock.wall_to_round(start + 30_000), 30_000);
+    assert_eq!(
+        clock.wall_to_round(start + 100_000),
+        60_000,
+        "inside the pause: when it began"
+    );
+    assert_eq!(clock.wall_to_round(start + 200_000), 80_000);
+    assert_eq!(clock.client_to_round(start + 194_900), 80_000);
+    // Already relative values pass through.
+    assert_eq!(clock.client_to_round(12_000), 12_000);
+    // An open pause runs to the end.
+    assert_eq!(
+        pause_spans(&[(start + 10, true)], start + 50),
+        vec![(start + 10, start + 50)]
+    );
+}
+
 #[tokio::test]
 async fn meeting_mode_has_no_verdict() {
     let env = Env::new();
@@ -806,6 +1157,54 @@ async fn meeting_mode_has_no_verdict() {
 
 #[test]
 fn llm_schema_uses_only_supported_keywords() {
+    fn walk(v: &Value, path: &str) {
+        match v {
+            Value::Object(m) => {
+                for bad in [
+                    "minItems",
+                    "maxItems",
+                    "maxLength",
+                    "minimum",
+                    "maximum",
+                    "oneOf",
+                    "default",
+                    "format",
+                    "$ref",
+                ] {
+                    assert!(!m.contains_key(bad), "{bad} at {path}");
+                }
+                if let Some(t) = m.get("type") {
+                    assert!(t.is_string(), "type list at {path}");
+                }
+                if m.get("type").and_then(Value::as_str) == Some("object") {
+                    assert_eq!(
+                        m.get("additionalProperties"),
+                        Some(&json!(false)),
+                        "at {path}"
+                    );
+                    // Optional properties blow up the compiled grammar: every property is required.
+                    let required: Vec<&str> = m
+                        .get("required")
+                        .and_then(Value::as_array)
+                        .map(|r| r.iter().filter_map(Value::as_str).collect())
+                        .unwrap_or_default();
+                    if let Some(props) = m.get("properties").and_then(Value::as_object) {
+                        for p in props.keys() {
+                            assert!(required.contains(&p.as_str()), "{p} optional at {path}");
+                        }
+                    }
+                }
+                for (k, x) in m {
+                    walk(x, &format!("{path}/{k}"));
+                }
+            }
+            Value::Array(a) => a
+                .iter()
+                .enumerate()
+                .for_each(|(i, x)| walk(x, &format!("{path}/{i}"))),
+            _ => {}
+        }
+    }
     let schema = schema();
     for kind in [
         "coding",
@@ -816,54 +1215,6 @@ fn llm_schema_uses_only_supported_keywords() {
         "meeting",
     ] {
         let s = report::llm_schema(&schema.raw, kind);
-        fn walk(v: &Value, path: &str) {
-            match v {
-                Value::Object(m) => {
-                    for bad in [
-                        "minItems",
-                        "maxItems",
-                        "maxLength",
-                        "minimum",
-                        "maximum",
-                        "oneOf",
-                        "default",
-                        "format",
-                        "$ref",
-                    ] {
-                        assert!(!m.contains_key(bad), "{bad} at {path}");
-                    }
-                    if let Some(t) = m.get("type") {
-                        assert!(t.is_string(), "type list at {path}");
-                    }
-                    if m.get("type").and_then(Value::as_str) == Some("object") {
-                        assert_eq!(
-                            m.get("additionalProperties"),
-                            Some(&json!(false)),
-                            "at {path}"
-                        );
-                        // Optional properties blow up the compiled grammar: every property is required.
-                        let required: Vec<&str> = m
-                            .get("required")
-                            .and_then(Value::as_array)
-                            .map(|r| r.iter().filter_map(Value::as_str).collect())
-                            .unwrap_or_default();
-                        if let Some(props) = m.get("properties").and_then(Value::as_object) {
-                            for p in props.keys() {
-                                assert!(required.contains(&p.as_str()), "{p} optional at {path}");
-                            }
-                        }
-                    }
-                    for (k, x) in m {
-                        walk(x, &format!("{path}/{k}"));
-                    }
-                }
-                Value::Array(a) => a
-                    .iter()
-                    .enumerate()
-                    .for_each(|(i, x)| walk(x, &format!("{path}/{i}"))),
-                _ => {}
-            }
-        }
         walk(&s, "");
         assert_eq!(
             s["properties"]["round_details"]["properties"]["kind"]["const"],
@@ -885,6 +1236,8 @@ fn llm_schema_uses_only_supported_keywords() {
         // "title" is a property name in drills and points; it must survive keyword cleaning.
         assert!(s["properties"]["next_drills"]["items"]["properties"]["title"].is_object());
     }
+    walk(&report::sanitize(&report::card_schema()), "card");
+    walk(&report::sanitize(&report::meeting_schema()), "meeting");
     // The prompt splits into cached rules and per session data.
     let cat = catalog();
     let p = report::split_scorer_prompt(cat.prompt("scorer").unwrap()).expect("scorer.md splits");
@@ -979,7 +1332,7 @@ async fn insert_session(db: &PgPool, input: &ScoringInput) -> Uuid {
     id
 }
 
-/// Long enough answers for the fake voice (no marks): about 100 s estimated from the words.
+/// Long enough answers for the fake voice (no marks): about 110 s estimated from the words.
 fn long_design_input() -> ScoringInput {
     let mut input = design_input();
     input.voice = "fake".into();
@@ -1004,27 +1357,76 @@ fn deps(db: &PgPool, llm: Arc<dyn LlmApi>, data_dir: &Path) -> ScoringDeps {
     d
 }
 
+/// Database tests share one database and the worker sweeps every queued session, so they run one at a time.
+fn db_lock() -> &'static tokio::sync::Mutex<()> {
+    static LOCK: std::sync::OnceLock<tokio::sync::Mutex<()>> = std::sync::OnceLock::new();
+    LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
+}
+
+async fn owner(db: &PgPool, id: Uuid) -> Identity {
+    let who: Uuid = sqlx::query_scalar("select identity_id from sessions where id = $1")
+        .bind(id)
+        .fetch_one(db)
+        .await
+        .unwrap();
+    identity(who)
+}
+
+fn identity(id: Uuid) -> Identity {
+    Identity {
+        id,
+        kind: IdentityKind::Guest,
+        name: None,
+        email: None,
+        onboarding_done: true,
+    }
+}
+
+/// The report routes as the identity layer would serve them to `who`.
+fn report_app(db: &PgPool, data: &Path, who: Identity) -> Router {
+    Router::new()
+        .merge(ir_server::api::report::routes())
+        .layer(Extension(who))
+        .with_state(AppState::new(db.clone(), config(data)))
+}
+
+async fn status(db: &PgPool, id: Uuid) -> String {
+    sqlx::query_scalar("select status from sessions where id = $1")
+        .bind(id)
+        .fetch_one(db)
+        .await
+        .unwrap()
+}
+
+fn post(path: String, ct: &'static str, body: Vec<u8>) -> Request<Body> {
+    Request::post(path)
+        .header(header::CONTENT_TYPE, ct)
+        .body(Body::from(body))
+        .unwrap()
+}
+
 #[tokio::test]
 async fn score_session_stores_report_and_serves_it() {
+    let _serial = db_lock().lock().await;
     let db = pool().await;
     let data = common::temp_dir("data");
     let input = long_design_input();
     let id = insert_session(&db, &input).await;
-    let app = router(AppState::new(db.clone(), config(&data)));
+    let who = owner(&db, id).await;
+    let app = report_app(&db, &data, who.clone());
 
-    // Not ready yet.
+    // Not ready yet; and never visible to someone else.
     let res = common::get(app.clone(), &format!("/api/sessions/{id}/report")).await;
     assert_eq!(res.status(), StatusCode::NOT_FOUND);
 
     // The board image arrives before scoring reads it.
     let res = app
         .clone()
-        .oneshot(
-            Request::post(format!("/api/sessions/{id}/board-image"))
-                .header(header::CONTENT_TYPE, "image/png")
-                .body(Body::from(tiny_png()))
-                .unwrap(),
-        )
+        .oneshot(post(
+            format!("/api/sessions/{id}/board-image"),
+            "image/png",
+            tiny_png(),
+        ))
         .await
         .unwrap();
     assert_eq!(res.status(), StatusCode::NO_CONTENT);
@@ -1057,7 +1459,7 @@ async fn score_session_stores_report_and_serves_it() {
 
     let report = scoring::score_session(&d, id).await.unwrap();
     assert_eq!(llm.calls(), 1);
-    let req = llm.requests.lock().unwrap()[0].clone();
+    let req = llm.main_request();
     assert!(matches!(&req.messages[0].content[0], ContentBlock::Other(v) if v["type"] == "image"));
     assert_eq!(report["headline"]["verdict"]["label"], "leaning_hire");
     assert!(report["delivery"]["wpm"].is_null(), "fake voice");
@@ -1065,34 +1467,41 @@ async fn score_session_stores_report_and_serves_it() {
     assert_eq!(ev.last().map(String::as_str), Some("ready"));
     assert!(ev.contains(&"done:100".to_string()));
 
-    let (status, model): (String, Option<String>) = sqlx::query_as(
-        "select s.status, r.model from sessions s join reports r on r.session_id = s.id where s.id = $1",
-    )
-    .bind(id)
-    .fetch_one(&db)
-    .await
-    .unwrap();
-    assert_eq!(status, "scored");
+    assert_eq!(status(&db, id).await, "scored");
+    let model: Option<String> =
+        sqlx::query_scalar("select model from reports where session_id = $1")
+            .bind(id)
+            .fetch_one(&db)
+            .await
+            .unwrap();
     assert_eq!(model.as_deref(), Some("claude-opus-5-5"));
-    let (kind, input_tokens): (String, Option<i32>) = sqlx::query_as(
+    // One attempt row, filled with the main call's usage (the card call failed: no usage, no row).
+    let rows: Vec<(String, Option<i32>)> = sqlx::query_as(
         "select kind, input_tokens from usage_events where session_id = $1 and provider = 'anthropic'",
     )
     .bind(id)
-    .fetch_one(&db)
+    .fetch_all(&db)
     .await
     .unwrap();
-    assert_eq!((kind.as_str(), input_tokens), ("scoring", Some(9000)));
+    assert_eq!(rows, vec![("scoring".to_string(), Some(9000))]);
 
     let res = common::get(app.clone(), &format!("/api/sessions/{id}/report")).await;
     assert_eq!(res.status(), StatusCode::OK);
     let body = common::body_json(res).await;
     assert_eq!(body, report);
     assert!(schema().errors(&body).is_empty());
+    let stranger = report_app(&db, &data, identity(Uuid::new_v4()));
+    let res = common::get(stranger, &format!("/api/sessions/{id}/report")).await;
+    assert_eq!(
+        res.status(),
+        StatusCode::NOT_FOUND,
+        "someone else's report is not found"
+    );
 
     // A later session of the same round type gets deltas against this one.
     let id2 = insert_session(&db, &input).await;
-    sqlx::query("update sessions set identity_id = (select identity_id from sessions where id = $1) where id = $2")
-        .bind(id)
+    sqlx::query("update sessions set identity_id = $1, status = 'live' where id = $2")
+        .bind(who.id)
         .bind(id2)
         .execute(&db)
         .await
@@ -1105,29 +1514,46 @@ async fn score_session_stores_report_and_serves_it() {
 }
 
 #[tokio::test]
-async fn failed_twice_marks_session_failed_and_rescore_requeues() {
+async fn attempts_are_capped_and_rescore_is_limited() {
+    let _serial = db_lock().lock().await;
     let db = pool().await;
     let data = common::temp_dir("data");
     let id = insert_session(&db, &long_design_input()).await;
-    // First a schema-breaking answer (not JSON), then a network failure: both attempts fail.
+    let who = owner(&db, id).await;
+    // A broken answer, then a network failure: both attempts fail.
     let llm = ScriptedLlm::new(vec![
         Ok("{\"headline\": ".into()),
         Err(ClaudeError::Overloaded),
+        Ok(model_output().to_string()),
     ]);
-    let d = deps(&db, llm.clone(), &data);
+    let events = Arc::new(RecordedEvents::default());
+    let d = deps(&db, llm.clone(), &data).with_events(events.clone());
     assert!(scoring::score_session(&d, id).await.is_err());
-    assert_eq!(llm.calls(), 2, "one retry");
-    let status: String = sqlx::query_scalar("select status from sessions where id = $1")
+    assert_eq!(llm.calls(), 2, "two attempts");
+    assert_eq!(status(&db, id).await, "failed");
+    assert!(events.0.lock().unwrap().contains(&"failed".to_string()));
+    assert_eq!(scoring::attempts_used(&db, id).await.unwrap(), 2);
+
+    // Back in the queue without a person asking (a restart, a stale sweep): no third model call.
+    sqlx::query("update sessions set status = 'scoring' where id = $1")
         .bind(id)
-        .fetch_one(&db)
+        .execute(&db)
         .await
         .unwrap();
-    assert_eq!(status, "failed");
+    assert!(scoring::score_session(&d, id).await.is_err());
+    assert_eq!(llm.calls(), 2, "the budget is spent");
+    assert_eq!(status(&db, id).await, "failed");
 
-    // Try again: back in the queue, and the worker sweep scores it.
-    let app = router(AppState::new(db.clone(), config(&data)));
-    let res = app
-        .clone()
+    // Try again: a person asks, two fresh attempts.
+    let app = report_app(&db, &data, who.clone());
+    let rescore = || {
+        app.clone().oneshot(
+            Request::post(format!("/api/sessions/{id}/report"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+    };
+    let res = report_app(&db, &data, identity(Uuid::new_v4()))
         .oneshot(
             Request::post(format!("/api/sessions/{id}/report"))
                 .body(Body::empty())
@@ -1135,90 +1561,232 @@ async fn failed_twice_marks_session_failed_and_rescore_requeues() {
         )
         .await
         .unwrap();
-    assert_eq!(res.status(), StatusCode::ACCEPTED);
-    // Other tests share the database, so the sweep may pick up their queued sessions too: enough replies for all.
-    let llm = ScriptedLlm::new((0..10).map(|_| Ok(model_output().to_string())).collect());
-    let d = deps(&db, llm.clone(), &data);
-    let started = scoring::run_pending(&d).await.unwrap();
-    assert!(started >= 1);
-    let deadline = Instant::now() + Duration::from_secs(10);
-    loop {
-        let status: String = sqlx::query_scalar("select status from sessions where id = $1")
+    assert_eq!(
+        res.status(),
+        StatusCode::NOT_FOUND,
+        "not someone else's to retry"
+    );
+    assert_eq!(rescore().await.unwrap().status(), StatusCode::ACCEPTED);
+    assert_eq!(status(&db, id).await, "scoring");
+    assert_eq!(scoring::attempts_used(&db, id).await.unwrap(), 0);
+    scoring::score_session(&d, id).await.unwrap();
+    assert_eq!(status(&db, id).await, "scored");
+    assert_eq!(
+        rescore().await.unwrap().status(),
+        StatusCode::CONFLICT,
+        "already scored"
+    );
+
+    // At most two re-scores a day.
+    for expected in [StatusCode::ACCEPTED, StatusCode::TOO_MANY_REQUESTS] {
+        sqlx::query("update sessions set status = 'failed' where id = $1")
             .bind(id)
-            .fetch_one(&db)
+            .execute(&db)
             .await
             .unwrap();
-        if status == "scored" {
-            break;
-        }
-        assert!(
-            Instant::now() < deadline,
-            "not scored in time (status {status})"
-        );
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert_eq!(rescore().await.unwrap().status(), expected);
     }
 }
 
 #[tokio::test]
-async fn board_image_rejects_non_png_and_unknown_sessions() {
+async fn worker_marks_a_crashed_scoring_task_failed() {
+    let _serial = db_lock().lock().await;
     let db = pool().await;
     let data = common::temp_dir("data");
     let id = insert_session(&db, &long_design_input()).await;
-    let app = router(AppState::new(db.clone(), config(&data)));
-    let post = |path: String, ct: &'static str, body: Vec<u8>| {
-        Request::post(path)
-            .header(header::CONTENT_TYPE, ct)
-            .body(Body::from(body))
+    let llm = Arc::new(ScriptedLlm {
+        panic_main: true,
+        ..ScriptedLlm::default()
+    });
+    let events = Arc::new(RecordedEvents::default());
+    let d = deps(&db, llm, &data).with_events(events.clone());
+    assert!(scoring::run_pending(&d).await.unwrap() >= 1);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while status(&db, id).await != "failed" {
+        assert!(Instant::now() < deadline, "the session never left scoring");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert!(events.0.lock().unwrap().contains(&"failed".to_string()));
+}
+
+#[tokio::test]
+async fn board_image_is_checked_owned_and_replaced() {
+    let _serial = db_lock().lock().await;
+    let db = pool().await;
+    let data = common::temp_dir("data");
+    let id = insert_session(&db, &long_design_input()).await;
+    sqlx::query("update sessions set status = 'live' where id = $1")
+        .bind(id)
+        .execute(&db)
+        .await
+        .unwrap();
+    let app = report_app(&db, &data, owner(&db, id).await);
+    let url = format!("/api/sessions/{id}/board-image");
+    let send = |ct: &'static str, body: Vec<u8>| app.clone().oneshot(post(url.clone(), ct, body));
+    assert_eq!(
+        send("image/png", b"GIF89a".to_vec())
+            .await
             .unwrap()
+            .status(),
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        send("image/jpeg", tiny_png()).await.unwrap().status(),
+        StatusCode::BAD_REQUEST
+    );
+    let mut corrupt = tiny_png();
+    corrupt.truncate(12);
+    assert_eq!(
+        send("image/png", corrupt).await.unwrap().status(),
+        StatusCode::BAD_REQUEST
+    );
+    let mut big = tiny_png();
+    big.resize(2 * 1024 * 1024 + 1, 0);
+    assert_eq!(
+        send("image/png", big).await.unwrap().status(),
+        StatusCode::PAYLOAD_TOO_LARGE
+    );
+    let huge = {
+        let img = image::GrayImage::new(5000, 1);
+        let mut out = std::io::Cursor::new(Vec::new());
+        img.write_to(&mut out, image::ImageFormat::Png).unwrap();
+        out.into_inner()
     };
-    let res = app
-        .clone()
-        .oneshot(post(
-            format!("/api/sessions/{id}/board-image"),
-            "image/png",
-            b"GIF89a".to_vec(),
-        ))
-        .await
-        .unwrap();
-    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
-    let res = app
-        .clone()
-        .oneshot(post(
-            format!("/api/sessions/{id}/board-image"),
-            "image/jpeg",
-            tiny_png(),
-        ))
-        .await
-        .unwrap();
-    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
-    let res = app
-        .clone()
-        .oneshot(post(
-            format!("/api/sessions/{}/board-image", Uuid::new_v4()),
-            "image/png",
-            tiny_png(),
-        ))
+    assert_eq!(
+        send("image/png", huge).await.unwrap().status(),
+        StatusCode::BAD_REQUEST
+    );
+    let stranger = report_app(&db, &data, identity(Uuid::new_v4()));
+    let res = stranger
+        .oneshot(post(url.clone(), "image/png", tiny_png()))
         .await
         .unwrap();
     assert_eq!(res.status(), StatusCode::NOT_FOUND);
-    let mut big = tiny_png();
-    big.resize(2 * 1024 * 1024 + 1, 0);
-    let res = app
-        .clone()
-        .oneshot(post(
-            format!("/api/sessions/{id}/board-image"),
-            "image/png",
-            big,
-        ))
-        .await
-        .unwrap();
-    assert_eq!(res.status(), StatusCode::PAYLOAD_TOO_LARGE);
-    let n: i64 = sqlx::query_scalar("select count(*) from board_images where session_id = $1")
+
+    // One image per session: the second replaces the first.
+    let second = {
+        let img = image::RgbaImage::from_pixel(2, 2, image::Rgba([0, 0, 0, 255]));
+        let mut out = std::io::Cursor::new(Vec::new());
+        img.write_to(&mut out, image::ImageFormat::Png).unwrap();
+        out.into_inner()
+    };
+    assert_eq!(
+        send("image/png", tiny_png()).await.unwrap().status(),
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        send("image/png", second.clone()).await.unwrap().status(),
+        StatusCode::NO_CONTENT
+    );
+    let rows: Vec<String> =
+        sqlx::query_scalar("select path from board_images where session_id = $1")
+            .bind(id)
+            .fetch_all(&db)
+            .await
+            .unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(std::fs::read(data.join(&rows[0])).unwrap(), second);
+
+    // Once scored the board is final.
+    sqlx::query("update sessions set status = 'scored' where id = $1")
         .bind(id)
-        .fetch_one(&db)
+        .execute(&db)
         .await
         .unwrap();
-    assert_eq!(n, 0);
+    assert_eq!(
+        send("image/png", tiny_png()).await.unwrap().status(),
+        StatusCode::CONFLICT
+    );
+}
+
+#[tokio::test]
+async fn loader_puts_marks_on_round_time_and_reads_hints() {
+    let _serial = db_lock().lock().await;
+    let db = pool().await;
+    // The pause/resume and hint log (created by a later migration; made here when missing).
+    sqlx::query(
+        "create table if not exists session_events (id bigserial primary key, \
+           session_id uuid not null references sessions (id) on delete cascade, kind text not null, \
+           at_ms bigint, data jsonb not null, created_at timestamptz not null default now())",
+    )
+    .execute(&db)
+    .await
+    .unwrap();
+    let identity_id: Uuid =
+        sqlx::query_scalar("insert into identities (kind) values ('guest') returning id")
+            .fetch_one(&db)
+            .await
+            .unwrap();
+    let start = chrono::DateTime::parse_from_rfc3339("2026-11-13T09:00:00Z")
+        .unwrap()
+        .with_timezone(&chrono::Utc);
+    let at = |s: i64| start + chrono::Duration::milliseconds(s);
+    let id: Uuid = sqlx::query_scalar(
+        "insert into sessions (identity_id, mode, round_id, length, level, style, voice, status, ended_reason, \
+             started_at, ended_at) \
+         values ($1, 'interview', 'sde.system_design.short', 'short', 'mid', 'neutral', 'fish', 'scoring', \
+             'completed', $2, $3) returning id",
+    )
+    .bind(identity_id)
+    .bind(start)
+    .bind(at(600_000))
+    .fetch_one(&db)
+    .await
+    .unwrap();
+    // Paused from 60 s to 180 s; the headset clock is 5 s behind the server.
+    for (kind, at_ms, data, t) in [
+        ("ui.event", None, json!({"kind": "pause"}), at(60_000)),
+        ("ui.event", None, json!({"kind": "resume"}), at(180_000)),
+        (
+            "hint",
+            Some(95_000i64),
+            json!({"level": 2, "accepted": false}),
+            at(215_000),
+        ),
+    ] {
+        sqlx::query("insert into session_events (session_id, kind, at_ms, data, created_at) values ($1, $2, $3, $4, $5)")
+            .bind(id)
+            .bind(kind)
+            .bind(at_ms)
+            .bind(data)
+            .bind(t)
+            .execute(&db)
+            .await
+            .unwrap();
+    }
+    let skew = 5_000;
+    for (seg, first, last) in [("a", 20_000i64, 40_000i64), ("b", 190_000, 200_000)] {
+        sqlx::query(
+            "insert into marks (session_id, segment_id, panelist_id, first_at_ms, final_at_ms, text, created_at) \
+             values ($1, $2, 'p1', $3, $4, 'some words here', $5)",
+        )
+        .bind(id)
+        .bind(seg)
+        .bind(start.timestamp_millis() + first - skew)
+        .bind(start.timestamp_millis() + last - skew)
+        .bind(at(last + 120))
+        .execute(&db)
+        .await
+        .unwrap();
+    }
+    let input = scoring::load_scoring_input(&db, id, &catalog())
+        .await
+        .unwrap()
+        .unwrap();
+    let marks: Vec<(i64, i64)> = input.marks.iter().map(|m| (m.start_ms, m.end_ms)).collect();
+    // The 120 ms network delay stays in; the skew and the 2 minute pause are gone.
+    assert_eq!(marks, vec![(20_120, 40_120), (70_120, 80_120)]);
+    assert_eq!(input.hints.len(), 1);
+    assert_eq!(
+        (
+            input.hints[0].level,
+            input.hints[0].t_ms,
+            input.hints[0].accepted
+        ),
+        (2, 95_000, false)
+    );
+    let m = report::delivery_for(&input, catalog().round("sde.system_design.short").unwrap());
+    assert_eq!(m.hints[0].t_sec, 95.0);
 }
 
 #[test]
@@ -1236,32 +1804,51 @@ fn board_image_is_scaled_to_1568_px() {
 
 // ---------- live ----------
 
-/// A realistic recorded fake-voice session (full system design, mid level), scored by the real model.
-/// `remote.sh <wt> rust --env-file .secrets/llm-anthropic.env -- cargo test --test scoring live_ -- --ignored --nocapture`
+/// A realistic recorded fake-voice session (full system design, mid level), scored by the real model, with the
+/// headset card timed. `remote.sh <wt> rust --env-file .secrets/llm-anthropic.env -- cargo test --test scoring
+/// live_ -- --ignored --nocapture`
 #[tokio::test]
 #[ignore = "calls the real API"]
 async fn live_scoring_run() {
+    struct Timed(Instant, Mutex<Option<(f64, Value)>>);
+    #[async_trait]
+    impl ReportEvents for Timed {
+        async fn progress(&self, _: &str, _: &str, _: u8) {}
+        async fn card(&self, _: &str, card: &Value) {
+            *self.1.lock().unwrap() = Some((self.0.elapsed().as_secs_f64(), card.clone()));
+        }
+        async fn ready(&self, _: &str) {}
+        async fn failed(&self, _: &str) {}
+    }
     let key = std::env::var("ANTHROPIC_API_KEY").expect("ANTHROPIC_API_KEY");
     let ws = std::env::var("ANTHROPIC_WORKSPACE_ID").expect("ANTHROPIC_WORKSPACE_ID");
-    let effort = std::env::var("SCORING_EFFORT").unwrap_or_else(|_| "high".into());
+    let effort = std::env::var("SCORING_EFFORT").unwrap_or_else(|_| "medium".into());
     let client = ClaudeClient::with_base_url(&key, &ws, ir_server::claude::DEFAULT_BASE_URL);
     let env = Env::new();
     let input = recorded_session();
+    let timed = Timed(Instant::now(), Mutex::new(None));
     let mut senv = env.score_env(&client);
     senv.effort = &effort;
-    senv.timeout = Duration::from_secs(170);
-    let t = Instant::now();
+    senv.timeout = Duration::from_secs(90);
+    senv.events = &timed;
     let scored = report::score(&senv, &input).await.expect("scored");
-    let secs = t.elapsed().as_secs_f64();
+    let secs = timed.0.elapsed().as_secs_f64();
     let r = &scored.report;
-    println!(
-        "scoring time: {secs:.1} s at effort {effort}; usage {:?}",
-        scored.usage
-    );
-    println!("{}", serde_json::to_string_pretty(r).unwrap());
+    let card = timed.1.lock().unwrap().clone();
+    println!("scoring time: {secs:.1} s at effort {effort}");
+    println!("card time: {:?}", card.as_ref().map(|c| c.0));
+    for c in &scored.calls {
+        println!("call {} {}: {:?}", c.kind, c.model, c.usage);
+    }
     if let Ok(out) = std::env::var("SCORING_SAMPLE_OUT") {
         std::fs::create_dir_all(Path::new(&out).parent().unwrap()).ok();
         std::fs::write(&out, serde_json::to_string_pretty(r).unwrap()).unwrap();
+        let card_out = out.replace(".json", "-card.json");
+        std::fs::write(
+            card_out,
+            serde_json::to_string_pretty(&card.map(|c| c.1)).unwrap(),
+        )
+        .unwrap();
     }
     assert!(
         env.schema.errors(r).is_empty(),
@@ -1272,7 +1859,8 @@ async fn live_scoring_run() {
     assert!(r["evidence"].as_array().unwrap().len() >= 3);
 }
 
-/// The API compiles every model schema (one per round details kind) without "grammar too large".
+/// The API compiles every model schema (one per round details kind, the meeting reactions, the headset card)
+/// without "grammar too large".
 #[tokio::test]
 #[ignore = "calls the real API"]
 async fn live_schemas_compile() {
@@ -1280,25 +1868,44 @@ async fn live_schemas_compile() {
     let ws = std::env::var("ANTHROPIC_WORKSPACE_ID").expect("ANTHROPIC_WORKSPACE_ID");
     let client = ClaudeClient::with_base_url(&key, &ws, ir_server::claude::DEFAULT_BASE_URL);
     let schema = schema();
-    for kind in [
+    let mut cases: Vec<(String, &str, Value)> = [
         "coding",
         "system_design",
         "object_design",
         "behavioral",
         "pm",
         "meeting",
-    ] {
+    ]
+    .iter()
+    .map(|k| {
+        (
+            k.to_string(),
+            "claude-opus-5-5",
+            report::llm_schema(&schema.raw, k),
+        )
+    })
+    .collect();
+    cases.push((
+        "meeting reactions".into(),
+        "claude-opus-5-5",
+        report::sanitize(&report::meeting_schema()),
+    ));
+    cases.push((
+        "headset card".into(),
+        "claude-sonnet-5-5",
+        report::sanitize(&report::card_schema()),
+    ));
+    for (kind, model, schema) in cases {
         let req = MessagesRequest {
-            model: "claude-opus-5-5".into(),
+            model: model.into(),
             max_tokens: 32,
             messages: vec![ir_server::claude::Message::user_text(
                 "Fill the schema with tiny placeholder values.",
             )],
+            thinking: ir_server::claude::thinking_for(model),
             output_config: Some(ir_server::claude::OutputConfig {
                 effort: Some("low".into()),
-                format: Some(
-                    json!({ "type": "json_schema", "schema": report::llm_schema(&schema.raw, kind) }),
-                ),
+                format: Some(json!({ "type": "json_schema", "schema": schema })),
             }),
             ..MessagesRequest::default()
         };

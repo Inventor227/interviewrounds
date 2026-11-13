@@ -8,6 +8,7 @@ pub mod content;
 pub mod db;
 pub mod error;
 pub mod fish;
+pub mod identity;
 pub mod orchestrator;
 pub mod scoring;
 
