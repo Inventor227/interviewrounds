@@ -682,6 +682,39 @@ pub async fn mark_fish_ended(
 
 /// Ends Fish sessions in the background; each one is marked ended once Fish confirms it (settlement ends what is
 /// left).
+/// A round paused long enough: every open Fish session of it is ended (they bill per minute while idle) and the
+/// voices handed out are forgotten, so `POST /resume` makes new ones. The ledger settles each ended session at
+/// Fish's own duration, so only the seconds it ran are billed.
+pub async fn release_voices(app: &AppState, id: Uuid) {
+    let Some(hub) = app.hubs.get(&id.to_string()) else {
+        return;
+    };
+    let _fish = hub.fish_lock.lock().await;
+    let row = match fetch_session(&app.db, id).await {
+        Ok(Some(row)) => row,
+        Ok(None) => return,
+        Err(err) => {
+            tracing::warn!(session_id = %id, error = %err, "could not read the session to release its voices");
+            return;
+        }
+    };
+    if row.voice != "fish" || !row.is_open() {
+        return;
+    }
+    let open: Vec<String> = row
+        .fish_entries()
+        .into_iter()
+        .filter(|e| e.ended_at.is_none())
+        .map(|e| e.fish_session_id)
+        .collect();
+    hub.voices.lock().unwrap_or_else(|e| e.into_inner()).clear();
+    if open.is_empty() {
+        return;
+    }
+    tracing::info!(session_id = %id, voices = open.len(), "paused round: voices released");
+    end_in_background(app, id, open);
+}
+
 pub fn end_in_background(app: &AppState, id: Uuid, fish_ids: Vec<String>) {
     for fid in fish_ids {
         let app = app.clone();
@@ -871,19 +904,31 @@ pub async fn sweep(app: &AppState) -> anyhow::Result<()> {
 pub async fn sweep_stale(app: &AppState) -> anyhow::Result<()> {
     let offline = app.timing.offline_limit.as_secs_f64();
     let never = app.timing.start_limit.as_secs_f64();
-    let stale: Vec<Uuid> = sqlx::query_scalar(
-        "select id from sessions where \
+    let pause_budget_ms = app.timing.pause_limit.as_millis() as i64;
+    // Created and never started; live with no socket past the window; paused past the pause budget (a paused
+    // round is held while its socket is gone, so `last_socket_at` does not end it).
+    let stale: Vec<(Uuid, String)> = sqlx::query_as(
+        "select id, status from sessions where \
            (status = 'created' and created_at < now() - make_interval(secs => $2)) \
-           or (status in ('live', 'paused') \
-               and coalesce(last_socket_at, started_at, created_at) < now() - make_interval(secs => $1))",
+           or (status = 'live' \
+               and coalesce(last_socket_at, started_at, created_at) < now() - make_interval(secs => $1)) \
+           or (status = 'paused' and started_at is not null \
+               and extract(epoch from (now() - started_at)) * 1000 \
+                   - coalesce((live_state->>'elapsed_ms')::float8, 0) >= $3)",
     )
     .bind(offline)
     .bind(never)
+    .bind(pause_budget_ms as f64)
     .fetch_all(&app.db)
     .await?;
-    for id in stale {
+    for (id, status) in stale {
+        let reason = if status == "paused" {
+            "time_limit"
+        } else {
+            "disconnected"
+        };
         if app.registry.get(&id.to_string()).is_none()
-            && let Err(err) = end_session(app, id, "disconnected").await
+            && let Err(err) = end_session(app, id, reason).await
         {
             tracing::warn!(session_id = %id, error = %format!("{err:#}"), "could not end a stale session");
         }

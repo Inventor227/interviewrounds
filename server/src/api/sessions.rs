@@ -48,8 +48,8 @@ const PREWARM_FRESH: Duration = Duration::from_secs(240);
 pub const DEV_KEY_HEADER: &str = "x-dev-key";
 
 /// The note the next interviewer turn sees after a resume (the browser then sends `[event: resume]`).
-pub const RESUME_NOTE: &str = "The candidate's connection dropped and they are back now. Welcome them back in one \
-     short line, recap where you were in a few words, and carry on from there.";
+pub const RESUME_NOTE: &str = "The candidate is back after a pause or a dropped connection. Say welcome back in a \
+     few words, restate where you were in one sentence, then carry on from there.";
 
 #[derive(Debug, Deserialize)]
 pub struct CreateSessionReq {
@@ -639,9 +639,13 @@ async fn resume_inner(app: &AppState, identity: &Identity, id: &str) -> AppResul
             "This session has ended.",
         ));
     }
-    if offline_for(app, &row)
-        .await?
-        .is_some_and(|gone| gone >= app.timing.offline_limit)
+    // A paused round resumes with new voices (its old ones may have been released) whether or not its socket
+    // dropped; the pause budget, not the offline window, limits it, and it does not use up a resume.
+    let from_pause = row.status == "paused";
+    if !from_pause
+        && offline_for(app, &row)
+            .await?
+            .is_some_and(|gone| gone >= app.timing.offline_limit)
     {
         return Ok(refuse(
             StatusCode::CONFLICT,
@@ -649,14 +653,18 @@ async fn resume_inner(app: &AppState, identity: &Identity, id: &str) -> AppResul
             "This round can no longer be resumed.",
         ));
     }
-    let counted: Option<i32> = sqlx::query_scalar(
-        "update sessions set resume_count = resume_count + 1 \
-         where id = $1 and resume_count < $2 returning resume_count",
-    )
-    .bind(row.id)
-    .bind(MAX_RESUMES)
-    .fetch_optional(&app.db)
-    .await?;
+    let counted: Option<i32> = if from_pause {
+        Some(0)
+    } else {
+        sqlx::query_scalar(
+            "update sessions set resume_count = resume_count + 1 \
+             where id = $1 and resume_count < $2 returning resume_count",
+        )
+        .bind(row.id)
+        .bind(MAX_RESUMES)
+        .fetch_optional(&app.db)
+        .await?
+    };
     if counted.is_none() {
         return Ok(refuse(
             StatusCode::CONFLICT,
@@ -693,6 +701,7 @@ async fn resume_inner(app: &AppState, identity: &Identity, id: &str) -> AppResul
         };
         let voices = match mint_voices(app, row.id, specs).await {
             Ok(v) => v,
+            Err(err) if from_pause => return Err(err),
             Err(err) => {
                 // This try does not count.
                 let _ = sqlx::query(

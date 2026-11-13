@@ -142,7 +142,8 @@ impl ReportEvents for SocketReportEvents {
 pub struct SessionTiming {
     /// `round.state` tick and housekeeping interval.
     pub tick: Duration,
-    /// A started round with no socket for this long ends with `disconnected` (also the resume window).
+    /// A started, live round with no socket for this long ends with `disconnected` (also the resume window). A
+    /// paused round is held instead, until its pause budget (`pause_limit`) runs out.
     pub offline_limit: Duration,
     /// A created session that never got a socket is abandoned after this.
     pub start_limit: Duration,
@@ -160,6 +161,9 @@ pub struct SessionTiming {
     pub read_timeout: Duration,
     /// How often the background sweep runs.
     pub janitor: Duration,
+    /// A round paused this long without a break has its voices released (their sessions bill per minute); a
+    /// resume makes new ones.
+    pub voice_release: Duration,
 }
 
 impl Default for SessionTiming {
@@ -175,6 +179,7 @@ impl Default for SessionTiming {
             scoring_hold: Duration::from_secs(120),
             read_timeout: Duration::from_secs(45),
             janitor: Duration::from_secs(30),
+            voice_release: Duration::from_secs(45),
         }
     }
 }
@@ -223,6 +228,10 @@ struct HubInner {
     held: bool,
     /// The hold was logged as a pause event; its end is logged as a resume.
     held_logged: bool,
+    /// Since when the round has been paused without a break (for the voice release).
+    paused_at: Option<Instant>,
+    /// The voices of the current pause were released.
+    voices_released: bool,
 }
 
 pub struct Hub {
@@ -499,6 +508,43 @@ impl Hubs {
     }
 }
 
+/// How much longer an offline round can be resumed: `None` while a socket is connected or once it ended. A paused
+/// round holds for what is left of its pause budget, a live one for the rest of the offline window.
+pub async fn resume_window_left(
+    app: &AppState,
+    hub: &Hub,
+    handle: &Mutex<SessionState>,
+) -> Option<Duration> {
+    let (connected, ended, wall_start, disconnected_since) = {
+        let h = hub.inner.lock().await;
+        (
+            h.connections > 0,
+            h.ended,
+            h.wall_start,
+            h.disconnected_since,
+        )
+    };
+    if connected || ended {
+        return None;
+    }
+    let (status, elapsed_ms) = {
+        let st = handle.lock().await;
+        (st.status, st.elapsed_ms(Instant::now()))
+    };
+    if status == SessionStatus::Paused {
+        let paused_ms = wall_start.map_or(0, |start| {
+            ((Utc::now() - start).num_milliseconds().max(0) as u64).saturating_sub(elapsed_ms)
+        });
+        Some(
+            app.timing
+                .pause_limit
+                .saturating_sub(Duration::from_millis(paused_ms)),
+        )
+    } else {
+        disconnected_since.map(|t| app.timing.offline_limit.saturating_sub(t.elapsed()))
+    }
+}
+
 /// Sends a numbered frame to a session's sockets (scoring uses it for `report.progress`, `report.ready`, and
 /// `error {code: "report_failed"}`). `report.ready` and `report_failed` end the socket's scoring hold: the
 /// sockets then close with 4409. Returns false when the session has no hub (nobody is listening).
@@ -606,6 +652,8 @@ pub async fn attach(app: &AppState, id: Uuid, handle: Arc<Mutex<SessionState>>) 
             // A started round loaded after a restart waits for the user like one whose socket dropped.
             held: started_at.is_some(),
             held_logged: restart_pause.is_some(),
+            paused_at: None,
+            voices_released: false,
         }),
         acks: std::sync::Mutex::new(HashMap::new()),
         whiteboard,
@@ -835,7 +883,7 @@ async fn drive(app: AppState, hub: Arc<Hub>, handle: Arc<Mutex<SessionState>>) {
             }
         };
 
-        let (connections, save_from, save, write_seen, end) = {
+        let (connections, save_from, save, write_seen, end, release_voices) = {
             let mut h = hub.inner.lock().await;
             if h.ended {
                 break;
@@ -872,6 +920,19 @@ async fn drive(app: AppState, hub: Arc<Hub>, handle: Arc<Mutex<SessionState>>) {
             {
                 e.closing_done = Some(now);
             }
+            // A pause that lasts: the voices go (they bill per minute while idle); a resume makes new ones.
+            if status == SessionStatus::Paused {
+                h.paused_at.get_or_insert(now);
+            } else {
+                h.paused_at = None;
+                h.voices_released = false;
+            }
+            let release_voices = !h.voices_released
+                && h.paused_at
+                    .is_some_and(|t| now.duration_since(t) >= timing.voice_release);
+            if release_voices {
+                h.voices_released = true;
+            }
             // Total pause so far: wall time since the start minus round time.
             let paused_ms = h.wall_start.map_or(0, |start| {
                 ((Utc::now() - start).num_milliseconds().max(0) as u64).saturating_sub(elapsed_ms)
@@ -892,6 +953,10 @@ async fn drive(app: AppState, hub: Arc<Hub>, handle: Arc<Mutex<SessionState>>) {
             } else if h.connections == 0 && status == SessionStatus::Created {
                 (now.duration_since(h.attached_at) >= timing.start_limit)
                     .then(|| "disconnected".into())
+            } else if h.connections == 0 && status == SessionStatus::Paused {
+                // A paused round is held while its socket is gone (the headset came off, the page went to the
+                // background); the pause budget above ends it.
+                None
             } else if h.connections == 0 {
                 h.disconnected_since
                     .is_some_and(|t| now.duration_since(t) >= timing.offline_limit)
@@ -899,8 +964,20 @@ async fn drive(app: AppState, hub: Arc<Hub>, handle: Arc<Mutex<SessionState>>) {
             } else {
                 None
             };
-            (h.connections, save_from, save, write_seen, end)
+            (
+                h.connections,
+                save_from,
+                save,
+                write_seen,
+                end,
+                release_voices,
+            )
         };
+        if release_voices {
+            let app = app.clone();
+            let id = hub.session_id;
+            tokio::spawn(async move { persist::release_voices(&app, id).await });
+        }
 
         if save {
             match persist::save_live(&app.db, hub.session_id, &snap, save_from).await {

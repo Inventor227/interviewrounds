@@ -35,7 +35,10 @@ JSON; cookie `ir_id` identifies the device/user; all under same origin. A new gu
   Otherwise `409 {code}`: `session_ended` (also when the round ends while the new voice is being made), `resume_expired`
   (past the 3 minutes) or `resume_limit`. The new voices are made first: if that fails (`503`) the old token and voices
   keep working and the try does not count. Then earlier tokens stop working and their sockets close with `4401`; the
-  interviewer's next turn knows the candidate is back.
+  interviewer's next turn knows the candidate is back (it welcomes them back briefly and restates where they were in
+  one sentence). A **paused** round can be resumed whether or not its socket dropped, for as long as its pause budget
+  lasts, and such a resume does not use up one of the 3; this is how the browser gets new voices after they were
+  released (see Pause).
 - `POST /api/sessions/{id}/end` `{reason:"completed"|"user_ended"|"time_limit"|"disconnected"|"headset_removed"}` → 202. Ends
   the round at once with this reason (also during the goodbye after `ui.event {kind: "end"}`).
 - `GET /api/sessions/{id}` → `{status:"created"|"live"|"paused"|"scoring"|"scored"|"failed"|"abandoned", report_ready}`
@@ -138,8 +141,19 @@ Sequencing and acks:
 - Ending. `ui.event {kind: "end", reason?}` starts the goodbye: the browser sends `[event: ending]`, and the round ends
   3 s after the interviewer's closing line, or 20 s after the request, whichever comes first, with that `reason` (default
   `user_ended`); `POST /end` ends it at once. The interviewer's `end_round` (`round.ending`) ends it the same way.
-  A round with no socket for 3 minutes ends with `round.ended {reason: "disconnected"}`; one past its `hard_stop_minutes`,
-  or with more than 10 minutes of pauses in total (user pauses and time offline), ends with `time_limit`.
+  A live round with no socket for 3 minutes ends with `round.ended {reason: "disconnected"}`; one past its
+  `hard_stop_minutes`, or with more than 10 minutes of pauses in total (user pauses and time offline), ends with
+  `time_limit`.
+- Pause. `ui.event {kind: "pause", reason?}` pauses the round; `reason` is `user` (the Pause button), `hidden` (the page
+  went to the background), `blurred` (the headset left the session or focus) or `headset_removed`. While paused:
+  - **Hold.** A paused round whose socket drops is held: it does not end after the 3-minute offline window. It ends
+    only when its pause budget (10 minutes of pauses in total) runs out, with `time_limit` (scored when the candidate
+    spoke). A round that drops while live keeps the 3-minute rule. `GET /api/me` `resumable.expires_at` is that
+    deadline: the end of the pause budget for a paused round, the end of the offline window for a live one.
+  - **Voice release.** After 45 s paused without a break the server ends every voice session of the round (they bill
+    per minute while idle); the browser sees its voice sessions end. To carry on it calls `POST /resume` (new voices,
+    not counted), then sends `[event: resume]` once the user is back in place. Under 45 s nothing changes: the browser
+    sends `ui.event {kind: "resume"}`, unmutes, and the same voices carry on.
 - After `round.ended` the socket stays open while the report is made: `report.progress`, then `report.ready` (or
   `error {code: "report_failed"}`), then close `4409`; with no report within 120 s it closes `4409` anyway. A round with
   nothing to score (`abandoned`) closes `4409` right after `round.ended`. Frames sent after the end are acked but not

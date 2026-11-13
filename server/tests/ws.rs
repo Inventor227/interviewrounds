@@ -249,6 +249,7 @@ fn quick() -> SessionTiming {
         scoring_hold: Duration::from_millis(300),
         read_timeout: Duration::from_secs(45),
         janitor: Duration::from_secs(60),
+        voice_release: Duration::from_secs(45),
     }
 }
 
