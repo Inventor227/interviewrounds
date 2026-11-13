@@ -19,8 +19,9 @@ export const ROUTES = {
   devAvatar: '/dev/avatar',
 } as const;
 
-// Developer page for the avatar runtime, loaded only when visited.
-const AvatarDev = lazy(() => import('../xr/avatar/dev/AvatarDev'));
+// Developer page for the avatar runtime: dev server only. In production builds the condition is false at build time,
+// so the page, its chunk and its test voices are left out of dist entirely.
+const AvatarDev = import.meta.env.DEV ? lazy(() => import('../xr/avatar/dev/AvatarDev')) : null;
 
 const ROLE_NAMES: Record<string, string> = { sde: 'Software Engineer', pm: 'Product Manager' };
 
@@ -214,7 +215,7 @@ export function App() {
             <Route path={ROUTES.history} component={History} />
             <Route path={ROUTES.settings} component={SettingsPage} />
             <Route path={ROUTES.pricing} component={Pricing} />
-            <Route path={ROUTES.devAvatar} component={AvatarDev} />
+            {AvatarDev && <Route path={ROUTES.devAvatar} component={AvatarDev} />}
             <Route default component={NotFound} />
           </Router>
         </main>
