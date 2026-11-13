@@ -1,5 +1,5 @@
 {
-  "name": "an op_id already applied is ignored, whatever its args",
+  "name": "an op_id already applied is ignored, whatever its args, including op_ids already in start.op_ids",
   "start": {
     "schema": "ir.board.v1",
     "round": {
@@ -8,7 +8,7 @@
       "question_id": null,
       "language": null
     },
-    "rev": 1,
+    "rev": 3,
     "size": {
       "w": 64,
       "h": 40
@@ -27,6 +27,16 @@
         "y": 4,
         "w": 8,
         "h": 5
+      },
+      {
+        "id": "s1",
+        "kind": "sticky",
+        "lane": null,
+        "text": "Hot keys",
+        "votes": 1,
+        "quad": null,
+        "x": 30,
+        "y": 20
       }
     ],
     "edges": [],
@@ -35,7 +45,9 @@
     "focus": null,
     "ghosts": [],
     "op_ids": [
-      "o1"
+      "o1",
+      "o0",
+      "o9"
     ]
   },
   "ops": [
@@ -56,6 +68,25 @@
       "args": {
         "id": "n1",
         "x": 40,
+        "y": 30
+      }
+    },
+    {
+      "op_id": "o0",
+      "src": "hand",
+      "op": "sticky.vote",
+      "args": {
+        "id": "s1",
+        "delta": 1
+      }
+    },
+    {
+      "op_id": "o9",
+      "src": "hand",
+      "op": "item.move",
+      "args": {
+        "id": "n1",
+        "x": 50,
         "y": 30
       }
     },
@@ -83,7 +114,7 @@
       "question_id": null,
       "language": null
     },
-    "rev": 2,
+    "rev": 4,
     "size": {
       "w": 64,
       "h": 40
@@ -102,6 +133,16 @@
         "y": 10,
         "w": 8,
         "h": 5
+      },
+      {
+        "id": "s1",
+        "kind": "sticky",
+        "lane": null,
+        "text": "Hot keys",
+        "votes": 1,
+        "quad": null,
+        "x": 30,
+        "y": 20
       }
     ],
     "edges": [],
@@ -111,6 +152,8 @@
     "ghosts": [],
     "op_ids": [
       "o1",
+      "o0",
+      "o9",
       "o2"
     ]
   }
