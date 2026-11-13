@@ -690,9 +690,39 @@ function drawEdge(p: Pen, board: Board, e: Pick<BoardEdge, 'from' | 'to' | 'dir'
     ctx.arc(mid[0] * k, mid[1] * k, TARGET_SIZES[p.targets ?? 'hand'].chip * k, 0, Math.PI * 2);
     ctx.fillStyle = PAPER;
     ctx.fill();
-    ctx.strokeStyle = color;
+    ctx.strokeStyle = withAlpha(EDGE, 0.45);
     ctx.lineWidth = Math.max(1, 0.06 * k);
     ctx.stroke();
+    // Inside: the direction it has now (chevrons, so tapping reads as "change the arrow").
+    const r = TARGET_SIZES[p.targets ?? 'hand'].chip;
+    const ang = Math.atan2(end[1] - start[1], end[0] - start[0]);
+    const chevron = (dir: number, off: number) => {
+      const a = ang + (dir < 0 ? Math.PI : 0);
+      const cx = mid[0] + off * Math.cos(ang);
+      const cy = mid[1] + off * Math.sin(ang);
+      const s2 = r * 0.32;
+      ctx.beginPath();
+      ctx.moveTo((cx - s2 * Math.cos(a) + s2 * Math.sin(a)) * k, (cy - s2 * Math.sin(a) - s2 * Math.cos(a)) * k);
+      ctx.lineTo(cx * k, cy * k);
+      ctx.lineTo((cx - s2 * Math.cos(a) - s2 * Math.sin(a)) * k, (cy - s2 * Math.sin(a) + s2 * Math.cos(a)) * k);
+      ctx.stroke();
+    };
+    ctx.save();
+    ctx.strokeStyle = color;
+    ctx.lineWidth = Math.max(1, r * 0.14 * k);
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    if (e.dir === '->') chevron(1, r * 0.15);
+    else if (e.dir === '<->') {
+      chevron(1, r * 0.35);
+      chevron(-1, -r * 0.35);
+    } else {
+      ctx.beginPath();
+      ctx.moveTo((mid[0] - r * 0.4 * Math.cos(ang)) * k, (mid[1] - r * 0.4 * Math.sin(ang)) * k);
+      ctx.lineTo((mid[0] + r * 0.4 * Math.cos(ang)) * k, (mid[1] + r * 0.4 * Math.sin(ang)) * k);
+      ctx.stroke();
+    }
+    ctx.restore();
   }
 }
 
