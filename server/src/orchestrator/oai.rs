@@ -684,6 +684,7 @@ fn turn_stream(
 
         let (mut reply, calls) = asm.take();
         if filter.cut_tool_text() {
+            tracing::warn!(session_id = %session_id, panelist_id = %panelist, "tool text cut from the reply");
             // A tool written out as text never enters the history: the model would see its own text-form call on
             // every later turn. The recorded text is what was spoken.
             let mut first = true;
