@@ -22,6 +22,10 @@ pub const MAX_CODE_LINES: usize = 60;
 pub const MAX_CHANGES: usize = 20;
 /// Characters kept of one candidate-written field (label, note, sticky, member, approach line, ...).
 pub const MAX_FIELD_CHARS: usize = 80;
+/// Characters kept of one approach line (the schema allows 120).
+pub const MAX_APPROACH_CHARS: usize = 120;
+/// Notes per component and members per class listed before the rest are only counted.
+pub const MAX_PARTS: usize = 12;
 /// Characters kept of one code line.
 pub const MAX_CODE_CHARS: usize = 160;
 
@@ -213,41 +217,50 @@ fn is_invisible(c: char) -> bool {
             | '\u{200B}'..='\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2060}'..='\u{2064}' | '\u{2066}'..='\u{2069}')
 }
 
-/// Words that open the app's own bracketed notes; a `[` before them in candidate text becomes `(`.
-const MARKERS: &[&str] = &[
-    "app note",
-    "board update",
-    "board",
-    "event",
-    "system",
-    "note",
-];
+/// The app's own bracketed markers (`[App note, ...]`, `[Board update rN, ...]`, `[event: ...]`). A `[` before
+/// one of them in candidate text becomes `(`; other brackets (code such as `[board[i][j] for ...]`) stay.
+const MARKERS: &[&str] = &["app note", "board update", "event:"];
+
+/// Characters looked at after a `[` to spot a marker.
+const MARKER_LOOKAHEAD: usize = 16;
 
 /// Candidate-written text made inert for the interviewer's prompt: invisible characters become spaces, marker
 /// look-alikes such as `[App note` or `[Board update` lose their bracket, and the text is capped at `max`
 /// characters. With `keep_spacing` (code) inner spaces stay; otherwise whitespace runs fold to one space.
+/// The work is bounded by `max`, whatever the input length: only the first `max + 32` characters are read.
 pub fn untrusted(s: &str, max: usize, keep_spacing: bool) -> String {
-    let visible: String = s
-        .chars()
-        .map(|c| if is_invisible(c) { ' ' } else { c })
-        .collect();
+    let mut truncated = false;
+    let mut visible = String::new();
+    for (n, c) in s.chars().enumerate() {
+        if n == max + 32 {
+            truncated = true;
+            break;
+        }
+        visible.push(if is_invisible(c) { ' ' } else { c });
+    }
     let spaced = if keep_spacing {
         visible.trim_end().to_string()
     } else {
         visible.split_whitespace().collect::<Vec<_>>().join(" ")
     };
+    let chars: Vec<char> = spaced.chars().collect();
     let mut out = String::with_capacity(spaced.len());
-    for (i, c) in spaced.char_indices() {
+    for (i, &c) in chars.iter().enumerate() {
         if c == '[' || c == '\u{FF3B}' {
-            let rest = spaced[i + c.len_utf8()..].trim_start().to_lowercase();
-            if MARKERS.iter().any(|m| rest.starts_with(m)) {
+            let ahead: String = chars[i + 1..]
+                .iter()
+                .skip_while(|c| c.is_whitespace())
+                .take(MARKER_LOOKAHEAD)
+                .flat_map(|c| c.to_lowercase())
+                .collect();
+            if MARKERS.iter().any(|m| ahead.starts_with(m)) {
                 out.push('(');
                 continue;
             }
         }
         out.push(c);
     }
-    if out.chars().count() > max {
+    if truncated || out.chars().count() > max {
         let cut: String = out.chars().take(max.saturating_sub(3)).collect();
         format!("{}...", cut.trim_end())
     } else {
@@ -263,6 +276,21 @@ fn clean(s: &str) -> String {
 /// A candidate field in double quotes.
 fn q(s: &str) -> String {
     format!("\"{}\"", clean(s))
+}
+
+/// A candidate field in double quotes, capped at `max` characters.
+fn q_max(s: &str, max: usize) -> String {
+    format!("\"{}\"", untrusted(s, max, false).replace('"', "'"))
+}
+
+/// At most [`MAX_PARTS`] entries, then "+k more".
+fn capped(mut parts: Vec<String>) -> Vec<String> {
+    let more = parts.len().saturating_sub(MAX_PARTS);
+    if more > 0 {
+        parts.truncate(MAX_PARTS);
+        parts.push(format!("+{more} more"));
+    }
+    parts
 }
 
 /// A code line in double quotes, inner spacing kept, quotes and backslashes escaped.
@@ -341,7 +369,7 @@ fn describe(it: &Item) -> String {
                 let _ = write!(s, " {}", q(l));
             }
             if let Some(notes) = c.notes.as_ref().filter(|n| !n.is_empty()) {
-                let notes: Vec<String> = notes.iter().map(|n| q(n)).collect();
+                let notes = capped(notes.iter().map(|n| q(n)).collect());
                 let _ = write!(s, " ({})", notes.join(", "));
             }
             s
@@ -362,6 +390,7 @@ fn describe(it: &Item) -> String {
                 .map(|m| member_sig(m, false))
                 .chain(c.methods.iter().map(|m| member_sig(m, true)))
                 .collect();
+            let members = capped(members);
             format!("{} {kind}\"{name}{{{}}}\"", c.id, members.join("; "))
         }
         Item::Sticky(s) => {
@@ -565,7 +594,7 @@ fn code_block(board: &Board, out: &mut String) {
     let approach: Vec<String> = code
         .approach
         .iter()
-        .map(|a| q(a.trim().trim_end_matches('.')))
+        .map(|a| q_max(a.trim().trim_end_matches('.'), MAX_APPROACH_CHARS))
         .collect();
     if approach.is_empty() {
         let _ = writeln!(out, "Approach: none yet.");

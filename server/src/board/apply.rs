@@ -8,9 +8,9 @@ use serde::de::DeserializeOwned;
 use serde_json::Value;
 
 use super::{
-    Board, ClassKind, CodeLine, ComponentType, Dir, Edge, Group, Item, Lane, Member, MetricRole,
-    Quad, Rel, Section, Shown, ShownKind, ShownRef, TraceEntry, is_id, parse_enum, present,
-    required, some,
+    Board, ClassKind, CodeLine, ComponentType, Dir, Edge, Group, Item, Lane, MAX_ARRAY_LEN,
+    MAX_CARD_BODY_CHARS, MAX_INK_POINTS, MAX_TEXT_CHARS, Member, MetricRole, Quad, Rel, Section,
+    Shown, ShownKind, ShownRef, TraceEntry, is_id, parse_enum, present, required, some,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
@@ -380,6 +380,38 @@ pub(crate) fn check_item(item: &Item) -> Result<(), String> {
     }
 }
 
+/// Server size limits on op args, so a stored board never holds huge texts: every string at most
+/// [`MAX_TEXT_CHARS`] (a card `body` [`MAX_CARD_BODY_CHARS`]), every array at most [`MAX_ARRAY_LEN`] entries
+/// (ink `points` [`MAX_INK_POINTS`]).
+fn check_sizes(v: &Value, key: &str) -> Result<(), String> {
+    match v {
+        Value::String(s) => {
+            let max = if key == "body" {
+                MAX_CARD_BODY_CHARS
+            } else {
+                MAX_TEXT_CHARS
+            };
+            if s.chars().count() > max {
+                return Err(format!("{key} is longer than {max} characters"));
+            }
+        }
+        Value::Array(a) => {
+            let max = if key == "points" {
+                MAX_INK_POINTS
+            } else {
+                MAX_ARRAY_LEN
+            };
+            if a.len() > max {
+                return Err(format!("{key} has more than {max} entries"));
+            }
+            a.iter().try_for_each(|x| check_sizes(x, key))?;
+        }
+        Value::Object(m) => m.iter().try_for_each(|(k, x)| check_sizes(x, k))?,
+        _ => {}
+    }
+    Ok(())
+}
+
 /// Parses and schema-checks an op's args.
 pub(crate) fn parse(op: &super::BoardOp) -> Result<Op, BoardError> {
     if op.op_id.is_empty() {
@@ -388,6 +420,7 @@ pub(crate) fn parse(op: &super::BoardOp) -> Result<Op, BoardError> {
     if !op.args.is_object() {
         return Err(BoardError::Invalid("args must be an object".into()));
     }
+    check_sizes(&op.args, "args").map_err(|e| BoardError::Invalid(format!("{}: {e}", op.op)))?;
     parse_args(&op.op, &op.args).map_err(|e| BoardError::Invalid(format!("{}: {e}", op.op)))
 }
 

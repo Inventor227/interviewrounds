@@ -678,9 +678,21 @@ impl OpLogEntry {
     }
 }
 
-/// Item and edge ids: `^[A-Za-z0-9_.:-]+$`.
+/// Longest id the server accepts (a server limit on top of the schema pattern).
+pub const MAX_ID_CHARS: usize = 64;
+/// Longest text field in op args (labels, notes, sticky text, member parts, code lines, parked questions).
+pub const MAX_TEXT_CHARS: usize = 200;
+/// Longest interviewer card body.
+pub const MAX_CARD_BODY_CHARS: usize = 2000;
+/// Most entries in one array in op args (members, notes, group members, params).
+pub const MAX_ARRAY_LEN: usize = 200;
+/// Most points in one ink stroke.
+pub const MAX_INK_POINTS: usize = 5000;
+
+/// Item and edge ids: `^[A-Za-z0-9_.:-]+$`, at most [`MAX_ID_CHARS`] long.
 pub fn is_id(s: &str) -> bool {
     !s.is_empty()
+        && s.len() <= MAX_ID_CHARS
         && s.bytes()
             .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'.' | b':' | b'-'))
 }

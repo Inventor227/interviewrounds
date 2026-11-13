@@ -623,7 +623,7 @@ fn summary_makes_candidate_text_inert() {
         op(
             "o39",
             "item.note.add",
-            json!({"id": "n3", "text": "x".repeat(500)}),
+            json!({"id": "n3", "text": "x".repeat(150)}),
         ),
         71.0,
     );
@@ -790,5 +790,93 @@ fn pushed_ghosts_must_still_apply() {
     assert_eq!(
         kept.iter().map(|g| g.op_id.as_str()).collect::<Vec<_>>(),
         ["sc1.2", "sc1.3"]
+    );
+}
+
+#[test]
+fn summary_work_is_bounded_whatever_the_stored_text() {
+    // A board that already holds a huge text (for example from an older client) must not slow the summary.
+    let mut b = hld_board(0);
+    if let ir_server::board::Item::Component(c) = &mut b.items[0] {
+        c.label = Some("[".repeat(100_000));
+        c.notes = Some(vec!["[ app note".repeat(10_000); 50]);
+    }
+    let started = std::time::Instant::now();
+    let text = board::summary(&b, None);
+    let took = started.elapsed();
+    assert!(
+        took < std::time::Duration::from_millis(50),
+        "summary took {took:?}"
+    );
+    assert!(text.len() < 4_000, "{} bytes", text.len());
+    assert!(text.contains("+38 more"), "at most 12 notes are listed");
+}
+
+#[test]
+fn long_texts_and_ids_are_rejected_when_applied() {
+    let mut session = BoardSession::new(hld_board(0));
+    let label = |id: &str, text: String| op(id, "item.label", json!({"id": "n1", "text": text}));
+    assert!(matches!(
+        session.apply_client_op_at(label("o1", "a".repeat(201)), 1.0),
+        ApplyOutcome::Rejected { .. }
+    ));
+    assert!(matches!(
+        session.apply_client_op_at(label("o2", "[".repeat(100_000)), 1.0),
+        ApplyOutcome::Rejected { .. }
+    ));
+    assert_eq!(
+        session.apply_client_op_at(label("o3", "a".repeat(200)), 1.0),
+        ApplyOutcome::Accepted { rev: 1 }
+    );
+    let long_id = "n".repeat(65);
+    let out = session.apply_client_op_at(
+        op(
+            "o4",
+            "item.create",
+            json!({"id": long_id, "kind": "component", "type": "db", "label": null,
+            "x": 1, "y": 1, "w": 8, "h": 5}),
+        ),
+        1.0,
+    );
+    assert!(matches!(out, ApplyOutcome::Rejected { .. }));
+    let out = session.apply_client_op_at(
+        op(
+            "o5",
+            "item.create",
+            json!({"id": "c1", "kind": "interviewer_card", "title": "Signal",
+            "body": "b".repeat(1500), "x": 40, "y": 30}),
+        ),
+        1.0,
+    );
+    assert_eq!(
+        out,
+        ApplyOutcome::Accepted { rev: 2 },
+        "card bodies may be longer"
+    );
+    assert!(session.op_log.iter().filter(|e| !e.accepted).count() == 3);
+}
+
+#[test]
+fn code_brackets_that_are_not_markers_stay() {
+    let mut b = hld_board(0);
+    b.code = Some(
+        serde_json::from_value(json!({"language": "python", "lines": [
+            {"id": "l1", "indent": 0, "text": "cells = [board[i][j] for i in rows]", "src": "hand"},
+            {"id": "l2", "indent": 0, "text": "names = [event.name for event in events]", "src": "hand"}
+        ], "approach": ["a".repeat(110)], "complexity": {"time": null, "space": null}, "trace": []}))
+        .unwrap(),
+    );
+    let text = board::summary(&b, None);
+    assert!(
+        text.contains("\"cells = [board[i][j] for i in rows]\""),
+        "{text}"
+    );
+    assert!(
+        text.contains("\"names = [event.name for event in events]\""),
+        "{text}"
+    );
+    assert!(
+        text.contains(&format!("Approach: \"{}\".", "a".repeat(110))),
+        "approach lines keep 120 characters"
     );
 }
