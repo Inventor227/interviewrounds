@@ -38,6 +38,13 @@ export const BOARD_IMAGE_MAX_BYTES = 2 * 1024 * 1024;
 
 type Body = { json: unknown } | { raw: Blob; type: string } | undefined;
 
+/**
+ * A deploy swaps the server in a few seconds: a call made during a round (join, resume, end, the
+ * report, the board picture) that is answered 502, 503 or 504 is made once more after this long.
+ */
+export const RETRY_AFTER_MS = 1500;
+const TRANSIENT: ReadonlySet<number> = new Set([502, 503, 504]);
+
 /** Where a development build keeps the key that unlocks the fake voice (this tab only). */
 export const DEV_KEY_STORE = 'ir_dev_key';
 
@@ -54,7 +61,7 @@ export function devKey(): string | null {
   }
 }
 
-async function request<T>(method: string, path: string, body?: Body, extra?: Record<string, string>): Promise<T> {
+async function request<T>(method: string, path: string, body?: Body, extra?: Record<string, string>, inRound = false): Promise<T> {
   const headers: Record<string, string> = { accept: 'application/json', ...extra };
   let payload: BodyInit | undefined;
   if (body && 'json' in body) {
@@ -68,6 +75,10 @@ async function request<T>(method: string, path: string, body?: Body, extra?: Rec
   let res: Response;
   try {
     res = await fetch(path, { method, headers, body: payload, credentials: 'include' });
+    if (inRound && TRANSIENT.has(res.status)) {
+      await new Promise<void>((r) => setTimeout(r, RETRY_AFTER_MS));
+      res = await fetch(path, { method, headers, body: payload, credentials: 'include' });
+    }
   } catch (err) {
     throw new ApiError(0, 'network', err instanceof Error ? err.message : 'Network error');
   }
@@ -99,6 +110,9 @@ async function request<T>(method: string, path: string, body?: Body, extra?: Rec
 const enc = encodeURIComponent;
 const get = <T>(path: string) => request<T>('GET', path);
 const post = <T>(path: string, json?: unknown) => request<T>('POST', path, json === undefined ? undefined : { json });
+/** Calls a running round makes: tried once more over a deploy blip. */
+const roundGet = <T>(path: string) => request<T>('GET', path, undefined, undefined, true);
+const roundPost = <T>(path: string, json?: unknown) => request<T>('POST', path, json === undefined ? undefined : { json }, undefined, true);
 const put = <T>(path: string, json: unknown) => request<T>('PUT', path, { json });
 const del = <T>(path: string) => request<T>('DELETE', path);
 const withRole = (path: string, role?: Role) => (role ? `${path}?role=${enc(role)}` : path);
@@ -112,17 +126,17 @@ export const api = {
     return request<CreateSessionRes>('POST', '/api/sessions', { json: req }, key ? { 'x-dev-key': key } : undefined);
   },
   joinPanelist: (sessionId: string, panelistId: string, body: { opening_line?: string } = {}) =>
-    post<JoinPanelistRes>(`/api/sessions/${enc(sessionId)}/panelists/${enc(panelistId)}/join`, body),
-  resumeSession: (sessionId: string) => post<CreateSessionRes>(`/api/sessions/${enc(sessionId)}/resume`),
+    roundPost<JoinPanelistRes>(`/api/sessions/${enc(sessionId)}/panelists/${enc(panelistId)}/join`, body),
+  resumeSession: (sessionId: string) => roundPost<CreateSessionRes>(`/api/sessions/${enc(sessionId)}/resume`),
   endSession: (sessionId: string, reason: EndReason) =>
-    post<void>(`/api/sessions/${enc(sessionId)}/end`, { reason }),
-  sessionStatus: (sessionId: string) => get<SessionStatusRes>(`/api/sessions/${enc(sessionId)}`),
-  report: (sessionId: string) => get<Report>(`/api/sessions/${enc(sessionId)}/report`),
+    roundPost<void>(`/api/sessions/${enc(sessionId)}/end`, { reason }),
+  sessionStatus: (sessionId: string) => roundGet<SessionStatusRes>(`/api/sessions/${enc(sessionId)}`),
+  report: (sessionId: string) => roundGet<Report>(`/api/sessions/${enc(sessionId)}/report`),
   uploadBoardImage: async (sessionId: string, png: Blob): Promise<void> => {
     if (png.size > BOARD_IMAGE_MAX_BYTES) {
       throw new ApiError(413, 'too_large', 'Board image is larger than 2 MB');
     }
-    return request<void>('POST', `/api/sessions/${enc(sessionId)}/board-image`, { raw: png, type: 'image/png' });
+    return request<void>('POST', `/api/sessions/${enc(sessionId)}/board-image`, { raw: png, type: 'image/png' }, undefined, true);
   },
   retry: (sessionId: string) => post<CreateSessionRes>(`/api/sessions/${enc(sessionId)}/retry`),
 
