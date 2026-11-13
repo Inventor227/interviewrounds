@@ -16,13 +16,16 @@ const ROUND = process.env.ROUND_ID ?? 'sde.coding.short';
 const S = L.SETUPS[process.env.EMU_ROOM ?? 'home_office'] ?? L.SETUPS.home_office;
 
 await waitReady();
-await go(`/round/${ROUND}`);
-await until('the start page', () => !!document.querySelector('[data-test="mic-allow"]'));
+await go('/');
+await until('the home page', () => !!document.querySelector('[data-test="try-quick"]'));
 await setupTab();
-// The page read its voice choice before the dev key was stored: load it again, then stub the mic again.
-await go(`/round/${ROUND}`);
+// Client side to the round's start page, so the tab keeps its setup (one page load, like a user coming from home).
+await page((r) => {
+  history.pushState({}, '', `/round/${r}`);
+  dispatchEvent(new PopStateEvent('popstate'));
+  return true;
+}, ROUND);
 await until('the start page', () => !!document.querySelector('[data-test="mic-allow"]'));
-await setupTab();
 
 const tap1 = Date.now();
 await click('mic-allow');

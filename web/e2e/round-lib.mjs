@@ -189,7 +189,7 @@ export async function enterFromTap(test = 'start-round') {
   await sleep(3000);
   let inXr = await page(() => !!globalThis.__xrApp?.world.session).catch(() => false);
   if (!inXr) {
-    stage('enter tap did not start the session; accepting the offered one');
+    stage('enter tap did not start the session; accepting the offered one', await page(() => ({ path: location.pathname, app: !!globalThis.__xrApp, round: !!globalThis.__round, text: document.querySelector('main')?.innerText.slice(0, 300) })).catch((e) => String(e).slice(0, 200)));
     await enterXR();
     await sleep(1500);
     // The controller reported the failed enter: the page offers Enter again.
