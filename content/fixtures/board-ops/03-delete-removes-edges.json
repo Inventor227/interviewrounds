@@ -1,0 +1,164 @@
+{
+  "name": "deleting an item removes every edge touching it and clears focus on it",
+  "start": {
+    "schema": "ir.board.v1",
+    "round": {
+      "id": "s_fixture",
+      "type": "hld",
+      "question_id": null,
+      "language": null
+    },
+    "rev": 6,
+    "size": {
+      "w": 64,
+      "h": 40
+    },
+    "brief": {
+      "question": "Fixture board",
+      "lines": []
+    },
+    "items": [
+      {
+        "id": "n1",
+        "kind": "component",
+        "type": "client",
+        "label": "App",
+        "x": 4,
+        "y": 18,
+        "w": 8,
+        "h": 5
+      },
+      {
+        "id": "n2",
+        "kind": "component",
+        "type": "lb",
+        "label": "LB",
+        "x": 16,
+        "y": 18,
+        "w": 8,
+        "h": 5
+      },
+      {
+        "id": "n3",
+        "kind": "component",
+        "type": "service",
+        "label": "API",
+        "x": 28,
+        "y": 18,
+        "w": 8,
+        "h": 5
+      }
+    ],
+    "edges": [
+      {
+        "id": "e1",
+        "from": "n1",
+        "to": "n2",
+        "dir": "->",
+        "label": null,
+        "rel": null
+      },
+      {
+        "id": "e2",
+        "from": "n2",
+        "to": "n3",
+        "dir": "->",
+        "label": null,
+        "rel": null
+      },
+      {
+        "id": "e3",
+        "from": "n1",
+        "to": "n3",
+        "dir": "<->",
+        "label": null,
+        "rel": null
+      }
+    ],
+    "code": null,
+    "meeting": null,
+    "focus": "n2",
+    "ghosts": [],
+    "op_ids": [
+      "o1",
+      "o2",
+      "o3",
+      "o4",
+      "o5",
+      "o6"
+    ]
+  },
+  "ops": [
+    {
+      "op_id": "o7",
+      "src": "hand",
+      "op": "item.delete",
+      "args": {
+        "id": "n2"
+      }
+    }
+  ],
+  "expected": {
+    "schema": "ir.board.v1",
+    "round": {
+      "id": "s_fixture",
+      "type": "hld",
+      "question_id": null,
+      "language": null
+    },
+    "rev": 7,
+    "size": {
+      "w": 64,
+      "h": 40
+    },
+    "brief": {
+      "question": "Fixture board",
+      "lines": []
+    },
+    "items": [
+      {
+        "id": "n1",
+        "kind": "component",
+        "type": "client",
+        "label": "App",
+        "x": 4,
+        "y": 18,
+        "w": 8,
+        "h": 5
+      },
+      {
+        "id": "n3",
+        "kind": "component",
+        "type": "service",
+        "label": "API",
+        "x": 28,
+        "y": 18,
+        "w": 8,
+        "h": 5
+      }
+    ],
+    "edges": [
+      {
+        "id": "e3",
+        "from": "n1",
+        "to": "n3",
+        "dir": "<->",
+        "label": null,
+        "rel": null
+      }
+    ],
+    "code": null,
+    "meeting": null,
+    "focus": null,
+    "ghosts": [],
+    "op_ids": [
+      "o1",
+      "o2",
+      "o3",
+      "o4",
+      "o5",
+      "o6",
+      "o7"
+    ]
+  }
+}

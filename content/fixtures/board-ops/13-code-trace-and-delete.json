@@ -1,0 +1,186 @@
+{
+  "name": "code: trace entries append and survive a line delete; unknown or deleted lines rejected; approach replaced; meeting op rejected on a coding board",
+  "start": {
+    "schema": "ir.board.v1",
+    "round": {
+      "id": "s_fixture",
+      "type": "coding",
+      "question_id": null,
+      "language": "python"
+    },
+    "rev": 2,
+    "size": {
+      "w": 64,
+      "h": 40
+    },
+    "brief": {
+      "question": "Fixture board",
+      "lines": []
+    },
+    "items": [],
+    "edges": [],
+    "code": {
+      "language": "python",
+      "lines": [
+        {
+          "id": "l1",
+          "indent": 0,
+          "text": "def total(xs):",
+          "src": "scribe"
+        },
+        {
+          "id": "l2",
+          "indent": 1,
+          "text": "return sum(xs)",
+          "src": "scribe"
+        }
+      ],
+      "approach": [],
+      "complexity": {
+        "time": null,
+        "space": null
+      },
+      "trace": []
+    },
+    "meeting": null,
+    "focus": null,
+    "ghosts": [],
+    "op_ids": [
+      "c1",
+      "c2"
+    ]
+  },
+  "ops": [
+    {
+      "op_id": "t1",
+      "src": "hand",
+      "op": "code.trace",
+      "args": {
+        "line": "l2",
+        "t": 300.5
+      }
+    },
+    {
+      "op_id": "t2",
+      "src": "hand",
+      "op": "code.trace",
+      "args": {
+        "line": "l1",
+        "t": 301
+      }
+    },
+    {
+      "op_id": "t3",
+      "src": "hand",
+      "op": "code.trace",
+      "args": {
+        "line": "l9",
+        "t": 302
+      }
+    },
+    {
+      "op_id": "t4",
+      "src": "hand",
+      "op": "code.delete",
+      "args": {
+        "id": "l1"
+      }
+    },
+    {
+      "op_id": "t5",
+      "src": "scribe",
+      "op": "code.edit",
+      "args": {
+        "id": "l1",
+        "text": "def total(values):"
+      }
+    },
+    {
+      "op_id": "t6",
+      "src": "scribe",
+      "op": "code.approach",
+      "args": {
+        "lines": [
+          "Sum in one pass"
+        ]
+      }
+    },
+    {
+      "op_id": "t7",
+      "src": "hand",
+      "op": "code.complexity",
+      "args": {
+        "slot": "space",
+        "value": "O(1)"
+      }
+    },
+    {
+      "op_id": "t8",
+      "src": "scribe",
+      "op": "park.add",
+      "args": {
+        "text": "Not a meeting"
+      }
+    }
+  ],
+  "expected": {
+    "schema": "ir.board.v1",
+    "round": {
+      "id": "s_fixture",
+      "type": "coding",
+      "question_id": null,
+      "language": "python"
+    },
+    "rev": 7,
+    "size": {
+      "w": 64,
+      "h": 40
+    },
+    "brief": {
+      "question": "Fixture board",
+      "lines": []
+    },
+    "items": [],
+    "edges": [],
+    "code": {
+      "language": "python",
+      "lines": [
+        {
+          "id": "l2",
+          "indent": 1,
+          "text": "return sum(xs)",
+          "src": "scribe"
+        }
+      ],
+      "approach": [
+        "Sum in one pass"
+      ],
+      "complexity": {
+        "time": null,
+        "space": "O(1)"
+      },
+      "trace": [
+        {
+          "line": "l2",
+          "t": 300.5
+        },
+        {
+          "line": "l1",
+          "t": 301
+        }
+      ]
+    },
+    "meeting": null,
+    "focus": null,
+    "ghosts": [],
+    "op_ids": [
+      "c1",
+      "c2",
+      "t1",
+      "t2",
+      "t4",
+      "t6",
+      "t7"
+    ]
+  }
+}

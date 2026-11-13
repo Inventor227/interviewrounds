@@ -1,0 +1,211 @@
+{
+  "name": "class members: add, move to another class, relation with rel, set class kind",
+  "start": {
+    "schema": "ir.board.v1",
+    "round": {
+      "id": "s_fixture",
+      "type": "lld",
+      "question_id": null,
+      "language": null
+    },
+    "rev": 2,
+    "size": {
+      "w": 64,
+      "h": 40
+    },
+    "brief": {
+      "question": "Fixture board",
+      "lines": []
+    },
+    "items": [
+      {
+        "id": "c1",
+        "kind": "class",
+        "label": "ParkingLot",
+        "class_kind": "class",
+        "fields": [],
+        "methods": [],
+        "x": 6,
+        "y": 6,
+        "w": 14,
+        "h": 12
+      },
+      {
+        "id": "c2",
+        "kind": "class",
+        "label": "Level",
+        "class_kind": "class",
+        "fields": [],
+        "methods": [],
+        "x": 30,
+        "y": 6,
+        "w": 14,
+        "h": 12
+      }
+    ],
+    "edges": [],
+    "code": null,
+    "meeting": null,
+    "focus": null,
+    "ghosts": [],
+    "op_ids": [
+      "o1",
+      "o2"
+    ]
+  },
+  "ops": [
+    {
+      "op_id": "l1",
+      "src": "scribe",
+      "op": "member.add",
+      "args": {
+        "class_id": "c1",
+        "section": "fields",
+        "member": {
+          "id": "c1_f1",
+          "vis": "-",
+          "name": "levels",
+          "type": "List<Level>"
+        }
+      }
+    },
+    {
+      "op_id": "l2",
+      "src": "scribe",
+      "op": "member.add",
+      "args": {
+        "class_id": "c1",
+        "section": "methods",
+        "member": {
+          "id": "c1_m1",
+          "vis": "+",
+          "name": "park",
+          "params": [
+            {
+              "name": "v",
+              "type": "Vehicle"
+            }
+          ],
+          "returns": "Ticket"
+        }
+      }
+    },
+    {
+      "op_id": "l3",
+      "src": "hand",
+      "op": "member.move",
+      "args": {
+        "id": "c1_f1",
+        "to_class_id": "c2"
+      }
+    },
+    {
+      "op_id": "l4",
+      "src": "hand",
+      "op": "edge.create",
+      "args": {
+        "id": "e1",
+        "from": "c1",
+        "to": "c2",
+        "label": "1..*",
+        "rel": "has_a"
+      }
+    },
+    {
+      "op_id": "l5",
+      "src": "voice_grammar",
+      "op": "item.set_type",
+      "args": {
+        "id": "c2",
+        "type": "abstract"
+      }
+    }
+  ],
+  "expected": {
+    "schema": "ir.board.v1",
+    "round": {
+      "id": "s_fixture",
+      "type": "lld",
+      "question_id": null,
+      "language": null
+    },
+    "rev": 7,
+    "size": {
+      "w": 64,
+      "h": 40
+    },
+    "brief": {
+      "question": "Fixture board",
+      "lines": []
+    },
+    "items": [
+      {
+        "id": "c1",
+        "kind": "class",
+        "label": "ParkingLot",
+        "class_kind": "class",
+        "fields": [],
+        "methods": [
+          {
+            "id": "c1_m1",
+            "vis": "+",
+            "name": "park",
+            "params": [
+              {
+                "name": "v",
+                "type": "Vehicle"
+              }
+            ],
+            "returns": "Ticket"
+          }
+        ],
+        "x": 6,
+        "y": 6,
+        "w": 14,
+        "h": 12
+      },
+      {
+        "id": "c2",
+        "kind": "class",
+        "label": "Level",
+        "class_kind": "abstract",
+        "fields": [
+          {
+            "id": "c1_f1",
+            "vis": "-",
+            "name": "levels",
+            "type": "List<Level>"
+          }
+        ],
+        "methods": [],
+        "x": 30,
+        "y": 6,
+        "w": 14,
+        "h": 12
+      }
+    ],
+    "edges": [
+      {
+        "id": "e1",
+        "from": "c1",
+        "to": "c2",
+        "dir": "->",
+        "label": "1..*",
+        "rel": "has_a"
+      }
+    ],
+    "code": null,
+    "meeting": null,
+    "focus": null,
+    "ghosts": [],
+    "op_ids": [
+      "o1",
+      "o2",
+      "l1",
+      "l2",
+      "l3",
+      "l4",
+      "l5"
+    ]
+  }
+}

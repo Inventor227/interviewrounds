@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rounds.dijmo.com/schema/settings.schema.json",
+  "title": "Settings",
+  "description": "Per user settings. GET /api/me returns them; PUT /api/me/settings sends the whole object.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "default_role", "default_level", "default_style", "voice_speed", "captions", "dominant_hand", "sfx_volume", "avatar_brightness", "practice_mode"
+  ],
+  "properties": {
+    "default_role": { "enum": ["sde", "pm", null], "default": null },
+    "default_level": { "enum": ["junior", "mid", "senior", "staff"], "default": "mid" },
+    "default_style": { "enum": ["warm", "neutral", "tough"], "default": "neutral" },
+    "voice_speed": { "type": "number", "minimum": 0.8, "maximum": 1.25, "default": 1.0 },
+    "captions": { "type": "boolean", "default": false },
+    "dominant_hand": { "enum": ["right", "left"], "default": "right" },
+    "sfx_volume": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.6 },
+    "avatar_brightness": { "type": "number", "minimum": 0.6, "maximum": 1.2, "default": 1.0 },
+    "practice_mode": { "type": "boolean", "default": false, "description": "True = hints allowed." }
+  }
+}
