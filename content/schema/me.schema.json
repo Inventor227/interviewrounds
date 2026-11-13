@@ -1,0 +1,71 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rounds.dijmo.com/schema/me.schema.json",
+  "title": "Me",
+  "description": "Response of GET /api/me. $defs/limits is also the limits field of CreateSessionRes.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["identity", "sign_in_available", "settings", "onboarding_done", "streak", "daily", "limits", "entitlements"],
+  "properties": {
+    "identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind"],
+      "properties": {
+        "kind": { "enum": ["guest", "user"] },
+        "name": { "type": "string" },
+        "email": { "type": "string", "format": "email" }
+      }
+    },
+    "sign_in_available": { "type": "boolean" },
+    "settings": { "$ref": "settings.schema.json" },
+    "onboarding_done": { "type": "boolean" },
+    "streak": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["current", "best", "today_done"],
+      "properties": {
+        "current": { "type": "integer", "minimum": 0 },
+        "best": { "type": "integer", "minimum": 0 },
+        "today_done": { "type": "boolean" }
+      }
+    },
+    "daily": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["round_id", "title"],
+      "properties": { "round_id": { "type": "string" }, "title": { "type": "string" } },
+      "description": "Today's suggested short round; null when there is none."
+    },
+    "limits": { "$ref": "#/$defs/limits" },
+    "entitlements": { "$ref": "#/$defs/entitlements" }
+  },
+  "$defs": {
+    "limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["short_left_today", "full_left", "resets_at", "reason"],
+      "properties": {
+        "short_left_today": { "type": ["integer", "null"], "minimum": 0, "description": "null = no limit." },
+        "full_left": { "type": ["integer", "null"], "minimum": 0, "description": "null = no limit." },
+        "resets_at": { "type": ["string", "null"], "format": "date-time" },
+        "reason": {
+          "enum": [null, "guest_daily_limit", "guest_full_used", "judge_budget_reached", "build_budget_reached", "free_rounds_used"],
+          "description": "Why a new session is blocked; null = not blocked."
+        }
+      }
+    },
+    "entitlements": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["plan", "free_rounds_left", "minutes_total", "minutes_used", "period_end"],
+      "properties": {
+        "plan": { "enum": ["guest", "free", "sprint", "pro"] },
+        "free_rounds_left": { "type": ["integer", "null"], "minimum": 0 },
+        "minutes_total": { "type": ["integer", "null"], "minimum": 0 },
+        "minutes_used": { "type": ["number", "null"], "minimum": 0 },
+        "period_end": { "type": ["string", "null"], "format": "date-time" }
+      }
+    }
+  }
+}

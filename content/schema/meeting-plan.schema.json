@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rounds.dijmo.com/schema/meeting-plan.schema.json",
+  "title": "MeetingPlan",
+  "description": "What the server prepares from a MeetingSetup. The browser gets it with every attendees[].hidden removed (MeetingPlanPublic); suggested objections stay visible in likely_objections.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["chair_attendee", "attendees", "opening_line", "success_criteria", "tips"],
+  "properties": {
+    "chair_attendee": { "type": "string", "minLength": 1, "description": "Name of the attendee who chairs." },
+    "attendees": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 3,
+      "items": {
+        "type": "object",
+        "$ref": "attendee.schema.json#/$defs/base",
+        "required": ["hidden"],
+        "properties": { "hidden": { "$ref": "#/$defs/hidden" } },
+        "unevaluatedProperties": false
+      }
+    },
+    "opening_line": { "type": "string", "minLength": 1, "description": "What the chair says first." },
+    "success_criteria": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } },
+    "tips": { "type": "array", "minItems": 3, "maxItems": 3, "items": { "type": "string", "minLength": 1 } }
+  },
+  "$defs": {
+    "hidden": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Server only. Never sent to the browser.",
+      "required": ["stance", "concerns", "patience", "persona_id", "avatar_id", "voice_id"],
+      "properties": {
+        "stance": { "type": "integer", "minimum": -2, "maximum": 2, "description": "-2 hostile to +2 champion." },
+        "concerns": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "text", "status"],
+            "properties": {
+              "id": { "type": "string", "minLength": 1 },
+              "text": { "type": "string", "minLength": 1 },
+              "status": { "enum": ["open", "partly", "resolved"] }
+            }
+          }
+        },
+        "patience": { "type": "integer", "minimum": 0, "description": "User turns before this attendee pushes harder." },
+        "persona_id": { "type": "string", "pattern": "^persona\\.[a-z]+$" },
+        "avatar_id": { "enum": ["f01", "f02", "f03", "m02", "m04", "m05"] },
+        "voice_id": { "type": "string", "minLength": 1 }
+      }
+    }
+  }
+}
