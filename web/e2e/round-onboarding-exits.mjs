@@ -26,14 +26,27 @@ await until('the round ready for Enter', () => !!document.querySelector('[data-t
 await shot('00-ready');
 await enterFromTap('start-round');
 await recordRound();
-await placeDesk(S, '01-placing', { onboarding: 'keep' });
-await until('the box step', () => (globalThis.__round.room.debug?.onboarding?.showing?.() === 'box' ? true : null), null, 20000, 500);
-out.first = await view();
-stage('onboarding showing', out.first);
-
-// The headset view is lost during the onboarding.
-await page(() => void globalThis.__xrApp.world.session.end());
+// The headset view is lost the moment the onboarding shows: armed in the page, because the emulator turns slowly
+// and the 20 s limit would pass before a script step could act.
+await page(() => {
+  const t = setInterval(() => {
+    const ob = globalThis.__round?.room?.debug?.onboarding;
+    if (ob?.showing?.() !== 'box') return;
+    clearInterval(t);
+    globalThis.__left = { state: globalThis.__round.controller.state, hello: globalThis.__round.controller.started, card: globalThis.__xrApp.ui.status.view };
+    void globalThis.__xrApp.world.session.end();
+  }, 100);
+});
+// The desk touch by hand here (the helper waits for a desk that this run takes away again at once).
+await L.call('xr', 'set-input-mode', { mode: 'hand' });
+await L.call('xr', 'set-transform', { device: 'headset', position: S.head, orientation: { pitch: -38, yaw: 0, roll: 0 } });
+await L.call('xr', 'set-hand-pose', { device: 'hand-right', poseId: 'point' });
+await L.call('xr', 'set-transform', { device: 'hand-right', position: S.tip, anchor: 'index-tip', orientation: { fingers: [0, -0.85, -0.5], thumb: 'left' } });
+await until('the onboarding showed and the view was lost', () => globalThis.__left ?? null, null, 120000, 1000);
 await until('the page offers the way back', () => (document.querySelector('[data-test="return-to-room"]') ? true : null), null, 30000);
+out.first = await page(() => globalThis.__left);
+stage('left while the onboarding showed', out.first);
+if (!out.first || out.first.card.title !== 'Pinch and draw a box') await fail('the onboarding was not showing when the view was lost', out.first);
 await sleep(25000); // longer than the 20 s limit: nothing may start while the user is out
 out.away = await view();
 stage('away for 25 s', out.away);
