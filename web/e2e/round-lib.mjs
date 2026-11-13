@@ -107,23 +107,25 @@ export async function until(what, fn, arg = null, timeoutMs = 60000, everyMs = 1
 
 /**
  * Before the first tap: the dev key and tooling flags in the tab's storage, a silent microphone, and no speech
- * engine (the fake voice then paces its lines with a timer, which headless browsers handle).
+ * engine (the fake voice then paces its lines with a timer, which headless browsers handle). The key is read from
+ * the environment by the code that runs in the managed browser's driver: it is never written into a script file.
  */
-export async function setupTab({ offer = true, fallback = 180 } = {}) {
-  const key = process.env.DEV_KEY;
-  if (!key) await fail('DEV_KEY is not set (pass --env-file)');
-  await page(
-    (a) => {
+export async function setupTab({ offer = true, fallback = 180, ghostSettle = 0 } = {}) {
+  if (!process.env.DEV_KEY) await fail('DEV_KEY is not set (pass --env-file)');
+  const ok = await play(`
+    const key = process.env.DEV_KEY;
+    if (!key) return 'no key in the driver process';
+    return await frame.evaluate((a) => {
       sessionStorage.setItem('ir_dev_key', a.key);
       if (a.offer) sessionStorage.setItem('ir_offer', '1');
       sessionStorage.setItem('ir_fallback', String(a.fallback));
+      if (a.ghostSettle) sessionStorage.setItem('ir_ghost_settle', String(a.ghostSettle));
       const ctx = new AudioContext();
       navigator.mediaDevices.getUserMedia = async () => ctx.createMediaStreamDestination().stream;
       Object.defineProperty(globalThis, 'speechSynthesis', { value: undefined, configurable: true });
       return true;
-    },
-    { key, offer, fallback },
-  );
+    }, { key, offer: ${JSON.stringify(offer)}, fallback: ${JSON.stringify(fallback)}, ghostSettle: ${JSON.stringify(ghostSettle)} });`);
+  if (ok !== true) await fail('could not set up the tab', ok);
 }
 
 /** Records the round's transcript, states and errors in the page (call once the session page is up). */
@@ -202,13 +204,13 @@ export async function enterFromTap(test = 'start-round') {
 }
 
 /** Sits the user at the desk, rests the right index tip on it and waits for the placement. */
-export async function placeDesk(S) {
+export async function placeDesk(S, shotName = '03-placing') {
   await call('xr', 'set-input-mode', { mode: 'hand' });
   await call('xr', 'set-transform', { device: 'headset', position: S.head, orientation: { pitch: -38, yaw: 0, roll: 0 } });
   await call('xr', 'set-transform', { device: 'hand-left', position: { x: S.head.x - 0.3, y: 0.95, z: S.head.z - 0.1 }, orientation: 'auto' });
   await call('xr', 'set-transform', { device: 'hand-right', position: { x: S.head.x + 0.3, y: 0.95, z: S.head.z - 0.1 }, orientation: 'auto' });
   await sleep(1500);
-  await shot('03-placing');
+  await shot(shotName);
   await call('xr', 'set-hand-pose', { device: 'hand-right', poseId: 'point' });
   await call('xr', 'set-transform', { device: 'hand-right', position: S.tip, anchor: 'index-tip', orientation: { fingers: [0, -0.85, -0.5], thumb: 'left' } });
   const desk = await until('the desk placement', () => globalThis.__xrApp.desk$.value, null, 120000, 1000);

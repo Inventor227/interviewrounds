@@ -51,6 +51,10 @@ stage('answer 2', await answer('Revenue is forty thousand a month, growing twelv
 await look(S, -12, 10);
 await sleep(800);
 await shot('05-after-answers');
+await look(S, -50);
+await sleep(800);
+await shot('05b-sheet');
+stage('meeting sheet', { kit: await page(() => globalThis.__round.session.round.board_kit), hasBoard: await page(() => globalThis.__round.room.hasBoard), board: await L.board() });
 
 // Settle the open questions, then ask the other attendee directly until the server hands the floor over.
 const name = other?.name ?? 'the other person';

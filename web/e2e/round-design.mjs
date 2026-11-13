@@ -18,7 +18,7 @@ const S = L.SETUPS[process.env.EMU_ROOM ?? 'home_office'] ?? L.SETUPS.home_offic
 await waitReady();
 await go('/');
 await until('the home page', () => !!document.querySelector('[data-test="try-quick"]'));
-await setupTab();
+await setupTab({ ghostSettle: 120 });
 await shot('01-home');
 
 // Tap 1: the mic, the session and the room load.
@@ -76,29 +76,33 @@ await sleep(800);
 await shot('07-drawn');
 if (!b.edges.length) console.error('WARNING: the connector did not become an edge');
 
-// One more answer about the drawing, so the Scribe has something to suggest; then accept a suggestion.
+// One more answer about the drawing, so the Scribe has something to suggest. Suggestions wait two minutes in this run
+// (ir_ghost_settle) instead of 4 s, so the scripted hand is in time to accept one by pinch.
+const before = (await board()).log.filter((e) => e.src === 'scribe' && e.accepted).length;
 const reply4 = await answer('The box on the left is the API service and the one on the right is the key value store. The service reads and writes the store.');
 stage('answer 4', reply4);
 let ghost = null;
-for (let i = 0; i < 20 && !ghost; i++) {
+for (let i = 0; i < 30 && !ghost; i++) {
   await sleep(1500);
   ghost = await page(() => {
     const d = globalThis.__round.room.debug;
     const g = d.store.board.ghosts[0];
-    return g ? { op_id: g.op_id, op: g.op, rect: d.ghostRect(g.op_id) } : null;
+    return g ? { op_id: g.op_id, op: g.op, rect: d.ghostRect(g.op_id), pending: d.store.board.ghosts.length } : null;
   });
-  // A suggestion can also settle by itself after 4 s: that counts as accepted.
-  const accepted = (await board()).log.some((e) => e.src === 'scribe' && e.accepted);
-  if (accepted) break;
 }
-if (ghost?.rect) {
-  await shot('08-ghost');
-  await tap(ghost.rect.x + ghost.rect.w / 2, ghost.rect.y + ghost.rect.h / 2);
-  await sleep(1500);
-}
+if (!ghost?.rect) await fail('no suggestion arrived to accept', await board());
+await look(S, -52);
+await sleep(600);
+await shot('08-ghost');
+const tapAt = Date.now();
+await tap(ghost.rect.x + ghost.rect.w / 2, ghost.rect.y + ghost.rect.h / 2);
+await sleep(1500);
 b = await board();
+const stillThere = b.ghosts.some((g) => g.op_id === ghost.op_id);
 const scribe = b.log.filter((e) => e.src === 'scribe');
-stage('suggestions', { ghost, scribe, labels: b.items.map((i) => i.label) });
+const accepted = scribe.filter((e) => e.accepted).length;
+stage('suggestion accepted by pinch', { ghost, tapMs: Date.now() - tapAt, stillThere, acceptedBefore: before, acceptedNow: accepted, pendingNow: b.ghosts.length, scribe });
+if (stillThere || accepted <= before) await fail('the pinch did not accept the suggestion', { ghost, b });
 await look(S, -52);
 await sleep(800);
 await shot('09-after-ghost');
@@ -107,14 +111,14 @@ await sleep(800);
 await shot('10-wall-board');
 
 // End the round (the bar's End needs a held press; the script asks the controller, the same path).
-await look(S, -14);
+await look(S, -20);
 const endAt = Date.now();
 await page(() => globalThis.__round.controller.end());
 await waitState(['scoring', 'summary'], 60000);
 stage('round ended', { ms: Date.now() - endAt });
-await look(S, -20);
-await sleep(1000);
+// At once, with the head already in place: the status card with progress, before the card or the summary comes.
 await shot('11-scoring');
+stage('after the scoring shot', { state: (await roundState()).state, status: await page(() => globalThis.__xrApp.ui.status.group.visible), summary: await page(() => globalThis.__xrApp.ui.summary.group.visible) });
 const card = await until('the quick card or the summary', () => {
   const ui = globalThis.__xrApp?.ui;
   return ui?.summary.group.visible ? { state: globalThis.__round.controller.state } : null;
