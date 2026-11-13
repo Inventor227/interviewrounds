@@ -110,17 +110,9 @@ await sleep(1000);
 b = await board();
 const drawn = b.items.filter((i) => i.kind === 'component' && i.label === null).sort((p, q) => p.x - q.x);
 if (drawn.length < 2) await fail('the box pinched after the change did not become a card', b);
-const [c1, c2] = drawn;
-await R.drawSettled(L.along([[c1.x + c1.w + 0.6, c1.y + c1.h / 2], [c2.x + 1.5, c2.y + c2.h / 2]], 1.5));
-await sleep(1200);
-b = await board();
-stage('box and connector by hand', { items: b.items.length, edges: b.edges });
-// The scripted pinch closes about 2 cm short of where it is sent at this spot (the first card ends up carried by
-// that much), so it can take the card instead of its edge. Reported, not required.
-if (!b.edges.length) console.error('WARNING: the pinched connector did not become an edge', JSON.stringify(b.items.map((i) => [i.x, i.y])));
-await look(S, -52);
-await sleep(600);
-await shot('s04-drawn-by-both');
+stage('a box by hand after the change', { items: b.items.length });
+// (A connector by scripted pinch is left to the hands run: here the pinch closes about 2 cm short of where it is
+// sent and takes the card, and the round's clock has no room for it.)
 
 // The controllers come back for one more box, mid round: no restart, no prompt. A takes it back. (This comes
 // before the pokes: A acts only while the round is on, and the round's clock is short at the emulator's pace.)
@@ -136,7 +128,6 @@ await sleep(1200);
 b = await board();
 stage('a box by touch after the controllers came back', { items: b.items.length, input: await R.inputState(), round: (await roundState()).state });
 if (plain(b) !== n1 + 1) await fail('the controller did not draw after coming back', b);
-await shot('s05-controllers-back');
 await C.pressButton('right', 'primary');
 await sleep(1500);
 b = await board();
