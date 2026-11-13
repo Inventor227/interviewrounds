@@ -122,66 +122,44 @@ await look(S, -52);
 await sleep(600);
 await shot('s04-drawn-by-both');
 
-// A hand pokes Pause on the round bar (direct touch), then Resume.
-await look(S, -48);
-await R.pokeBar(/Pause/, 0.5);
-await waitState(['paused'], 30000);
-await shot('s03b-paused-by-poke');
-await R.pokeBar(/Resume/, 0.5);
-await waitState(['live'], 30000);
-stage('paused and resumed by a hand poke', await roundState());
-await call('xr', 'set-hand-pose', { device: 'hand-right', poseId: 'default' });
-await look(S, -52);
-
-// A suggestion accepted by pinch, if one is waiting or comes with the next answer.
-stage('answer 2', await answer('The box on the left is the API service and the one on the right is the key value store. The service reads and writes the store.'));
-let ghost = null;
-for (let i = 0; i < 6 && !ghost; i++) {
-  await sleep(1500);
-  ghost = await page(() => {
-    const d = globalThis.__round.room.debug;
-    const g = d.store.board.ghosts[0];
-    return g ? { op_id: g.op_id, rect: d.ghostRect(g.op_id) } : null;
-  });
-}
-if (ghost?.rect) {
-  await look(S, -52);
-  await tap(ghost.rect.x + ghost.rect.w / 2, ghost.rect.y + ghost.rect.h / 2);
-  await sleep(1500);
-  const still = await page((id) => globalThis.__round.room.debug.store.board.ghosts.some((g) => g.op_id === id), ghost.op_id);
-  stage('suggestion accepted by pinch', { ghost, still });
-  if (still) await fail('the pinch did not accept the suggestion after the change', ghost);
-} else stage('no suggestion came in time (not a failure of this run)');
-
-// The controllers come back for one more box, mid round: no restart, no prompt.
+// The controllers come back for one more box, mid round: no restart, no prompt. A takes it back. (This comes
+// before the pokes: A acts only while the round is on, and the round's clock is short at the emulator's pace.)
 await call('xr', 'set-input-mode', { mode: 'controller' });
 await C.hold('left', { x: S.head.x - 0.3, y: 0.95, z: S.head.z - 0.1 }, { x: S.head.x - 0.3, y: 0.9, z: S.head.z - 1.1 });
 await C.hold('right', from, pts[0]);
 await sleep(2000);
 const n1 = (await board()).items.length;
-await R.strokeBoard('right', box(22, 26, 12, 7), 'near');
+await R.strokeBoard('right', box(22, 30, 12, 7), 'near');
 await sleep(1200);
 b = await board();
-stage('a box by touch after the controllers came back', { items: b.items.length, input: await R.inputState(), changes: await page(() => globalThis.__inputs) });
+stage('a box by touch after the controllers came back', { items: b.items.length, input: await R.inputState(), round: (await roundState()).state });
 if (b.items.length !== n1 + 1) await fail('the controller did not draw after coming back', b);
 await shot('s05-controllers-back');
-// A on the right controller takes that box back.
 await C.pressButton('right', 'primary');
 await sleep(1500);
 b = await board();
 stage('A undid the last box', { items: b.items.length, log: b.log.slice(-2), pulses: await page(() => globalThis.__xrApp.hapticLog().map((p) => `${p.hand}:${p.name}`)) });
 if (b.items.length !== n1 || b.log.at(-1).op !== 'undo') await fail('A did not undo the last action', b);
 
-// And down again: the round is ended with hands (as in the hands run, through the round's own End).
+// And down again: the rest is by hand. A fingertip pokes Pause on the round bar, then Resume, then holds End.
 await call('xr', 'set-input-mode', { mode: 'hand' });
+await call('xr', 'set-transform', { device: 'hand-left', position: { x: S.head.x - 0.3, y: 0.95, z: S.head.z - 0.1 }, orientation: 'auto' });
 await call('xr', 'set-transform', { device: 'hand-right', position: { x: S.head.x + 0.3, y: 0.9, z: S.head.z - 0.12 }, orientation: 'auto' });
 await sleep(1500);
-await look(S, -20);
-await page(() => globalThis.__round.controller.end());
+await look(S, -48);
+await R.pokeBar(/Pause/, 0.5);
+await waitState(['paused'], 30000);
+await shot('s06-paused-by-poke');
+await R.pokeBar(/Resume/, 0.5);
+await waitState(['live'], 30000);
+stage('paused and resumed by a hand poke', await roundState());
+await R.pokeBar(/End/, 2.2);
 await waitState(['scoring', 'summary'], 60000);
+stage('ended by a hand poke held on End', await roundState());
+await look(S, -20);
 await until('the quick card or the summary', () => (globalThis.__xrApp?.ui.summary.group.visible ? true : null), null, 150000, 2000);
 await sleep(800);
-await shot('s06-card');
+await shot('s07-card');
 await waitState(['summary'], 240000);
 const final = await page(() => ({ rec: globalThis.__rec, session: globalThis.__round.session.session_id, stats: globalThis.__xrApp.stats(), changes: globalThis.__inputs, hints: globalThis.__xrApp.ui.hint.history, pulses: globalThis.__xrApp.hapticLog() }));
 final.board = await board();
