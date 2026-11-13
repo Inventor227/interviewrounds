@@ -2,7 +2,7 @@
 // ladder of five rungs on the right. A sticky dropped in a lane is filed there; dropped on a
 // rung it takes that rank, in one item.move (a rung can hold two while you sort them out).
 // Text comes from voice (the Scribe); a box drawn on the sheet becomes a sticky.
-import type { Board, BoardItem, Lane } from '../../shared/types';
+import type { Board, BoardItem, Lane, StickyItem } from '../../shared/types';
 import { HLD_KIT, traySlots, type Kit, type Placement } from '../kits';
 import { inRect, SHEET, type Rect } from '../model';
 import { ACCENT, font, roundRect, withAlpha } from '../render';
@@ -42,10 +42,13 @@ function place(item: BoardItem, x: number, y: number, board: Board): Placement |
   if (item.kind !== 'sticky') return null;
   const rung = rungAt(x, y);
   if (rung) {
-    // Two slots per rung: the left one unless another sticky already sits there.
+    // Two slots per rung: the left one unless another sticky already sits there. More than
+    // two (while sorting) fan out down the right slot so none hides another.
     const r = rungRect(rung);
-    const leftTaken = board.items.some((s) => s.kind === 'sticky' && s.id !== item.id && s.rank === rung && s.x < LADDER.x + STICKY / 2);
-    return { rank: rung, x: LADDER.x + (leftTaken ? 7.6 : 0.4), y: r.y + (r.h - STICKY) / 2 };
+    const others = board.items.filter((s): s is StickyItem => s.kind === 'sticky' && s.id !== item.id && s.rank === rung);
+    const leftTaken = others.some((s) => s.x < LADDER.x + STICKY / 2);
+    const fan = leftTaken ? Math.max(0, others.length - 1) : 0;
+    return { rank: rung, x: LADDER.x + (leftTaken ? 7.6 : 0.4), y: Math.min(SHEET.h - STICKY, r.y + (r.h - STICKY) / 2 + fan * 1.2) };
   }
   const lane = laneAt(x);
   if (!lane) return null;

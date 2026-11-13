@@ -92,4 +92,17 @@ describe('PM kit', () => {
     adapter.stroke([[a.x + 3.5, a.y + 3.5], [30, 20], [20, 20]]);
     expect(emitted[1]).toMatchObject({ op: 'item.move', args: { id: 's2', lane: 'pain', rank: null } });
   });
+
+  it('a third sticky on a rung fans out instead of hiding the second', () => {
+    const r = rungRect(2);
+    const { adapter, emitted } = setup([
+      sticky('s1', { lane: 'idea', rank: 2, x: r.x + 0.4, y: r.y }),
+      sticky('s2', { lane: 'idea', rank: 2, x: r.x + 7.6, y: r.y }),
+      sticky('s3', { lane: 'pain', x: 3, y: 20 }),
+    ]);
+    adapter.stroke([[6, 23], [20, 20], [r.x + 10, r.y + 3]]);
+    const a = emitted[0]!.args as { x: number; y: number; rank: number };
+    expect(a.rank).toBe(2);
+    expect(a.y).toBeGreaterThan(r.y + (r.h - 7) / 2 + 1);
+  });
 });
