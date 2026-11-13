@@ -331,7 +331,7 @@ function args(op: string, a: unknown): void {
       const lines = arr(o.lines, 'args.lines');
       if (lines.length > 6) fail('args.lines has more than 6 lines');
       lines.forEach((l, i) => {
-        if (str(l, `args.lines[${i}]`).length > 120) fail(`args.lines[${i}] is longer than 120 characters`);
+        if ([...str(l, `args.lines[${i}]`)].length > 120) fail(`args.lines[${i}] is longer than 120 characters`);
       });
       return;
     }

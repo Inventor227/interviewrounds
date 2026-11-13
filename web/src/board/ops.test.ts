@@ -95,6 +95,11 @@ describe('applyOp', () => {
     expect(ok(ink(5001))).toBe(false);
     expect(ok(iCard('b'.repeat(2000)))).toBe(true);
     expect(ok(iCard('b'.repeat(2001)))).toBe(false);
+    // Approach lines count characters too (120), as the server does.
+    const coding = { ...b, code: { language: 'python', lines: [], approach: [], complexity: { time: null, space: null }, trace: [] } };
+    const approach = (line: string) => tryApplyOp(coding, { op_id: 'o5', src: 'scribe', op: 'code.approach', args: { lines: [line] } } as BoardOp).accepted;
+    expect(approach('😀'.repeat(120))).toBe(true);
+    expect(approach('😀'.repeat(121))).toBe(false);
     const withCard = applyOp(b, card({}));
     const label = (text: string) => tryApplyOp(withCard, { op_id: 'o4', src: 'voice_grammar', op: 'item.label', args: { id: 'n1', text } } as BoardOp).accepted;
     expect(label('y'.repeat(200))).toBe(true);

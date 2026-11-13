@@ -96,7 +96,7 @@
         "w": { "$ref": "#/$defs/cm" },
         "h": { "$ref": "#/$defs/cm" },
         "group": { "type": ["string", "null"], "maxLength": 200 },
-        "notes": { "type": "array", "maxItems": 200, "items": { "type": "string", "maxLength": 200 } }
+        "notes": { "type": "array", "items": { "type": "string", "maxLength": 200 } }
       }
     },
     "member": {
@@ -130,8 +130,8 @@
         "kind": { "const": "class" },
         "label": { "type": ["string", "null"], "maxLength": 200 },
         "class_kind": { "$ref": "#/$defs/class_kind" },
-        "fields": { "type": "array", "maxItems": 200, "items": { "$ref": "#/$defs/member" } },
-        "methods": { "type": "array", "maxItems": 200, "items": { "$ref": "#/$defs/member" } },
+        "fields": { "type": "array", "items": { "$ref": "#/$defs/member" } },
+        "methods": { "type": "array", "items": { "$ref": "#/$defs/member" } },
         "x": { "$ref": "#/$defs/cm" },
         "y": { "$ref": "#/$defs/cm" },
         "w": { "$ref": "#/$defs/cm" },
