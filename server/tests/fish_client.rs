@@ -18,6 +18,7 @@ fn create_req() -> CreateFishSession {
         first_message: None,
         llm_extra_body: json!({"session_id": "sess-1", "panelist_id": "p1"}),
         record_audio: true,
+        asr_model: Some("deepgram:nova-3".into()),
     }
 }
 
@@ -30,7 +31,7 @@ async fn fish_create_session_passes_overrides() {
         .and(body_partial_json(json!({
             "agent_id": "agent-1",
             "end_user_id": "guest-1",
-            "overrides": {"voice_id": "voice-maya", "system_prompt": "You are Maya."},
+            "overrides": {"voice_id": "voice-maya", "system_prompt": "You are Maya.", "asr": {"model": "deepgram:nova-3"}},
             "llm_extra_body": {"session_id": "sess-1", "panelist_id": "p1"},
             "record_audio": true
         })))
@@ -54,6 +55,10 @@ async fn fish_create_session_passes_overrides() {
     assert_eq!(tok.token, "tok-123");
     assert_eq!(tok.livekit_url, "wss://x.livekit.cloud");
     assert_eq!(tok.expires_at.as_deref(), Some("2026-11-13T12:00:00Z"));
+    // Fields the voice SDK checks reach the browser unchanged.
+    let passed = serde_json::to_value(&tok).unwrap();
+    assert_eq!(passed["transport"], "livekit");
+    assert_eq!(passed["max_duration_seconds"], 1800);
 
     // first_message is left out when absent, sent when present.
     let got = server.received_requests().await.unwrap();

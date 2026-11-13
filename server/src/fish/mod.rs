@@ -18,6 +18,8 @@ pub struct CreateFishSession {
     /// Comes back on every custom LLM call as `fishaudio_extra_body` (`session_id`, `panelist_id`). At most 16 KB.
     pub llm_extra_body: Value,
     pub record_audio: bool,
+    /// Speech recognizer for this session (`overrides.asr.model`); None = the agent's.
+    pub asr_model: Option<String>,
 }
 
 /// Wire body of `POST /v1/agent/sessions`.
@@ -36,6 +38,13 @@ pub(crate) struct Overrides<'a> {
     pub system_prompt: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub first_message: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub asr: Option<AsrOverride<'a>>,
+}
+
+#[derive(Serialize)]
+pub(crate) struct AsrOverride<'a> {
+    pub model: &'a str,
 }
 
 /// What the browser needs to join (`AgentSession.start({sessionToken})`).
@@ -47,6 +56,10 @@ pub struct FishSessionToken {
     /// Join deadline as Fish sent it (string or number, kept as text).
     #[serde(default, deserialize_with = "string_or_number")]
     pub expires_at: Option<String>,
+    /// Everything else Fish sent (`transport`, `max_duration_seconds`, ...), passed to the browser unchanged:
+    /// the voice SDK checks some of it.
+    #[serde(flatten)]
+    pub extra: serde_json::Map<String, Value>,
 }
 
 /// `GET /v1/agent/sessions/{id}`, the parts we use.

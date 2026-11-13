@@ -73,6 +73,10 @@ impl FishClient {
                 voice_id: &req.voice_id,
                 system_prompt: &req.system_prompt,
                 first_message: req.first_message.as_deref(),
+                asr: req
+                    .asr_model
+                    .as_deref()
+                    .map(|model| super::AsrOverride { model }),
             },
             llm_extra_body: &req.llm_extra_body,
             record_audio: req.record_audio,
