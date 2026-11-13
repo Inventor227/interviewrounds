@@ -3,13 +3,16 @@
 //! the pending Scribe ghosts.
 
 use std::collections::HashSet;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use serde::Serialize;
 use serde_json::{Map, Value};
 
 use super::apply::{self, BoardError, Op};
 use super::{Board, BoardOp, GhostOp, OpLogEntry, Src, summary};
+
+/// How long a focus set by the client counts as what "that" means.
+pub const FOCUS_TTL: Duration = Duration::from_secs(20);
 
 /// What the server answers a `board.op` with.
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -37,6 +40,8 @@ pub struct BoardSession {
     pub origin: Instant,
     server_seq: u64,
     scribe_calls: u64,
+    /// When the client last set the focus.
+    focus_at: Option<Instant>,
 }
 
 impl BoardSession {
@@ -52,6 +57,7 @@ impl BoardSession {
             origin,
             server_seq: 0,
             scribe_calls: 0,
+            focus_at: None,
         }
     }
 
@@ -89,17 +95,18 @@ impl BoardSession {
         let src = v
             .get("src")
             .and_then(|s| serde_json::from_value::<Src>(s.clone()).ok());
-        let (Some(op_id), Some(src)) = (op_id, src) else {
-            return rejected("op_id and src are required", false);
+        let name = v
+            .get("op")
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty());
+        // The op log needs an op_id, a src and an op name; a frame without them is answered but not logged.
+        let (Some(op_id), Some(src), Some(name)) = (op_id, src, name) else {
+            return rejected("op_id, src and op are required", false);
         };
         let op = BoardOp {
             op_id: op_id.to_string(),
             src,
-            op: v
-                .get("op")
-                .and_then(Value::as_str)
-                .unwrap_or("")
-                .to_string(),
+            op: name.to_string(),
             args: v.get("args").cloned().unwrap_or(Value::Object(Map::new())),
             rev_base: None,
             at_ms: None,
@@ -242,11 +249,50 @@ impl BoardSession {
         &self.board.ghosts
     }
 
-    /// Adds new ghosts after the pending ones; returns the full list to send.
+    /// Adds new ghosts after the pending ones and returns the full list to send. A Scribe call works on a copy
+    /// of the board, so each new ghost must still apply (in order, after the ones before it) to the board as it is
+    /// now; ghosts that no longer apply (an item deleted by hand meanwhile) are dropped.
     pub fn push_ghosts(&mut self, ghosts: Vec<GhostOp>) -> &[GhostOp] {
+        let mut scratch = self.board.clone();
+        let fresh: Vec<GhostOp> = ghosts
+            .into_iter()
+            .filter(|g| {
+                !self.is_duplicate(&g.op_id)
+                    && apply::apply(&mut scratch, &BoardOp::from_ghost(g)).is_ok()
+            })
+            .collect();
         let mut all = std::mem::take(&mut self.board.ghosts);
-        all.extend(ghosts);
+        all.extend(fresh);
         self.set_ghosts(all)
+    }
+
+    /// The item the candidate last touched or created (`board.focus {item_id}` from the client), which "that",
+    /// "this" and "it" refer to. Unknown ids are ignored (returns false, focus unchanged); `None` clears it. Focus
+    /// is client state: no rev change, nothing logged.
+    pub fn set_focus(&mut self, item_id: Option<String>) -> bool {
+        match item_id {
+            Some(ref id) if !self.board.items.iter().any(|i| i.id() == id) => false,
+            _ => {
+                self.board.focus = item_id;
+                self.focus_at = Some(Instant::now());
+                true
+            }
+        }
+    }
+
+    /// The focus the Scribe resolves "that" with: fresh for [`FOCUS_TTL`].
+    pub fn scribe_focus(&self) -> Option<&str> {
+        self.fresh_focus(FOCUS_TTL)
+    }
+
+    /// The focus while it is fresh (set within `ttl`), else `None`.
+    pub fn fresh_focus(&self, ttl: Duration) -> Option<&str> {
+        let fresh = self.focus_at.is_some_and(|at| at.elapsed() < ttl);
+        if fresh {
+            self.board.focus.as_deref()
+        } else {
+            None
+        }
     }
 
     /// `board.ghost_reject {op_id}`: removes the ghost and logs its op as not accepted. False (and nothing

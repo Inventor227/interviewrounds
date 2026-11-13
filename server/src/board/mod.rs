@@ -15,7 +15,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 
 pub use apply::{BoardError, apply};
-pub use session::{ApplyOutcome, BoardSession};
+pub use session::{ApplyOutcome, BoardSession, FOCUS_TTL};
 pub use summary::summary;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]

@@ -20,6 +20,10 @@ pub const MAX_LISTED_EDGES: usize = 40;
 pub const MAX_CODE_LINES: usize = 60;
 /// Entries in the "Changed since" line before the rest are only counted.
 pub const MAX_CHANGES: usize = 20;
+/// Characters kept of one candidate-written field (label, note, sticky, member, approach line, ...).
+pub const MAX_FIELD_CHARS: usize = 80;
+/// Characters kept of one code line.
+pub const MAX_CODE_CHARS: usize = 160;
 
 /// The summary of `board`; with `since = Some((rev, board_at_rev))`, adds what changed since then.
 pub fn summary(board: &Board, since: Option<(u64, &Board)>) -> String {
@@ -37,7 +41,7 @@ pub fn summary(board: &Board, since: Option<(u64, &Board)>) -> String {
         let _ = writeln!(
             out,
             "Brief: {}",
-            sentence(board.brief.lines.iter().map(|l| clean(l)))
+            sentence(board.brief.lines.iter().map(|l| q(l)))
         );
     }
     code_block(board, &mut out);
@@ -49,8 +53,48 @@ pub fn summary(board: &Board, since: Option<(u64, &Board)>) -> String {
         .filter(|i| !matches!(i, Item::Ink(_)))
         .collect();
     items.sort_by(|a, b| natural_cmp(a.id(), b.id()));
-    let listed: Vec<&Item> = items.iter().take(MAX_LISTED_ITEMS).copied().collect();
-    let hidden: Vec<&Item> = items.iter().skip(MAX_LISTED_ITEMS).copied().collect();
+    // Which items get listed when there are too many: the focus item, then those added or changed since the
+    // previous summary, then the rest in id order. They are still printed in id order.
+    let recent: HashSet<&str> = since
+        .map(|(_, prev)| {
+            board
+                .items
+                .iter()
+                .filter(|i| !prev.items.iter().any(|p| p == *i))
+                .map(Item::id)
+                .collect()
+        })
+        .unwrap_or_default();
+    let priority = |i: &Item| {
+        if board.focus.as_deref() == Some(i.id()) {
+            0
+        } else if recent.contains(i.id()) {
+            1
+        } else {
+            2
+        }
+    };
+    let mut ranked = items.clone();
+    ranked.sort_by(|a, b| {
+        priority(a)
+            .cmp(&priority(b))
+            .then(natural_cmp(a.id(), b.id()))
+    });
+    let chosen: HashSet<&str> = ranked
+        .iter()
+        .take(MAX_LISTED_ITEMS)
+        .map(|i| i.id())
+        .collect();
+    let listed: Vec<&Item> = items
+        .iter()
+        .filter(|i| chosen.contains(i.id()))
+        .copied()
+        .collect();
+    let hidden: Vec<&Item> = items
+        .iter()
+        .filter(|i| !chosen.contains(i.id()))
+        .copied()
+        .collect();
     item_lines(board, &listed, &mut out);
     edge_line(board, &mut out);
     if !hidden.is_empty() {
@@ -160,16 +204,71 @@ fn counts(board: &Board) -> String {
     format!("{first}{}.", chars.as_str())
 }
 
-/// One line of text without quotes or line breaks.
-fn clean(s: &str) -> String {
-    s.split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-        .replace('"', "'")
+/// Characters that could hide, reorder or break the text: controls, line and paragraph separators, bidi and
+/// zero-width marks.
+fn is_invisible(c: char) -> bool {
+    c.is_control()
+        || matches!(c,
+            '\u{2028}' | '\u{2029}' | '\u{061C}' | '\u{180E}' | '\u{FEFF}'
+            | '\u{200B}'..='\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2060}'..='\u{2064}' | '\u{2066}'..='\u{2069}')
 }
 
+/// Words that open the app's own bracketed notes; a `[` before them in candidate text becomes `(`.
+const MARKERS: &[&str] = &[
+    "app note",
+    "board update",
+    "board",
+    "event",
+    "system",
+    "note",
+];
+
+/// Candidate-written text made inert for the interviewer's prompt: invisible characters become spaces, marker
+/// look-alikes such as `[App note` or `[Board update` lose their bracket, and the text is capped at `max`
+/// characters. With `keep_spacing` (code) inner spaces stay; otherwise whitespace runs fold to one space.
+pub fn untrusted(s: &str, max: usize, keep_spacing: bool) -> String {
+    let visible: String = s
+        .chars()
+        .map(|c| if is_invisible(c) { ' ' } else { c })
+        .collect();
+    let spaced = if keep_spacing {
+        visible.trim_end().to_string()
+    } else {
+        visible.split_whitespace().collect::<Vec<_>>().join(" ")
+    };
+    let mut out = String::with_capacity(spaced.len());
+    for (i, c) in spaced.char_indices() {
+        if c == '[' || c == '\u{FF3B}' {
+            let rest = spaced[i + c.len_utf8()..].trim_start().to_lowercase();
+            if MARKERS.iter().any(|m| rest.starts_with(m)) {
+                out.push('(');
+                continue;
+            }
+        }
+        out.push(c);
+    }
+    if out.chars().count() > max {
+        let cut: String = out.chars().take(max.saturating_sub(3)).collect();
+        format!("{}...", cut.trim_end())
+    } else {
+        out
+    }
+}
+
+/// One candidate field: inert, one line, capped, without double quotes (so it cannot close its own quotes).
+fn clean(s: &str) -> String {
+    untrusted(s, MAX_FIELD_CHARS, false).replace('"', "'")
+}
+
+/// A candidate field in double quotes.
 fn q(s: &str) -> String {
     format!("\"{}\"", clean(s))
+}
+
+/// A code line in double quotes, inner spacing kept, quotes and backslashes escaped.
+fn qcode(s: &str) -> String {
+    let inert = untrusted(s, MAX_CODE_CHARS, true);
+    format!("\"{}\"", inert.replace('\\', "\\\\").replace('"', "\\\""))
 }
 
 /// Items joined with "; " and closed with a full stop.
@@ -242,7 +341,7 @@ fn describe(it: &Item) -> String {
                 let _ = write!(s, " {}", q(l));
             }
             if let Some(notes) = c.notes.as_ref().filter(|n| !n.is_empty()) {
-                let notes: Vec<String> = notes.iter().map(|n| clean(n)).collect();
+                let notes: Vec<String> = notes.iter().map(|n| q(n)).collect();
                 let _ = write!(s, " ({})", notes.join(", "));
             }
             s
@@ -263,7 +362,7 @@ fn describe(it: &Item) -> String {
                 .map(|m| member_sig(m, false))
                 .chain(c.methods.iter().map(|m| member_sig(m, true)))
                 .collect();
-            format!("{} {kind}{name}{{{}}}", c.id, members.join("; "))
+            format!("{} {kind}\"{name}{{{}}}\"", c.id, members.join("; "))
         }
         Item::Sticky(s) => {
             let mut out = format!("{} {}", s.id, q(&s.text));
@@ -382,9 +481,7 @@ fn item_lines(board: &Board, listed: &[&Item], out: &mut String) {
     line(
         "Interviewer cards",
         pick(&|i| match i {
-            Item::InterviewerCard(c) => {
-                Some(format!("{} {} ({})", c.id, q(&c.title), clean(&c.body)))
-            }
+            Item::InterviewerCard(c) => Some(format!("{} {} ({})", c.id, q(&c.title), q(&c.body))),
             _ => None,
         }),
     );
@@ -468,14 +565,14 @@ fn code_block(board: &Board, out: &mut String) {
     let approach: Vec<String> = code
         .approach
         .iter()
-        .map(|a| clean(a).trim_end_matches('.').to_string())
+        .map(|a| q(a.trim().trim_end_matches('.')))
         .collect();
     if approach.is_empty() {
         let _ = writeln!(out, "Approach: none yet.");
     } else {
         let _ = writeln!(out, "Approach: {}", sentence(approach));
     }
-    let slot = |v: &Option<String>| label(v).map(clean).unwrap_or_else(|| "?".into());
+    let slot = |v: &Option<String>| label(v).map(q).unwrap_or_else(|| "?".into());
     let _ = writeln!(
         out,
         "Complexity: time {}, space {}.",
@@ -488,14 +585,13 @@ fn code_block(board: &Board, out: &mut String) {
     } else {
         let _ = writeln!(out, "Code ({lang}):");
         for (n, l) in code.lines.iter().take(MAX_CODE_LINES).enumerate() {
-            let text = l.text.replace(['\n', '\r'], " ");
             let _ = writeln!(
                 out,
                 "{} {}: {}{}",
                 n + 1,
                 l.id,
                 "    ".repeat(l.indent as usize),
-                text.trim_end()
+                qcode(&l.text)
             );
         }
         let more = code.lines.len().saturating_sub(MAX_CODE_LINES);
@@ -527,14 +623,14 @@ fn number_text(board: &Board, id: &str) -> String {
         .as_ref()
         .and_then(|m| m.numbers.as_ref())
         .and_then(|ns| ns.iter().find(|n| n.id == id))
-        .map(|n| format!("{} {} = {}", n.id, clean(&n.label), clean(&n.value)))
-        .unwrap_or_else(|| clean(id))
+        .map(|n| format!("{} {} = {}", n.id, q(&n.label), q(&n.value)))
+        .unwrap_or_else(|| q(id))
 }
 
 fn shown_text(board: &Board, s: &super::Shown) -> String {
     match (&s.kind, &s.reference) {
         (ShownKind::Slide, ShownRef::Page(p)) => format!("slide {p}"),
-        (ShownKind::Slide, ShownRef::Id(p)) => format!("slide {}", clean(p)),
+        (ShownKind::Slide, ShownRef::Id(p)) => format!("slide {}", q(p)),
         (ShownKind::Number, ShownRef::Id(id)) => format!("number {}", number_text(board, id)),
         (ShownKind::Number, ShownRef::Page(p)) => format!("number {p}"),
     }
