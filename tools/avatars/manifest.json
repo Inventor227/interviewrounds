@@ -3,6 +3,7 @@
   "attribution": "Microsoft Rocketbox avatars and animations, MIT licence. See LICENSE.md.",
   "rocketbox_commit": "0943055db6ec570bcef9f2c8b41c9e5467c808f9",
   "notes": [
+    "Fetch at run time from /avatars/manifest.json; glb and anims are web paths under /avatars/.",
     "Bone names are three.js object names (GLTFLoader turns spaces into underscores).",
     "Load with GLTFLoader plus MeshoptDecoder and KTX2Loader.",
     "Hair, lashes and glasses are alpha-tested (alphaMode MASK, cutoff 0.5); no blended materials.",
@@ -150,7 +151,8 @@
       ],
       "tris": 8966,
       "joints": 80,
-      "bytes": 2837880
+      "bytes": 2837880,
+      "sha256": "353ba3f0dc41e9c91e75adc0a50f01ec83086c1a78f0d648c140a83042418ad9"
     },
     {
       "id": "f02",
@@ -229,7 +231,8 @@
       ],
       "tris": 8640,
       "joints": 80,
-      "bytes": 2966116
+      "bytes": 2966116,
+      "sha256": "7b845095dd461f063e030bccaeed0448b776a8cfd1aab4c6ada100b7073ef61a"
     },
     {
       "id": "f03",
@@ -308,7 +311,8 @@
       ],
       "tris": 8438,
       "joints": 80,
-      "bytes": 2495960
+      "bytes": 2495960,
+      "sha256": "09a0c784bf68505b514e611b7702cd9256d58a405ab65731eca4d0913718e5b6"
     },
     {
       "id": "m02",
@@ -387,7 +391,8 @@
       ],
       "tris": 7448,
       "joints": 80,
-      "bytes": 2445724
+      "bytes": 2445724,
+      "sha256": "fa71cf08327287ceab98bb0377b709e514097e46807534ed27f00ab6f1408f2e"
     },
     {
       "id": "m04",
@@ -466,7 +471,8 @@
       ],
       "tris": 7326,
       "joints": 80,
-      "bytes": 2295536
+      "bytes": 2295536,
+      "sha256": "7ed78ef3ab392d235b3bf7f2148cbd9d6de8b1c54992ee6fd9a0d0c6230cdedd"
     },
     {
       "id": "m05",
@@ -545,7 +551,8 @@
       ],
       "tris": 7164,
       "joints": 80,
-      "bytes": 2238156
+      "bytes": 2238156,
+      "sha256": "f6202e148ed776755176b7106f6b82bad07a83bf7e3879e93d78eaf242d7ec91"
     }
   ],
   "anim_libraries": [
@@ -573,7 +580,8 @@
         "gestic_listen_accept_03": "f_gestic_listen_accept_03.max.fbx",
         "idle_touch_face": "f_sit_table_idle_touch_face.max.fbx"
       },
-      "bytes": 816848
+      "bytes": 816848,
+      "sha256": "74f15ca0d7cbd857bf51f50661cf7cf39dcae7fa2564b15b0b79e3352c413da6"
     },
     {
       "id": "anims-m",
@@ -599,7 +607,8 @@
         "gestic_listen_accept_03": "m_gestic_listen_accept_03.max.fbx",
         "idle_touch_face": "m_sit_table_idle_touch_face.max.fbx"
       },
-      "bytes": 1006372
+      "bytes": 1006372,
+      "sha256": "ee48ed0f6f4eb001763e766f7b869056fce66b0231f970a8df5de115489a754b"
     }
   ]
 }

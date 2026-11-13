@@ -14,7 +14,8 @@ set -euo pipefail
 
 HOST="${AVATAR_HOST:-ioflood}"
 ROOT="${AVATAR_ROOT:-/root/ir-dev/avatar}"
-IMAGE="ir-avatar:1"
+# The image tag is a hash of the Dockerfile (set on the build server), so Dockerfile edits always rebuild.
+IMAGE=""
 CONTAINER="ir-avatar-convert"
 MIN_FREE_GB=60
 
@@ -37,7 +38,17 @@ if [[ "${AVATAR_STAGE:-}" == "container" ]]; then
   mapfile -t all_ids < <(cfg 's.avatars.forEach(a=>console.log(a.id))')
   if [[ $# -gt 0 ]]; then ids=("$@"); else ids=("${all_ids[@]}"); fi
 
-  blender_run() { blender -b --factory-startup -P /work/tools/rb2glb.py -- "$@" 2>&1 | grep -E '_OK|Error|Traceback|line [0-9]' || true; }
+  # Runs Blender and fails loudly: a non-zero exit or a missing "<MODE>_OK" line stops the run.
+  blender_run() {
+    local log status
+    log=$(blender -b --factory-startup -P /work/tools/rb2glb.py -- "$@" 2>&1) && status=0 || status=$?
+    grep -E '_OK|Error|Traceback|line [0-9]' <<<"$log" || true
+    if (( status != 0 )) || ! grep -q '_OK' <<<"$log"; then
+      echo "Blender failed (exit $status) for: $*" >&2
+      tail -20 <<<"$log" >&2
+      exit 1
+    fi
+  }
 
   sexes=()
   for id in "${ids[@]}"; do
@@ -45,9 +56,10 @@ if [[ "${AVATAR_STAGE:-}" == "container" ]]; then
     sex=$(cfg "console.log(s.avatars.find(a=>a.id==='$id').sex)")
     [[ " ${sexes[*]-} " == *" $sex "* ]] || sexes+=("$sex")
     echo "== $id ($source_name)"
+    rm -f "$raw/$id.glb" "$raw/$id.json" "$out/$id.glb"
     blender_run avatar "$src/$avatar_dir/$source_name/Export/${source_name}_facial.fbx" \
       "$src/$avatar_dir/$source_name/Textures" "$raw/$id.glb" "$raw/$id.json"
-    [[ -s "$raw/$id.glb" ]] || { echo "Blender export failed for $id" >&2; exit 1; }
+    [[ -s "$raw/$id.glb" && -s "$raw/$id.json" ]] || { echo "Blender export failed for $id" >&2; exit 1; }
     node postprocess.mjs "$raw/$id.glb" "$stage/$id.post.glb" "$id"
     gltf-transform resize "$stage/$id.post.glb" "$stage/$id.r.glb" --width 1024 --height 1024
     gltf-transform etc1s "$stage/$id.r.glb" "$stage/$id.e.glb" --slots baseColorTexture --quality 192
@@ -64,15 +76,20 @@ if [[ "${AVATAR_STAGE:-}" == "container" ]]; then
       read -r cid cfile overlay <<<"$line"
       glb="$raw/clip_${sex}_${cid}.glb"
       echo "== clip ${sex}_${cfile}"
+      rm -f "$glb"
       blender_run clip "$src/$anim_dir/${sex}_${cfile}.max.fbx" "$cid" "$glb"
       [[ -s "$glb" ]] || { echo "Blender export failed for clip ${sex}_${cfile}" >&2; exit 1; }
       [[ "$overlay" == 1 ]] && args+=("$cid=$glb@overlay") || args+=("$cid=$glb")
     done
     [[ -s "$out/$ref.glb" ]] || { echo "reference avatar $ref.glb missing; convert it first" >&2; exit 1; }
+    rm -f "$out/anims-$sex.glb"
     node build-anims.mjs "$out/anims-$sex.glb" "$out/$ref.glb" "$base_clip" "${args[@]}"
   done
 
-  node make-manifest.mjs "$raw" "$out" /work/tools/manifest.json
+  # One manifest, written twice with identical bytes: tools/avatars (pipeline record) and
+  # web/public/avatars (what the app fetches as /avatars/manifest.json). Avatars not converted in this
+  # run keep their entry from the existing manifest; a run that would drop an avatar is refused.
+  node make-manifest.mjs "$raw" "$out" /work/tools/manifest.json "$out/manifest.json"
   node verify.mjs --dir "$out" --manifest /work/tools/manifest.json
   ls -la "$out"
   exit 0
@@ -86,8 +103,11 @@ if [[ "${AVATAR_STAGE:-}" == "server" ]]; then
     exit 1
   fi
   mkdir -p "$ROOT/src" "$ROOT/build" "$ROOT/out"
+  IMAGE="ir-avatar:$(sha256sum "$ROOT/tools/Dockerfile" | cut -c1-12)"
   if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
-    docker build --cpu-quota 600000 --memory 6g -t "$IMAGE" "$ROOT/tools"
+    # BuildKit ignores --cpu-quota/--memory, so use the classic builder, which applies them to each RUN step.
+    DOCKER_BUILDKIT=0 docker build --cpu-period 100000 --cpu-quota 600000 --memory 6g --memory-swap 6g \
+      -t "$IMAGE" - <"$ROOT/tools/Dockerfile"   # no build context: the Dockerfile copies nothing
   fi
   commit=$(grep -o '"commit": *"[0-9a-f]*"' "$ROOT/tools/sources.json" | grep -o '[0-9a-f]\{40\}')
   if [[ ! -d "$ROOT/src/rocketbox/.git" ]]; then
@@ -107,9 +127,9 @@ fi
 
 # ---------------------------------------------------------------- on the workstation
 repo="$(cd "$here/../.." && pwd)"
-rsync -a --delete --exclude node_modules --exclude manifest.json "$here/" "$HOST:$ROOT/tools/"
+rsync -a --delete --exclude node_modules "$here/" "$HOST:$ROOT/tools/"
 ssh "$HOST" "AVATAR_STAGE=server AVATAR_ROOT=$ROOT bash $ROOT/tools/convert.sh $*"
 mkdir -p "$repo/web/public/avatars"
-rsync -a --include '*.glb' --exclude '*' "$HOST:$ROOT/out/" "$repo/web/public/avatars/"
-rsync -a "$HOST:$ROOT/tools/manifest.json" "$here/manifest.json" 2>/dev/null || true
+rsync -a --include '*.glb' --include manifest.json --exclude '*' "$HOST:$ROOT/out/" "$repo/web/public/avatars/"
+rsync -a "$HOST:$ROOT/tools/manifest.json" "$here/manifest.json"
 echo "avatars copied to $repo/web/public/avatars"
