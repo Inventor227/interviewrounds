@@ -178,6 +178,25 @@ describe('HandAdapter', () => {
     expect(emitted[0]).toMatchObject({ op: 'item.move', args: { id: 'n1', x: 20, y: 10 } });
   });
 
+  it('a pinch starts where the hand is now, not where the filter still lags', () => {
+    const port = new FakePort();
+    const proj = new SheetProjector(port.sheetAnchor);
+    const hands = new HandAdapter(port, (q) => proj.project(q), { zone: HLD_KIT.view });
+    const ev = collect(hands);
+    // Hover far away, then arrive fast at (20, 20) in two frames and pinch at once.
+    for (let i = 0; i < 10; i++) {
+      port.handAt('right', 50, 20, 2);
+      port.frame(50);
+    }
+    port.handAt('right', 35, 20, 2);
+    port.frame(50);
+    port.handAt('right', 20, 20, 2);
+    port.frame(50);
+    port.select('right', 'start');
+    const down = ev.find((e) => e[0] === 'down')![1];
+    expect(Math.abs(down.x_cm - 20)).toBeLessThan(0.3);
+  });
+
   it('keeps both hands apart', () => {
     const port = new FakePort();
     const proj = new SheetProjector(port.sheetAnchor);

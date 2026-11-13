@@ -35,14 +35,16 @@ interface HandTrack {
   fx: OneEuroFilter;
   fy: OneEuroFilter;
   fz: OneEuroFilter;
-  /** Last good projected point. */
+  /** Last good projected point (filtered). */
   last: Projected | null;
+  /** This frame's raw pinch point (world), where a pinch starts. */
+  raw: Vec3 | null;
   visible: boolean;
   active: boolean;
   lostAt: number | null;
 }
 
-const track = (): HandTrack => ({ fx: new OneEuroFilter(), fy: new OneEuroFilter(), fz: new OneEuroFilter(), last: null, visible: false, active: false, lostAt: null });
+const track = (): HandTrack => ({ fx: new OneEuroFilter(), fy: new OneEuroFilter(), fz: new OneEuroFilter(), last: null, raw: null, visible: false, active: false, lostAt: null });
 
 export class HandAdapter implements PointerAdapter {
   private readonly subs = { down: new Set<Cb>(), move: new Set<Cb>(), up: new Set<Cb>(), cancel: new Set<Cb>() };
@@ -119,6 +121,7 @@ export class HandAdapter implements PointerAdapter {
       const t = this.hands[hand];
       const raw = this.sample(hand, all);
       if (raw) {
+        t.raw = raw;
         const f = { x: t.fx.filter(raw.x, now), y: t.fy.filter(raw.y, now), z: t.fz.filter(raw.z, now) };
         t.last = this.project(f);
         t.visible = true;
@@ -128,6 +131,7 @@ export class HandAdapter implements PointerAdapter {
       }
       // No joints this frame: hold the gesture at the last good point for the grace time.
       t.visible = false;
+      t.raw = null;
       t.fx.reset();
       t.fy.reset();
       t.fz.reset();
@@ -144,9 +148,21 @@ export class HandAdapter implements PointerAdapter {
   private select(hand: Side, phase: SelectPhase, now: number): void {
     const t = this.hands[hand];
     if (phase === 'start') {
-      if (t.active || !t.visible || !t.last || !this.inZone(t.last)) return;
+      if (t.active || !t.visible || !t.raw) return;
+      // Start where the hand is now: the filter may still be catching up with a fast
+      // arrival, and a pinch on a card's edge must not land in its middle. Smoothing goes
+      // on from this point.
+      const p = this.project(t.raw);
+      if (!this.inZone(p)) return;
+      t.fx.reset();
+      t.fy.reset();
+      t.fz.reset();
+      t.fx.filter(t.raw.x, now);
+      t.fy.filter(t.raw.y, now);
+      t.fz.filter(t.raw.z, now);
+      t.last = p;
       t.active = true;
-      this.emit(this.subs.down, hand, t.last, now);
+      this.emit(this.subs.down, hand, p, now);
       return;
     }
     if (!t.active) return;
