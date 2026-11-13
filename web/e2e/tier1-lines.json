@@ -1,0 +1,51 @@
+{
+  "sde.behavioral.short": [
+    "Sure. The project I am proudest of is moving our billing service from one Postgres database to a sharded setup last year. We were a team of four engineers. I wrote the migration plan and built the dual write layer myself. The hard part was that a senior engineer wanted to do it as a single weekend cutover, and I thought that was too risky, because billing mistakes reach customers directly.",
+    "His view was fair. A long migration keeps two systems alive, and that costs the team for weeks. So instead of arguing, I asked for one day to put numbers on both plans. I wrote down what could fail in each, how we would notice, and how long a rollback would take. The weekend plan had no clean rollback once new writes started. Then I proposed a middle path: dual writes behind a flag for two weeks, a nightly job comparing both databases, and a cutover per customer group.",
+    "He agreed once he saw the rollback numbers, and he actually took ownership of the comparison job. In the first week it found two rounding bugs that would have hit about three hundred invoices. We finished one week later than his plan, with zero billing incidents, and we still work together closely. What I learned is to turn a disagreement into a shared list of risks early, instead of a contest of opinions.",
+    "Looking back, I was right about the rollback, but he was right that two weeks of dual writes was too long. Next time I would cap it at one week."
+  ],
+  "sde.system_design.short": [
+    "Before I draw anything, let me check the numbers. Sixty thousand seats, and about three million fans in the first couple of minutes, so reads are far above writes, and there are only sixty thousand successful writes in total. I assume a seat hold lasts a few minutes while the fan pays, and overselling a seat is never acceptable. Is that right?",
+    "At a high level, fans first land in a virtual waiting room that admits them at a steady rate into the purchase flow. Admitted fans read the seat map from a cache that is refreshed every second or so. When a fan picks a seat, the booking service does a conditional write in the database, from free to held with an expiry, so only one fan can ever hold a seat. Then the fan pays through the processor, and the callback marks the seat as sold.",
+    "To sum up: a waiting room to meter fans, a cached seat map for reads, an atomic conditional hold in the database as the source of truth, and idempotent payment callbacks that release holds on failure.",
+    "For the booking path, the seat table is the source of truth. Taking a seat is one conditional update from free to held where the hold has expired or the seat is free, so two fans can never both win. Payment callbacks are keyed by the order id, so a callback that arrives twice does nothing the second time, and a sweeper releases holds that expire."
+  ],
+  "sde.coding.short": [
+    "Let me restate it: each trip carries one or two packages, and two only if their weights add up to at most W. I want the fewest trips. Can I assume every single package is at most W, so each one fits alone? And can weights repeat?",
+    "A first idea is to try every pairing, but that is exponential. Better: sort the weights. Then put one pointer at the lightest and one at the heaviest. If the lightest and the heaviest fit together, pair them and move both pointers in; otherwise the heaviest goes alone and only the right pointer moves. Each step is one trip.",
+    "This greedy choice is safe: the heaviest package must ride in some trip, and pairing it with the lightest is never worse, because if the lightest cannot ride with it, nothing can. Sorting costs n log n time and the two pointers are linear, so n log n overall, with constant extra space if we sort in place.",
+    "Let me trace one example: weights three, five, three and four, with W equal to five. Sorted that is three, three, four, five. Five goes alone, four goes alone, then three and three make six, too heavy, so each three goes alone. That is four trips, which matches what I expect."
+  ],
+  "sde.object_design.short": [
+    "Let me start with the main nouns. A Hub has many Bays, and each Bay has one Charger with a speed in kilowatts. A Driver has Vehicles and can hold a Reservation for a bay and a time slot. A ChargingSession links a vehicle to a bay, tracks the energy delivered, and records when charging ended.",
+    "For behavior, the Hub has a method to find a free bay for a walk in, preferring bays without an upcoming reservation. A Reservation has a start, an end and a grace period, and if the driver does not arrive within the grace period the bay is released. A ChargingSession computes the cost as kilowatt hours times the price per kilowatt hour.",
+    "The idle fee should not be hard coded, so I would use a PricingPolicy interface with an energy rate and an idle fee rule, for example per minute after a ten minute grace once charging ends. The ChargingSession asks the policy for the total, so pricing can change per hub without touching the session class.",
+    "For safety, each bay has a small state machine: available, reserved, charging, idle and out of service. Only the Hub changes bay states, so two drivers can never get the same bay. With more time I would add a notification when charging ends, so drivers move their car before the idle fee starts."
+  ],
+  "pm.product_sense.short": [
+    "Let me clarify the goal first. I will focus on young people moving to a big city for their first job, renting alone or with a roommate. Their biggest pains are not knowing fair prices, losing good places to faster applicants, and scams. Success is that they sign a lease they are happy with in under three weeks.",
+    "I would segment them into three groups: people moving from another city who cannot visit in person, local students leaving home, and roommates searching together. The movers from another city have the most pain and the least support, so I would start with them.",
+    "The product: a verified listing feed with a fair price badge from recent leases, video tours by a local scout, and a one tap application packet with documents prepared in advance, so they can apply the same day. Scam protection comes from verifying the landlord before a listing goes live.",
+    "To prioritize, verified listings and the application packet are high impact and low effort, so they come first. Scout tours are expensive, so we test them in one city. I would measure time to a signed lease, applications per signed lease, and the share of people who report a scam, which should be near zero."
+  ],
+  "pm.execution.short": [
+    "Before picking a metric, let me check the goal of group orders. I assume it is to grow order value and bring new people in through friends. The host starts an order, friends add items, and one courier delivers. Are we looking at a drop in something, or defining success?",
+    "My north star would be completed group orders per week, because it needs both the host and the friends to finish. Under it I would track the funnel: group orders started, share link opened, at least one friend added items, checkout completed, and delivered on time.",
+    "If completed group orders dropped ten percent last week, I would first check that it is real: logging changes, a holiday, or one city. Then I would find the funnel step that moved. If friends open the link but do not add items, I would look at app versions and the web flow for people without the app.",
+    "As guardrails I would watch delivery time and refunds, since group orders are bigger and can run late. If the drop came from the payment split step, I would roll that change back behind a flag, then run a small test of the fix before shipping it to everyone."
+  ],
+  "pm.leadership.short": [
+    "Last year our head of sales asked us to build custom reporting for one large customer, worth about ten percent of revenue, and wanted it on the roadmap for the next quarter. That would have pushed back our self serve onboarding, which was our main goal for the year.",
+    "Instead of saying no in the meeting, I asked for a week. I met the customer with the sales lead to learn what they needed, and it turned out they needed three standard exports, not custom reports. I wrote a one page comparison of both options with the revenue at risk and the cost in engineering weeks.",
+    "I said no to the custom reporting, and yes to the three exports in two weeks, which fit into our existing data platform. The sales lead was frustrated at first, but the customer renewed, and onboarding shipped on time and raised activation by about eight points.",
+    "What I learned is that a no lands better with an alternative and numbers attached, and that meeting the customer together turns the stakeholder into a partner instead of an opponent. We now do a joint discovery call for every large custom request."
+  ],
+  "meeting.short": [
+    "Thanks for making the time. We build reminder software for mid sized clinics. Patients actually answer our reminders, so no shows drop by about a third. We work with forty clinics today, and we are raising one and a half million dollars to grow our sales team.",
+    "Revenue is sixteen thousand dollars a month, growing about fifteen percent month over month. Monthly churn is two percent, and a clinic pays back what it cost us to win in about five months.",
+    "I would like to hear from both of you. Tom, you have been quiet so far. What is your biggest concern with this round?",
+    "That is fair. Our cohorts are young, so we track churn by the month a clinic joined, and our oldest twelve clinics have not churned at all. About sixty percent of the round goes to sales, and the rest to product and support.",
+    "So my ask is simple: a partner meeting next week to discuss terms. What would you need to see before then?"
+  ]
+}
