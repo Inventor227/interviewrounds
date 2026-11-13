@@ -99,6 +99,21 @@ fn kit_kinds(kit: BoardKit) -> &'static [&'static str] {
     }
 }
 
+/// The heading in `scribe.md` after which every line changes per session or per call.
+const SESSION_MARKER: &str = "\nThis session\n";
+
+/// The prompt as two system blocks: the rules (the same on every call, so they are cached) and this call's
+/// session values, board and utterances. Joined, they are the whole prompt.
+fn system_blocks(prompt: &str) -> Vec<SystemBlock> {
+    match prompt.find(SESSION_MARKER) {
+        Some(i) => vec![
+            SystemBlock::cached(&prompt[..=i]),
+            SystemBlock::text(&prompt[i + 1..]),
+        ],
+        None => vec![SystemBlock::text(prompt)],
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Scribe {
     pub model: String,
@@ -206,7 +221,7 @@ impl Scribe {
         MessagesRequest {
             model: self.model.clone(),
             max_tokens: 2048,
-            system: vec![SystemBlock::text(self.prompt(input))],
+            system: system_blocks(&self.prompt(input)),
             messages: vec![Message::user_text(
                 "Return the board edits for the last line, as JSON.",
             )],
