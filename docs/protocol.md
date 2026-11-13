@@ -120,7 +120,13 @@ Sequencing and acks:
   `hello` (status `created` until then). `time_check_due: true` is sent once per phase boundary, on the snapshot when the
   current phase runs out of time, and again on the snapshot after a `hello` while that time check is still owed (no
   `[event: time_check]` has reached the server since the boundary); it is `false` otherwise. On `true` the browser sends
-  `[event: time_check]`.
+  `[event: time_check]`. In an interview `brief` holds the question card's title and brief lines from the first snapshot,
+  before the interviewer speaks; the interviewer's show_question replaces it.
+- Playback. A reply to the candidate's speech is kept in the interviewer's memory, and its actions (brief card, phase,
+  pointing, hand-over, end) run, only once it is known to have played: on `voice.spoken` for it, or when that panelist's
+  next Fish request shows it. A reply never played is dropped with its actions; so are replies still unplayed when the
+  user pauses. Replies to typed app events count at once. `voice.spoken` should be sent as soon as the first words play,
+  so the actions land while the line is spoken.
 - Ending. `ui.event {kind: "end", reason?}` starts the goodbye: the browser sends `[event: ending]`, and the round ends
   3 s after the interviewer's closing line, or 20 s after the request, whichever comes first, with that `reason` (default
   `user_ended`); `POST /end` ends it at once. The interviewer's `end_round` (`round.ending`) ends it the same way.
@@ -220,6 +226,9 @@ the same rules, pinned by `content/fixtures/board-ops/*.json`.
      if a ghost was removed, sends the new `board.ghosts` list, so no client re-sends that ghost.
 3. **Commit**: apply the effect, then `rev += 1`, append `op_id` to `op_ids`, and remove the ghost with the same `op_id`
    if there is one. The server answers the sender with `board.ack {op_id, rev}` and sends `board.apply` to other clients.
+   (One browser per session today, so `board.apply` carries only server-originated ops.) A repeat of a committed
+   `op_id` is not acked again; its first ack is replayed by seq. After each committed op the interviewer's next note
+   carries the new board summary, with what changed since the interviewer last replied.
 4. `rev_base` is informational: ops are applied in arrival order whatever their `rev_base`.
 5. Ids: item and edge ids are unique together on one board; member ids are unique across all classes; code line ids and
    agenda ids are unique in their lists. An op that would reuse an id still on the board is rejected. Clients never reuse
@@ -279,7 +288,9 @@ Pinned by `content/fixtures/board-undo/*.json`.
 ### Ghosts
 
 Ghosts are Scribe suggestions (`src: "scribe"`). `board.ghosts` carries the full list of pending ghosts (it replaces the
-previous list).
+previous list). In a round with a board the server runs the Scribe once after each candidate answer is final (the reply
+to it played), with the last one to three answers and the latest `board.focus` (fresh for 20 s), one call at a time per
+session; a suggestion that no longer applies when it returns is dropped. It takes about 2 s.
 
 - **Accept** (pinch, or the 4 s settle): send the ghost's op as a normal `board.op` with the same `op_id`, `src: "scribe"`,
   `op` and `args`. Committing that `op_id` removes the ghost.
