@@ -11,7 +11,7 @@ import type {
   ServerMsgType,
 } from '../shared/types';
 import type { SocketStatus } from '../net/ws';
-import { ScriptedTransport, sessionRes } from '../voice/testkit';
+import { panelist, ScriptedTransport, sessionRes } from '../voice/testkit';
 import { VoiceError, type TransportOptions } from '../voice/transport';
 import { RoundController, SessionError, type RoundControllerDeps, type RoundError } from './controller';
 import type { AvatarPort, HeadSamplerPort, SocketPort, UiAction, VisibilityPort, XRPort } from './ports';
@@ -24,7 +24,9 @@ class FakeSocket implements SocketPort {
   statusCbs = new Set<(s: SocketStatus) => void>();
   connectError: Error | null = null;
   constructor(private readonly log: string[]) {}
+  connects = 0;
   async connect(): Promise<void> {
+    this.connects++;
     this.log.push('socket.connect');
     if (this.connectError) throw this.connectError;
   }
@@ -92,12 +94,25 @@ class SlowTransport extends ScriptedTransport {
   }
 }
 
+/** A transport whose mute takes effect only when the test releases it (like a real track mute). */
+class SlowMuteTransport extends ScriptedTransport {
+  pending: { muted: boolean; done: () => void; fail: (e: Error) => void }[] = [];
+  hold = false;
+  override setMicMuted(m: boolean): void | Promise<void> {
+    super.setMicMuted(m);
+    if (!this.hold) return;
+    return new Promise<void>((done, fail) => this.pending.push({ muted: m, done, fail }));
+  }
+}
+
 function harness(
   opts: {
     mode?: 'interview' | 'meeting';
     voice?: 'fish' | 'fake';
     panelMode?: 'swap' | 'joined';
     slow?: string[];
+    /** Panelists whose mic mute resolves only when the test says so (or rejects). */
+    slowMute?: string[];
     res?: Partial<CreateSessionRes>;
     noTiming?: boolean;
   } = {},
@@ -108,6 +123,7 @@ function harness(
   const visibility = new FakeVisibility();
   let uiAction: ((a: UiAction) => void) | null = null;
   let gesture: (() => void) | null = null;
+  let inSession = true;
   const showCard = vi.fn();
   const timings = new StageTimings();
   const avatars = new Map<string, AvatarPort & { modes: string[] }>();
@@ -123,6 +139,8 @@ function harness(
   const xr: XRPort = {
     enter: vi.fn(async () => void log.push('xr.enter')),
     place: vi.fn(async () => void log.push('xr.place')),
+    inSession: () => inSession,
+    startCue: vi.fn(async () => void log.push('xr.startCue')),
     onGesture: (cb) => {
       gesture = cb;
       return () => (gesture = null);
@@ -178,7 +196,7 @@ function harness(
     api,
     makeSocket: () => socket,
     makeTransport: (p: Panelist, o?: TransportOptions) => {
-      const T = opts.slow?.includes(p.panelist_id) ? SlowTransport : ScriptedTransport;
+      const T = opts.slowMute?.includes(p.panelist_id) ? SlowMuteTransport : opts.slow?.includes(p.panelist_id) ? SlowTransport : ScriptedTransport;
       const t = new T(p.panelist_id, log, o, p);
       transports.push(t);
       return t;
@@ -218,9 +236,11 @@ function harness(
     head,
     avatars,
     micTrack,
+    deps,
     board: () => boardCbs.forEach((cb) => cb()),
     ui: (a: UiAction) => uiAction?.(a),
     gesture: () => gesture?.(),
+    setInSession: (b: boolean) => (inSession = b),
     showCard,
     timings,
   };
@@ -401,7 +421,8 @@ describe('RoundController', () => {
       t.user('s2', `and then ${i}`, false);
     }
     expect(count(t.sentEvents, LA)).toBe(0); // 9 s so far
-    vi.advanceTimersByTime(1_100);
+    await vi.advanceTimersByTimeAsync(1_100);
+    await vi.advanceTimersByTimeAsync(700); // the mic closes first, then the marker
     expect(count(t.sentEvents, LA)).toBe(1);
     for (let i = 0; i < 10; i++) {
       vi.advanceTimersByTime(1_000);
@@ -561,7 +582,8 @@ describe('RoundController two phase start', () => {
     const preload = vi.fn(async () => void h.log.push('xr.preload'));
     h.xr.preload = preload;
     await h.ctl.prepare({ kind: 'new', req: h.req });
-    expect(h.log).toEqual(['media.getMic', 'media.resumeAudio', 'api.createSession', 'xr.preload', 'socket.connect']);
+    // No hello yet: the round starts on the server only once the desk is placed.
+    expect(h.log).toEqual(['media.getMic', 'media.resumeAudio', 'api.createSession', 'xr.preload']);
     expect(h.xr.enter).not.toHaveBeenCalled();
     expect(h.ctl.state).toBe('idle');
     expect(h.ctl.prepared).toBe(true);
@@ -988,13 +1010,127 @@ describe('RoundController in the room', () => {
     expect(h.transports).toHaveLength(1);
   });
 
-  it('a_failed_placement_keeps_the_connected_voice_for_the_retry', async () => {
+  it('leaving_the_headset_during_placement_comes_back_through_the_controller', async () => {
     const h = harness();
-    vi.mocked(h.xr.place).mockRejectedValueOnce(new Error('session ended'));
+    // The user leaves the headset view while the prompt shows: the session ends, placement is cancelled.
+    vi.mocked(h.xr.place).mockImplementationOnce(async () => {
+      h.setInSession(false);
+      throw new Error('session ended');
+    });
+    await expect(h.ctl.start(h.req)).rejects.toMatchObject({ code: 'placement_failed' });
+    expect(h.ctl.state).toBe('placing');
+    expect(h.xr.enter).toHaveBeenCalledTimes(1);
+    expect(h.socket.connects).toBe(0);
+
+    // "Return to the room": the XR session is requested again (first, inside the tap), then the desk, then the greeting.
+    vi.mocked(h.xr.enter).mockImplementationOnce(async () => {
+      h.log.push('xr.enter');
+      h.setInSession(true);
+    });
+    const back = h.ctl.returnToRoom();
+    expect(h.xr.enter).toHaveBeenCalledTimes(2);
+    await back;
+    expect(h.ctl.state).toBe('greeting');
+    expect(h.transports).toHaveLength(1); // the voice that connected the first time is kept
+    expect(h.transports[0]!.sentEvents).toEqual(['[event: start]']);
+    expect(h.transports[0]!.muted).toBe(false);
+  });
+
+  it('a_failed_placement_with_the_session_still_running_only_places_again', async () => {
+    const h = harness();
+    vi.mocked(h.xr.place).mockRejectedValueOnce(new Error('tracking lost'));
     await expect(h.ctl.start(h.req)).rejects.toMatchObject({ code: 'placement_failed' });
     await h.ctl.enter();
+    expect(h.xr.enter).toHaveBeenCalledTimes(1);
     expect(h.transports).toHaveLength(1);
     expect(h.transports[0]!.sentEvents).toEqual(['[event: start]']);
+  });
+
+  it('end_works_while_the_desk_is_being_placed', async () => {
+    const h = harness();
+    const errors = errorsOf(h);
+    vi.mocked(h.xr.place).mockImplementationOnce(() => new Promise<void>(() => undefined));
+    void h.ctl.start(h.req).catch(() => undefined);
+    await vi.waitFor(() => expect(h.transports[0]?.started).toBe(true));
+    expect(h.ctl.state).toBe('placing');
+    h.ctl.end();
+    await vi.waitFor(() => expect(h.transports[0]!.stopped).toBe(true));
+    expect(h.ctl.state).toBe('failed');
+    await vi.waitFor(() => expect(errors.map((e) => (e as SessionError).code)).toEqual(['cancelled']));
+    expect(h.markers()).toEqual([]);
+    expect(h.socket.connects).toBe(0); // the server never saw this round start
+    expect(h.api.endSession).not.toHaveBeenCalled();
+  });
+
+  it('hello_goes_out_only_once_the_desk_is_placed_and_the_chime_ends_before_the_start', async () => {
+    const h = harness();
+    let placed!: () => void;
+    vi.mocked(h.xr.place).mockImplementationOnce(() => new Promise<void>((r) => (placed = r)));
+    let chimeOver!: () => void;
+    vi.mocked(h.xr.startCue!).mockImplementationOnce(() => new Promise<void>((r) => (chimeOver = r)));
+    const starting = h.ctl.start(h.req);
+    await vi.waitFor(() => expect(h.transports[0]?.started).toBe(true));
+    expect(h.socket.connects).toBe(0);
+    placed();
+    await vi.waitFor(() => expect(h.socket.connects).toBe(1));
+    const t = h.transports[0]!;
+    await vi.advanceTimersByTimeAsync(0);
+    // The chime is still playing: every mic is closed and nobody has been asked to speak.
+    expect(t.muted).toBe(true);
+    expect(t.sentEvents).toEqual([]);
+    chimeOver();
+    await starting;
+    expect(t.muted).toBe(false);
+    expect(t.sentEvents).toEqual(['[event: start]']);
+  });
+
+  it('a_resumed_round_asks_for_a_welcome_back_not_a_new_opening', async () => {
+    const h = harness();
+    await h.ctl.prepare({ kind: 'resume', sessionId: 'sess1', voice: 'fake' });
+    await h.ctl.enter();
+    expect(h.markers()).toEqual(['[event: resume]']);
+    // Tap to hear never falls back to the opening either.
+    await vi.advanceTimersByTimeAsync(8_000);
+    h.ui('hear');
+    expect(h.markers().every((m) => m === '[event: resume]')).toBe(true);
+  });
+
+  it('a_voice_token_past_its_deadline_makes_the_session_again_instead_of_failing', async () => {
+    const fish = (expires_at: string) => ({ transport: 'fish' as const, fish: { session_id: 'f', token: 't', livekit_url: 'wss://x', expires_at } });
+    const h = harness({ voice: 'fish', res: { panel: [panelist('p1', 0, fish('2026-11-13T10:00:30Z'))] } });
+    const errors = errorsOf(h);
+    const sessions: string[] = [];
+    h.ctl.on('session', (r) => sessions.push(r.session_id));
+    await h.ctl.prepare({ kind: 'new', req: h.req });
+    // A long wait on the start page: the token minted at the mic tap has run out.
+    vi.setSystemTime(new Date('2026-11-13T10:05:00Z'));
+    h.api.createSession.mockImplementationOnce(async () => sessionRes({ session_id: 'sess2', panel: [panelist('p1', 0, fish('2026-11-13T10:10:00Z'))] }));
+    await h.ctl.enter();
+    expect(h.api.createSession).toHaveBeenCalledTimes(2);
+    expect(sessions).toEqual(['sess2']);
+    expect(h.ctl.session!.session_id).toBe('sess2');
+    expect(h.transports).toHaveLength(1);
+    expect((h.transports[0]!.panelist!.voice as ReturnType<typeof fish>).fish.expires_at).toBe('2026-11-13T10:10:00Z');
+    expect(h.ctl.state).toBe('greeting');
+    expect(errors).toEqual([]);
+  });
+
+  it('a_voice_that_reports_an_expired_session_on_join_is_retried_once_with_a_new_session', async () => {
+    const h = harness({ voice: 'fish' });
+    const errors = errorsOf(h);
+    await h.ctl.prepare({ kind: 'new', req: h.req });
+    const make = h.deps.makeTransport;
+    let n = 0;
+    h.deps.makeTransport = (p, o, r) => {
+      const t = make(p, o, r);
+      if (n++ === 0) t.start = async () => Promise.reject(new VoiceError('session_expired', 'expired'));
+      return t;
+    };
+    await h.ctl.enter();
+    expect(h.api.createSession).toHaveBeenCalledTimes(2);
+    expect(h.ctl.state).toBe('greeting');
+    expect(errors).toEqual([]);
+    expect(h.floor().sentEvents).toEqual(['[event: start]']);
   });
 
   it('stage_timings_cover_the_start', async () => {
@@ -1091,34 +1227,85 @@ describe('RoundController in the room', () => {
     expect(h.socket.of('voice.spoken')).toHaveLength(2);
   });
 
-  it('long_answer_closes_the_mic_around_the_marker', async () => {
-    const h = harness();
-    const t = await live(h);
+  /** Talks for 10 s without a break (the harness interrupts after 10 s). */
+  async function talkTooLong(t: ScriptedTransport) {
     t.user('s1', 'So', false);
     for (let i = 0; i < 10; i++) {
-      vi.advanceTimersByTime(1_000);
+      await vi.advanceTimersByTimeAsync(1_000);
       t.user('s1', `So ${i}`, false);
     }
-    vi.advanceTimersByTime(100);
-    const at = h.log.lastIndexOf('event:p1:[event: long_answer]');
-    expect(at).toBeGreaterThan(0);
-    expect(h.log[at - 1]).toBe('mute:p1');
+    await vi.advanceTimersByTimeAsync(100);
+  }
+
+  it('long_answer_marker_goes_out_only_after_the_mute_took_effect', async () => {
+    const h = harness({ slowMute: ['p1'] });
+    const t = (await live(h)) as SlowMuteTransport;
+    const LA = '[event: long_answer]';
+    t.hold = true;
+    await talkTooLong(t);
+    // The mute was asked for, but the track is not muted yet: no marker.
     expect(t.muted).toBe(true);
+    expect(t.pending).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(count(t.sentEvents, LA)).toBe(0);
+    t.pending.shift()!.done();
+    await vi.advanceTimersByTimeAsync(599);
+    expect(count(t.sentEvents, LA)).toBe(0); // the service needs a moment to see the turn end
+    await vi.advanceTimersByTimeAsync(1);
+    expect(count(t.sentEvents, LA)).toBe(1);
+    expect(t.muted).toBe(true);
+    t.hold = false;
     t.mode('thinking'); // the interviewer takes the turn
     expect(t.muted).toBe(false);
+  });
 
-    // With no reaction the mic opens again by itself.
-    const h2 = harness();
-    const t2 = await live(h2);
-    t2.user('s1', 'So', false);
-    for (let i = 0; i < 10; i++) {
-      vi.advanceTimersByTime(1_000);
-      t2.user('s1', `So ${i}`, false);
-    }
-    vi.advanceTimersByTime(100);
-    expect(t2.muted).toBe(true);
-    vi.advanceTimersByTime(2_500);
+  it('the_mic_opens_again_after_a_long_answer_marker_with_no_reaction', async () => {
+    const h = harness();
+    const t = await live(h);
+    await talkTooLong(t);
+    await vi.advanceTimersByTimeAsync(700);
+    expect(count(t.sentEvents, '[event: long_answer]')).toBe(1);
+    expect(t.muted).toBe(true);
+    await vi.advanceTimersByTimeAsync(2_500);
+    expect(t.muted).toBe(false);
+  });
+
+  it('the_mic_never_stays_muted_when_the_long_answer_mute_fails_or_hangs', async () => {
+    // The mute rejects: no marker, and the mic is opened again at once.
+    const h = harness({ slowMute: ['p1'] });
+    const t = (await live(h)) as SlowMuteTransport;
+    t.hold = true;
+    await talkTooLong(t);
+    t.hold = false;
+    t.pending.shift()!.fail(new Error('track gone'));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(count(t.sentEvents, '[event: long_answer]')).toBe(0);
+    expect(t.muted).toBe(false);
+
+    // The mute never resolves: the marker goes out after a bounded wait and the mic still reopens.
+    const h2 = harness({ slowMute: ['p1'] });
+    const t2 = (await live(h2)) as SlowMuteTransport;
+    t2.hold = true;
+    await talkTooLong(t2);
+    t2.hold = false;
+    await vi.advanceTimersByTimeAsync(1_500 + 600);
+    expect(count(t2.sentEvents, '[event: long_answer]')).toBe(1);
+    await vi.advanceTimersByTimeAsync(2_500);
     expect(t2.muted).toBe(false);
+
+    // The round is paused while the mute is in flight: no marker; Resume opens the mic.
+    const h3 = harness({ slowMute: ['p1'] });
+    const t3 = (await live(h3)) as SlowMuteTransport;
+    t3.hold = true;
+    await talkTooLong(t3);
+    t3.hold = false;
+    h3.ui('pause');
+    t3.pending.shift()!.done();
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(count(t3.sentEvents, '[event: long_answer]')).toBe(0);
+    expect(t3.muted).toBe(true); // paused
+    h3.ui('resume');
+    expect(t3.muted).toBe(false);
   });
 
   it('a_pinch_retries_blocked_audio_at_most_once_a_second', async () => {
@@ -1204,5 +1391,128 @@ describe('RoundController in the room', () => {
     expect(errors).toEqual([]);
     expect(h.api.endSession).not.toHaveBeenCalled(); // the server ended it itself
     expect(h.xr.ui.setStatus).toHaveBeenLastCalledWith(null);
+  });
+
+  it('the_interviewer_ending_the_round_itself_gets_no_second_goodbye', async () => {
+    const h = harness();
+    const t = await live(h);
+    t.mode('speaking');
+    t.agent('a5', 'Thanks, that is all from me. Your scorecard is next.');
+    h.socket.serverSend('round.ending', { closing_line: 'Thanks, that is all from me.' });
+    expect(h.ctl.state).toBe('ending');
+    expect(t.sentEvents).toEqual([]); // no [event: ending]: the closing line is already playing
+    expect(t.stopped).toBe(false);
+    t.mode('listening'); // the line is over
+    await vi.waitFor(() => expect(h.ctl.state).toBe('scoring'));
+    expect(t.stopped).toBe(true);
+    expect(h.api.endSession).not.toHaveBeenCalled(); // the server ends it itself
+
+    // The closing line was short and is already over when the frame arrives: finish after a short grace.
+    const h2 = harness();
+    const t2 = await live(h2);
+    h2.socket.serverSend('round.ending', { closing_line: 'Bye.' });
+    expect(t2.sentEvents).toEqual([]);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(h2.ctl.state).toBe('scoring');
+  });
+
+  it('round_ended_during_the_goodbye_lets_the_line_finish_but_not_for_long', async () => {
+    const h = harness();
+    const t = await live(h);
+    h.ui('end');
+    t.mode('speaking');
+    h.socket.serverSend('round.ended', { reason: 'user_ended' });
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(t.stopped).toBe(false); // the goodbye is still playing
+    expect(h.ctl.state).toBe('ending');
+    t.mode('listening');
+    await vi.waitFor(() => expect(h.ctl.state).toBe('scoring'));
+    expect(t.stopped).toBe(true);
+    // Everyone at the table sits idle through scoring: nobody stays "speaking".
+    expect(h.avatars.get('p1')!.modes.at(-1)).toBe('idle');
+
+    // A voice that never goes quiet is stopped 6 s after the server closed the round.
+    const h2 = harness();
+    const t2 = await live(h2);
+    h2.ui('end');
+    t2.mode('speaking');
+    h2.socket.serverSend('round.ended', { reason: 'user_ended' });
+    await vi.advanceTimersByTimeAsync(5_999);
+    expect(t2.stopped).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    await vi.waitFor(() => expect(t2.stopped).toBe(true));
+    expect(h2.avatars.get('p1')!.modes.at(-1)).toBe('idle');
+
+    // The server ends a quiet round (time limit): nothing to wait for.
+    const h3 = harness();
+    const t3 = await live(h3);
+    h3.socket.serverSend('round.ended', { reason: 'time_limit' });
+    await vi.waitFor(() => expect(t3.stopped).toBe(true));
+    expect(t3.sentEvents).toEqual([]);
+  });
+
+  it('the_summary_shows_once_however_many_signals_ask_for_it', async () => {
+    const h = harness();
+    const t = await live(h);
+    await scoring(h, t);
+    h.socket.serverSend('report.ready', { session_id: 'sess1' });
+    h.socket.terminal(4409); // the server closes the room right after report.ready
+    h.socket.serverSend('report.ready', { session_id: 'sess1' });
+    await vi.waitFor(() => expect(h.ctl.state).toBe('summary'));
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(h.api.report).toHaveBeenCalledTimes(1);
+    expect(h.xr.ui.showSummary).toHaveBeenCalledTimes(1);
+  });
+
+  it('a_report_read_that_fails_is_tried_again_before_the_fallback_card', async () => {
+    const h = harness();
+    const t = await live(h);
+    await scoring(h, t);
+    const errors = errorsOf(h);
+    h.api.report.mockRejectedValueOnce(new Error('502')).mockRejectedValueOnce(new Error('502'));
+    h.socket.serverSend('report.ready', { session_id: 'sess1' });
+    await vi.advanceTimersByTimeAsync(4_000);
+    await vi.waitFor(() => expect(h.xr.ui.showSummary).toHaveBeenCalledWith(REPORT));
+    expect(h.api.report).toHaveBeenCalledTimes(3);
+    expect(h.showCard).not.toHaveBeenCalled();
+    expect(errors).toEqual([]);
+
+    // It never comes: the fallback card, after the retries.
+    const h2 = harness();
+    const t2 = await live(h2);
+    await scoring(h2, t2);
+    h2.api.report.mockRejectedValue(new Error('502'));
+    h2.socket.serverSend('report.ready', { session_id: 'sess1' });
+    await vi.advanceTimersByTimeAsync(6_000);
+    await vi.waitFor(() => expect(h2.ctl.state).toBe('summary'));
+    expect(h2.api.report).toHaveBeenCalledTimes(4);
+    expect(h2.showCard).toHaveBeenCalledTimes(1);
+    expect(h2.showCard.mock.calls[0]![1]).toEqual({ pending: false });
+  });
+
+  it('a_failed_report_takes_the_almost_ready_line_off_the_quick_card', async () => {
+    const h = harness();
+    const t = await live(h);
+    await scoring(h, t);
+    h.socket.serverSend('report.progress', { stage: 'card', pct: 50, card: CARD });
+    h.socket.serverSend('error', { code: 'report_failed', message: 'scoring gave up' });
+    expect(h.showCard).toHaveBeenLastCalledWith(CARD, { pending: false });
+    expect(h.ctl.state).toBe('summary');
+  });
+
+  it('progress_is_a_percentage_even_when_it_is_one', async () => {
+    const h = harness();
+    const t = await live(h);
+    await scoring(h, t);
+    h.socket.serverSend('report.progress', { stage: 'metrics', pct: 1 });
+    expect(h.xr.ui.setStatus).toHaveBeenLastCalledWith('Writing your scorecard', 0.01);
+  });
+
+  it('dispose_leaves_no_timer_behind', async () => {
+    const h = harness();
+    const t = await live(h);
+    t.user('s1', 'So', false); // arms the stale segment and the turn timers
+    await h.ctl.dispose();
+    expect(vi.getTimerCount()).toBe(0);
   });
 });

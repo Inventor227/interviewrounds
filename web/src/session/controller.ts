@@ -90,6 +90,21 @@ export const SPOKEN_MIN_CHARS = 24;
 export const SPOKEN_MAX_CHARS = 60;
 /** The mic stays closed this long at most around a typed long-answer marker. */
 export const LONG_ANSWER_MUTE_MS = 2500;
+/** After the mute for a long-answer marker took effect, wait this long before sending it. */
+export const LONG_ANSWER_SETTLE_MS = 600;
+/** Longest wait for the mic mute itself before the marker goes out anyway. */
+const MUTE_WAIT_MS = 1500;
+/** Once the server has closed the round, the closing line may play on for at most this long. */
+export const GOODBYE_CAP_MS = 6000;
+/** The interviewer closed the round and is already quiet: finish after this short grace. */
+const QUIET_CLOSE_MS = 1000;
+/** A voice token this close to its deadline is not joined; the session is made again instead. */
+export const TOKEN_MARGIN_MS = 5000;
+/** GET /report is tried again this many times, this far apart, before the fallback card. */
+export const REPORT_RETRIES = 3;
+export const REPORT_RETRY_MS = 2000;
+/** Longest wait for the server's first frame after hello before the start marker goes out. */
+const HELLO_WAIT_MS = 2000;
 /** Pinches retry blocked audio at most this often. */
 const GESTURE_UNLOCK_MS = 1000;
 /** Board activity reaches the voice service at most this often. */
@@ -110,7 +125,9 @@ export type SessionErrorCode =
   /** The server closed the room socket for good (bad token, unknown or ended session). */
   | 'socket_terminal'
   /** The server sent an `error` frame (other than a rejected board op). */
-  | 'server_error';
+  | 'server_error'
+  /** The user ended the round before it began (during desk placement). */
+  | 'cancelled';
 export class SessionError extends Error {
   override readonly name = 'SessionError';
   constructor(
@@ -157,6 +174,8 @@ export interface ControllerEvents {
   transcript: (line: TranscriptLine) => void;
   /** Round bar actions the app handles (navigation). */
   action: (a: 'retry' | 'report') => void;
+  /** The session was made again before the voices joined (its voice token had run out). */
+  session: (res: CreateSessionRes) => void;
 }
 
 export interface RoundControllerDeps {
@@ -191,6 +210,15 @@ export class RoundController {
   private timing: RoundTiming;
   private readonly latency = new LatencyTracker();
   private readonly unsubs: (() => void)[] = [];
+  private readonly socketUnsubs: (() => void)[] = [];
+  private input: PrepareInput | null = null;
+  /** True from the moment the desk is placed: the socket may say hello (the round starts on the server). */
+  private socketWanted = false;
+  private socketUp: Promise<void> | null = null;
+  private renewed = false;
+  private longAnswerMuted = false;
+  private reportLoading: Promise<void> | null = null;
+  private lastCard: HeadsetCard | null = null;
 
   private st: ControllerState = 'idle';
   private disposed = false;
@@ -307,6 +335,7 @@ export class RoundController {
       throw new SessionError('already_started', 'This round has already started');
     }
     this.preparing = true;
+    this.input = input;
     const { media, api, xr } = this.deps;
     this.deps.timings?.mark('prepare');
     const voice = input.kind === 'new' ? input.req.voice : input.voice;
@@ -363,14 +392,7 @@ export class RoundController {
 
       this.req = input.kind === 'new' ? input.req : reqFor(res, voice);
       this.res = res;
-      if (res.timing) {
-        // The server's values for this round, level and persona; deps.timing still wins (tests).
-        this.timing = {
-          silenceWaitSeconds: res.timing.silence_wait_seconds,
-          interruptAfterSeconds: res.timing.interrupt_after_seconds,
-          ...this.deps.timing,
-        };
-      }
+      this.applyTiming(res);
       this.openSocket(res);
       this.watchPage();
       this.deps.timings?.mark('prepared');
@@ -386,18 +408,20 @@ export class RoundController {
 
   /**
    * Enters XR, waits for desk placement and brings the voices up. start() calls it. Call it again
-   * from a new tap when entering or placement failed: it resumes at the step that failed.
+   * from a new tap when entering or placement failed: it enters again when the headset session is
+   * gone, and resumes at the step that failed.
    */
   async enter(): Promise<void> {
     if (this.disposed) return;
-    const res = this.res;
-    if (!res) throw new SessionError('not_prepared', 'Call prepare() first');
-    const { xr, api } = this.deps;
-
+    if (!this.res) throw new SessionError('not_prepared', 'Call prepare() first');
+    const { xr } = this.deps;
     const timings = this.deps.timings;
-    if (this.st === 'idle') {
-      // Phase B: the room request is the first await, so it runs inside the user's tap.
-      timings?.mark('enter');
+
+    // Phase B: the room request is the first await, so it runs inside the user's tap. A failed
+    // placement means the headset session ended: the same request runs again on the retry tap.
+    const first = this.st === 'idle';
+    if (first || (this.st === 'placing' && xr.inSession?.() === false)) {
+      if (first) timings?.mark('enter');
       try {
         await xr.enter();
       } catch (err) {
@@ -405,28 +429,20 @@ export class RoundController {
         this.emitError(e);
         throw e;
       }
-      if (this.disposed || this.st !== 'idle') return;
-      timings?.mark('xr_started');
-      this.setState('placing');
+      if (this.disposed) return;
+      if (first) {
+        if (this.st !== 'idle') return;
+        timings?.mark('xr_started');
+        this.setState('placing');
+      }
     }
     if (this.st !== 'placing') return;
 
     // The voices connect while the user places the desk. Nobody hears the user until the desk is
     // down, so nothing is said before the greeting.
-    let panel = this.panel;
-    if (!panel || panel.isStopped) {
-      panel = new PanelController(res, (p, o) => this.wire(this.deps.makeTransport(p, o, res)), {
-        api,
-        waitQuiet: (t) => this.waitQuiet(t),
-      });
-      this.panel = panel;
-      this.voicesStarting = null;
-    }
+    if (this.panel?.isStopped) this.voicesStarting = null;
     if (!this.voicesStarting) {
-      const starting = panel.start().then(() => {
-        timings?.mark('voices_connected');
-        if (!this.placed && !panel.isStopped) panel.muteAll(true);
-      });
+      const starting = this.startVoices().then(() => void timings?.mark('voices_connected'));
       starting.catch(() => undefined); // reported below, once placement is done
       this.voicesStarting = starting;
     }
@@ -437,33 +453,42 @@ export class RoundController {
     } catch (err) {
       const e = new SessionError('placement_failed', 'Could not place the desk', err);
       this.emitError(e);
-      throw e; // still `placing`: enter() retries placement, the voices stay connected and muted
+      throw e; // still `placing`: enter() retries, the voices stay connected and muted
     }
     if (this.disposed || this.st !== 'placing') return;
     this.placed = true;
     timings?.mark('placed');
     // The touch that placed the desk: a good moment to retry audio that autoplay rules held back.
     this.unlockAudio();
+    // The start chime plays now, with every mic still closed, and is over before anyone is asked
+    // to speak.
+    const cue = xr.startCue?.().catch(() => undefined) ?? Promise.resolve();
 
     this.setState('greeting');
+    // Only now does the room say hello: the server's round clock and the round's count toward
+    // limits start when the user is at the desk, not at the mic tap.
+    this.socketWanted = true;
+    const hello = this.connectSocket();
     try {
       await voices;
     } catch (err) {
-      await panel.stopAll();
+      await this.panel?.stopAll();
       this.voicesStarting = null;
       this.releaseMic();
-      const e = err instanceof VoiceError ? err : new VoiceError('connect_failed', String(err), err);
+      const e = err instanceof VoiceError ? err : new VoiceError('connect_failed', String((err as Error)?.message ?? err), err);
       if (!this.disposed && isActive(this.st)) this.setState('failed');
       this.emitError(e);
       throw e;
     }
+    await Promise.all([cue, hello]);
     this.releaseMic(); // the voice service holds its own capture now
+    const panel = this.panel;
     // Ended, failed or disposed while the voices were connecting: the panel stopped them.
-    if (this.disposed || panel.isStopped || !isActive(this.st)) return;
+    if (this.disposed || !panel || panel.isStopped || !isActive(this.st)) return;
 
     this.voicesUp = true;
     // Paused meanwhile: everyone stays muted until Resume.
-    if (this.st !== 'paused') panel.muteAll(this.userMuted);
+    if (this.st !== 'paused') void panel.muteAll(this.userMuted);
     const head = this.deps.head;
     if (head) {
       head.setFloor(panel.floor);
@@ -471,6 +496,95 @@ export class RoundController {
     }
     if (this.st === 'paused') this.startPending = true; // greet once the user is back
     else this.sendStart();
+  }
+
+  /**
+   * Back into the headset after the user left its view (from a tap). Before the round has begun
+   * this is enter(); later it re-enters and places the desk again, and the round stays paused
+   * until Resume.
+   */
+  async returnToRoom(): Promise<void> {
+    if (this.disposed) return;
+    if (this.st === 'idle' || this.st === 'placing') return this.enter();
+    const { xr } = this.deps;
+    try {
+      await xr.enter();
+    } catch (err) {
+      const e = new SessionError('xr_enter_failed', 'Could not enter the room', err);
+      this.emitError(e);
+      throw e;
+    }
+    await xr.place();
+  }
+
+  /** Brings the panel's voices up; a voice token that ran out is replaced by making the session again. */
+  private async startVoices(): Promise<void> {
+    let res = this.res!;
+    if (this.tokenStale(res)) res = await this.renewSession();
+    for (;;) {
+      const panel = new PanelController(res, (p, o) => this.wire(this.deps.makeTransport(p, o, this.res ?? res)), {
+        api: this.deps.api,
+        waitQuiet: (t) => this.waitQuiet(t),
+      });
+      this.panel = panel;
+      try {
+        await panel.start();
+        if (!this.placed && !panel.isStopped) void panel.muteAll(true);
+        return;
+      } catch (err) {
+        await panel.stopAll();
+        const expired = (err as VoiceError)?.code === 'session_expired';
+        if (!expired || this.renewed || this.disposed || this.st === 'failed') throw err;
+        res = await this.renewSession();
+      }
+    }
+  }
+
+  /** True when the floor's voice token is past (or about to pass) its join deadline. */
+  private tokenStale(res: CreateSessionRes): boolean {
+    const v = res.panel.find((p) => p.panelist_id === res.floor)?.voice;
+    if (!v || v.transport !== 'fish') return false;
+    const raw = v.fish.expires_at;
+    if (raw == null || raw === '') return false;
+    const n = typeof raw === 'number' ? raw : /^\d+(\.\d+)?$/.test(raw) ? Number(raw) : Date.parse(raw);
+    if (!Number.isFinite(n)) return false;
+    const at = n < 1e12 ? n * 1000 : n; // seconds or milliseconds since the epoch
+    return at - Date.now() < TOKEN_MARGIN_MS;
+  }
+
+  /**
+   * Makes the session again (same request). The earlier one never started on the server, which
+   * drops it by itself. The room socket moves to the new session.
+   */
+  private async renewSession(): Promise<CreateSessionRes> {
+    const input = this.input!;
+    const { api } = this.deps;
+    this.renewed = true;
+    const res =
+      input.kind === 'new'
+        ? await api.createSession(input.req)
+        : input.kind === 'retry'
+          ? await api.retry(input.parentSessionId)
+          : await api.resumeSession(input.sessionId);
+    if (this.disposed) throw new SessionError('cancelled', 'The round was closed');
+    this.res = res;
+    this.preparedRes = res;
+    this.applyTiming(res);
+    this.closeSocket();
+    this.openSocket(res);
+    if (this.socketWanted) void this.connectSocket();
+    this.events.emit('session', res);
+    return res;
+  }
+
+  private applyTiming(res: CreateSessionRes): void {
+    if (!res.timing) return;
+    // The server's values for this round, level and persona; deps.timing still wins (tests).
+    this.timing = {
+      silenceWaitSeconds: res.timing.silence_wait_seconds,
+      interruptAfterSeconds: res.timing.interrupt_after_seconds,
+      ...this.deps.timing,
+    };
   }
 
   /** The user is working on the board: resets the silence timer. */
@@ -515,13 +629,13 @@ export class RoundController {
 
   setMuted(muted: boolean): void {
     this.userMuted = muted;
-    if (this.st !== 'paused') this.panel?.muteAll(muted);
+    if (this.st !== 'paused') void this.panel?.muteAll(muted);
   }
 
   pause(reason?: string): void {
     if (this.st !== 'live' && this.st !== 'greeting') return;
     this.setState('paused');
-    this.panel?.muteAll(true);
+    void this.panel?.muteAll(true);
     for (const t of this.panel?.all() ?? []) t.interrupt?.();
     this.socket?.send('ui.event', reason ? { kind: 'pause', reason } : { kind: 'pause' });
     this.clearTimers();
@@ -531,7 +645,7 @@ export class RoundController {
 
   resume(): void {
     if (this.st !== 'paused') return;
-    this.panel?.muteAll(this.userMuted);
+    void this.panel?.muteAll(this.userMuted);
     this.socket?.send('ui.event', { kind: 'resume' });
     this.setState(this.greeted ? 'live' : 'greeting');
     const handOver = this.pendingHandOver;
@@ -552,9 +666,23 @@ export class RoundController {
 
   /** Ends the round: the interviewer says goodbye, then the round is scored. */
   end(reason: EndReason = 'user_ended'): void {
+    // Before the round began (still placing the desk, or never entered): nothing to score.
+    if (this.st === 'placing' || (this.st === 'idle' && this.res)) return void this.cancel();
     if (!isActive(this.st)) return;
     this.socket?.send('ui.event', { kind: 'end' });
     this.beginEnding(reason);
+  }
+
+  /** Ends a round that never began: the voices stop and the room never says hello to the server. */
+  private async cancel(): Promise<void> {
+    this.clearTimers();
+    this.clearWatchdog();
+    this.voicesStarting = null;
+    this.setState('failed');
+    this.releaseMic();
+    this.closeSocket();
+    await this.panel?.stopAll();
+    if (!this.disposed) this.emitError(new SessionError('cancelled', 'The round was ended before it began'));
   }
 
   /** Tears everything down (leaving the page). */
@@ -565,11 +693,14 @@ export class RoundController {
     if (this.endingTimer) clearTimeout(this.endingTimer);
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     if (this.longAnswerUnmute) clearTimeout(this.longAnswerUnmute);
+    if (this.staleTimer) clearTimeout(this.staleTimer);
+    this.staleTimer = null;
+    this.longAnswerUnmute = null;
     for (const u of this.unsubs.splice(0)) u();
     this.deps.head?.stop();
     this.releaseMic();
     await this.panel?.stopAll();
-    this.socket?.close();
+    this.closeSocket();
     this.deps.xr.dispose?.();
   }
 
@@ -578,10 +709,13 @@ export class RoundController {
   private openSocket(res: CreateSessionRes): void {
     const s = this.deps.makeSocket(res.ws_url, res.client_token);
     this.socket = s;
-    this.unsubs.push(
+    this.socketUp = null;
+    this.socketTerminal = false;
+    this.socketUnsubs.push(
       s.on('round.state', (d) => this.onRoundState(d)),
       s.on('panel.hand_over', (d) => this.handOver(d.to, d.opening_line)),
-      s.on('round.ending', () => this.beginEnding(null)),
+      // The interviewer said its closing line and ended the round itself: no second goodbye.
+      s.on('round.ending', () => this.beginEnding(null, false)),
       s.on('round.ended', () => this.onRoundEnded()),
       s.on('report.progress', (d) => this.onReportProgress(d)),
       s.on('report.ready', () => void this.showReport()),
@@ -593,7 +727,7 @@ export class RoundController {
       }),
     );
     if (s.onTerminal) {
-      this.unsubs.push(
+      this.socketUnsubs.push(
         s.onTerminal((info) => {
           if (this.disposed) return;
           this.socketTerminal = true;
@@ -608,11 +742,35 @@ export class RoundController {
         }),
       );
     }
-    if (s.onStatus) this.unsubs.push(s.onStatus((st) => this.onSocketStatus(st)));
-    void s.connect().catch((err) => {
-      if (this.disposed || this.socketTerminal) return;
-      this.emitError(new SessionError('socket_failed', 'Could not connect to the room', err));
-    });
+    if (s.onStatus) this.socketUnsubs.push(s.onStatus((st) => this.onSocketStatus(st)));
+  }
+
+  /**
+   * Connects the room socket (hello). Resolves once the server has answered, or shortly after, or
+   * when the connection failed (reported as an error): the start never hangs on it.
+   */
+  private connectSocket(): Promise<void> {
+    const s = this.socket;
+    if (!s) return Promise.resolve();
+    this.socketUp ??= s
+      .connect()
+      .then(() => {
+        const heard = s.heard?.();
+        if (!heard) return;
+        return Promise.race([heard, new Promise<void>((r) => setTimeout(r, HELLO_WAIT_MS))]);
+      })
+      .catch((err) => {
+        if (this.disposed || this.socketTerminal || this.socket !== s) return;
+        this.emitError(new SessionError('socket_failed', 'Could not connect to the room', err));
+      });
+    return this.socketUp;
+  }
+
+  private closeSocket(): void {
+    for (const u of this.socketUnsubs.splice(0)) u();
+    this.socket?.close();
+    this.socket = null;
+    this.socketUp = null;
   }
 
   private onSocketStatus(st: string): void {
@@ -697,8 +855,13 @@ export class RoundController {
     return this.panel?.current();
   }
 
+  private openingMarker(): string {
+    return this.input?.kind === 'resume' ? VOICE_MARKERS.resume : VOICE_MARKERS.start;
+  }
+
   private sendStart(): void {
-    this.floorT()?.sendEvent(VOICE_MARKERS.start);
+    // A resumed round picks up where it was: the interviewer welcomes the user back, it does not open again.
+    this.floorT()?.sendEvent(this.openingMarker());
     this.deps.timings?.mark('start_sent');
     this.armWatchdog();
   }
@@ -778,7 +941,7 @@ export class RoundController {
       this.deps.xr.ui.setStatus(null);
     }
     const taps = this.hearTaps++;
-    if (!this.sawAgent && (taps > 0 || this.req?.voice === 'fake')) this.floorT()?.sendEvent(VOICE_MARKERS.start);
+    if (!this.sawAgent && (taps > 0 || this.req?.voice === 'fake')) this.floorT()?.sendEvent(this.openingMarker());
     this.armWatchdog();
   }
 
@@ -917,6 +1080,8 @@ export class RoundController {
 
   private onEnded(t: VoiceTransport, reason: string): void {
     this.modes.delete(t);
+    // A voice that stops mid-sentence sends no last mode: its avatar must not stay "speaking".
+    this.deps.avatars?.(t.panelistId)?.setMode('idle');
     for (const done of [...(this.quietWaiters.get(t) ?? [])]) done();
     // Transports we stop (hand-over, round end) are not the floor any more by then; a floor that
     // ends mid hand-over is being replaced.
@@ -979,20 +1144,51 @@ export class RoundController {
     const ongoing = c.inSegment || now - c.lastFinal < TURN_GAP_MS;
     if (ongoing && now - c.start > this.timing.interruptAfterSeconds * 1000) {
       c.sent = true;
-      // The voice service ignores typed turns while it hears the user talk: close the mic, send
-      // the marker, and open the mic again once the agent takes the turn (or shortly after).
-      this.panel?.muteAll(true);
-      this.floorT()?.sendEvent(VOICE_MARKERS.longAnswer);
-      if (this.longAnswerUnmute) clearTimeout(this.longAnswerUnmute);
-      this.longAnswerUnmute = setTimeout(() => this.endLongAnswerMute(), LONG_ANSWER_MUTE_MS);
+      void this.sendLongAnswer();
+    }
+  }
+
+  /**
+   * The voice service ignores typed turns while it hears the user talk. So: close the mic and wait
+   * until that has really taken effect, give the service a moment to see the turn end, send the
+   * marker, and open the mic again once the agent takes the turn (or shortly after). Whatever
+   * fails on the way, the mic opens again.
+   */
+  private async sendLongAnswer(): Promise<void> {
+    const panel = this.panel;
+    const t = this.floorT();
+    if (!panel || !t) return;
+    this.longAnswerMuted = true;
+    let sent = false;
+    try {
+      await Promise.race([panel.muteAll(true), new Promise<void>((r) => setTimeout(r, MUTE_WAIT_MS))]);
+      await new Promise<void>((r) => setTimeout(r, LONG_ANSWER_SETTLE_MS));
+      const still = this.longAnswerMuted && !this.disposed && this.st === 'live' && !this.handingOver && this.floorT() === t;
+      if (still && !this.agentIs('speaking', 'thinking')) {
+        t.sendEvent(VOICE_MARKERS.longAnswer);
+        sent = true;
+      }
+    } catch {
+      // the mute failed: no marker, and the mic is opened again below
+    } finally {
+      if (!this.longAnswerMuted) {
+        // already opened again (the agent took the turn meanwhile)
+      } else if (sent) {
+        if (this.longAnswerUnmute) clearTimeout(this.longAnswerUnmute);
+        this.longAnswerUnmute = setTimeout(() => this.endLongAnswerMute(), LONG_ANSWER_MUTE_MS);
+      } else {
+        this.endLongAnswerMute();
+      }
     }
   }
 
   private endLongAnswerMute(): void {
-    if (!this.longAnswerUnmute) return;
-    clearTimeout(this.longAnswerUnmute);
+    if (!this.longAnswerMuted) return;
+    this.longAnswerMuted = false;
+    if (this.longAnswerUnmute) clearTimeout(this.longAnswerUnmute);
     this.longAnswerUnmute = null;
-    if (this.st === 'live' || this.st === 'greeting') this.panel?.muteAll(this.userMuted);
+    // Paused or ending keep their own mute (Resume opens the mic again).
+    if (this.st === 'live' || this.st === 'greeting') void this.panel?.muteAll(this.userMuted);
   }
 
   // ---------- silence ----------
@@ -1005,6 +1201,7 @@ export class RoundController {
   private rearmSilence(): void {
     if (this.silenceTimer) clearTimeout(this.silenceTimer);
     this.silenceTimer = null;
+    if (this.disposed) return;
     if (!this.silenceCanRun()) return;
     this.silenceTimer = setTimeout(() => {
       this.silenceTimer = null;
@@ -1052,29 +1249,54 @@ export class RoundController {
 
   // ---------- ending and scoring ----------
 
-  /** reason null: the server ends the round (time limit, end_round) and reports it itself. */
-  private beginEnding(reason: EndReason | null): void {
+  /**
+   * reason null: the server ends the round (time limit, end_round) and reports it itself.
+   * `ask`: ask the floor for a goodbye. Not when the interviewer closed the round itself: its
+   * closing line is already playing, and a second request would make a second goodbye.
+   */
+  private beginEnding(reason: EndReason | null, ask = true): void {
     if (!isActive(this.st)) return;
     this.endReason = reason;
     this.endingSawSpeech = false;
     this.pendingHandOver = null;
     this.clearTimers();
     this.clearWatchdog();
+    this.endLongAnswerMute();
     this.setState('ending');
     if (!this.voicesUp) {
       void this.finishEnding(); // nobody to say goodbye yet
       return;
     }
-    this.floorT()?.sendEvent(VOICE_MARKERS.ending);
-    this.endingTimer = setTimeout(() => void this.finishEnding(), ENDING_GRACE_MS);
+    if (ask) {
+      this.floorT()?.sendEvent(VOICE_MARKERS.ending);
+      this.endingTimer = setTimeout(() => void this.finishEnding(), ENDING_GRACE_MS);
+      return;
+    }
+    // The closing line is playing (finish when it ends), about to play, or already over.
+    this.endingSawSpeech = this.agentIs('speaking');
+    const wait = this.agentIs('speaking', 'thinking') ? ENDING_GRACE_MS : QUIET_CLOSE_MS;
+    this.endingTimer = setTimeout(() => void this.finishEnding(), wait);
   }
 
-  /** The server closed the round (also in the middle of our goodbye): stop the voices and wait for the scorecard. */
+  /**
+   * The server closed the round. It does so a few seconds after the closing line's text, which
+   * can be before the voice has finished saying it: the line plays on (bounded), then the voices
+   * stop. Scoring frames count from now on either way.
+   */
   private onRoundEnded(): void {
-    if (!isActive(this.st) && this.st !== 'ending') return;
+    const wasActive = isActive(this.st);
+    if (!wasActive && this.st !== 'ending') return;
     this.serverEnded = true;
     this.endReason = null;
-    void this.finishEnding();
+    if (wasActive) this.beginEnding(null, false);
+    if (this.st !== 'ending' || this.finishing) return;
+    const talking = this.agentIs('speaking', 'thinking');
+    if (!talking && (wasActive || this.endingSawSpeech)) {
+      void this.finishEnding();
+      return;
+    }
+    if (this.endingTimer) clearTimeout(this.endingTimer);
+    this.endingTimer = setTimeout(() => void this.finishEnding(), GOODBYE_CAP_MS);
   }
 
   private finishEnding(): Promise<void> {
@@ -1092,6 +1314,8 @@ export class RoundController {
     this.flushSpoken();
     await this.panel?.stopAll();
     if (this.disposed) return;
+    // Nobody is talking any more: the people at the table sit and wait through scoring and the summary.
+    for (const p of this.res?.panel ?? []) this.deps.avatars?.(p.panelist_id)?.setMode('idle');
     // The scorecard can beat the voices' shutdown: never go back from the summary or cover the card.
     if (this.st !== 'summary') {
       this.setState('scoring');
@@ -1109,41 +1333,58 @@ export class RoundController {
     const ui = this.deps.xr.ui;
     if (d.stage === 'card' && d.card && ui.showCard) {
       this.cardShown = true;
+      this.lastCard = d.card;
       ui.setStatus(null);
       ui.showCard(d.card);
       return;
     }
     // Once the card is up it stays; the summary replaces it when the report is ready.
-    if (!this.cardShown) ui.setStatus('Writing your scorecard', Math.max(0, Math.min(1, d.pct > 1 ? d.pct / 100 : d.pct)));
+    if (!this.cardShown) ui.setStatus('Writing your scorecard', Math.max(0, Math.min(1, d.pct / 100)));
   }
 
   /**
-   * The report is ready (or the room closed while it was being written: `late`). When it cannot
-   * be read, the user still gets a card with a way on: the report page keeps trying.
+   * The report is ready (or the room closed while it was being written: `late`). One load at a
+   * time, however many signals ask for it (report.ready is followed at once by the room closing).
+   * A read that fails is tried again a few times; if it still cannot be read, the user gets a card
+   * with a way on: the report page keeps trying.
    */
-  private async showReport(late = false): Promise<void> {
-    const res = this.res;
-    if (!res || this.st === 'summary') return;
-    try {
-      const report = await this.deps.api.report(res.session_id);
-      if (this.disposed) return;
-      this.deps.xr.ui.setStatus(null);
-      this.deps.xr.ui.showSummary(report);
-      this.setState('summary');
-    } catch (err) {
-      if (this.disposed) return;
-      if (!late) this.emitError(err as ApiError);
-      this.reportUnavailable();
-    }
+  private showReport(late = false): Promise<void> {
+    if (!this.res || this.st === 'summary' || this.disposed) return Promise.resolve();
+    this.reportLoading ??= this.loadReport(late).finally(() => (this.reportLoading = null));
+    return this.reportLoading;
   }
 
-  /** No report in the headset: keep the quick card, or show a short one, with See full report. */
+  private async loadReport(late: boolean): Promise<void> {
+    const id = this.res!.session_id;
+    let last: unknown = null;
+    for (let attempt = 0; attempt <= REPORT_RETRIES; attempt++) {
+      if (attempt > 0) await new Promise<void>((r) => setTimeout(r, REPORT_RETRY_MS));
+      if (this.disposed || this.st === 'summary') return;
+      try {
+        const report = await this.deps.api.report(id);
+        if (this.disposed || (this.st as ControllerState) === 'summary') return;
+        this.deps.xr.ui.setStatus(null);
+        this.deps.xr.ui.showSummary(report);
+        this.setState('summary');
+        return;
+      } catch (err) {
+        last = err;
+      }
+    }
+    if (this.disposed) return;
+    if (!late) this.emitError(last as ApiError);
+    this.reportUnavailable();
+  }
+
+  /** No report in the headset: keep the quick card (without its "almost ready" line), or show a short one, with See full report. */
   private reportUnavailable(): void {
     if ((this.st !== 'scoring' && !(this.serverEnded && this.st === 'ending')) || this.disposed) return;
     const ui = this.deps.xr.ui;
-    if (!this.cardShown) {
+    if (this.cardShown && this.lastCard) {
+      ui.showCard?.(this.lastCard, { pending: false });
+    } else if (!this.cardShown) {
       ui.setStatus(null);
-      if (ui.showCard) ui.showCard({ one_line: 'Your scorecard is taking longer than usual. Open the full report to see it.', top_strength: null, top_fix: null });
+      if (ui.showCard) ui.showCard({ one_line: 'Your scorecard is taking longer than usual. Open the full report to see it.', top_strength: null, top_fix: null }, { pending: false });
       else ui.setStatus('Your scorecard is taking longer than usual');
       this.cardShown = true;
     }

@@ -79,7 +79,7 @@ export class PanelController {
         if (this.stopped) await t.stop();
       }),
     );
-    if (!this.stopped) this.applyGating();
+    if (!this.stopped) void this.applyGating();
   }
 
   handOver(to: string, openingLine: string): Promise<void> {
@@ -89,9 +89,9 @@ export class PanelController {
   }
 
   /** true: nobody hears the user (pause, mute). false: the floor hears again. */
-  muteAll(muted: boolean): void {
+  muteAll(muted: boolean): Promise<void> {
     this.muted = muted;
-    this.applyGating();
+    return this.applyGating();
   }
 
   get isStopped(): boolean {
@@ -119,7 +119,7 @@ export class PanelController {
       const next = this.transports.get(to);
       if (!next) throw new Error(`panelist ${to} is not connected`);
       this.floorId = to;
-      this.applyGating();
+      void this.applyGating();
       next.sendEvent(VOICE_MARKERS.handover);
       return;
     }
@@ -142,7 +142,7 @@ export class PanelController {
         throw err;
       }
     } catch (err) {
-      if (!this.stopped) this.applyGating(); // the old floor hears again
+      if (!this.stopped) void this.applyGating(); // the old floor hears again
       throw err;
     }
     if (this.stopped) {
@@ -152,7 +152,7 @@ export class PanelController {
     if (old) this.transports.delete(oldId);
     this.transports.set(to, next);
     this.floorId = to;
-    this.applyGating(); // unmutes the new floor
+    void this.applyGating(); // unmutes the new floor
     if (old) await old.stop();
   }
 
@@ -167,7 +167,10 @@ export class PanelController {
     return ready;
   }
 
-  private applyGating(): void {
-    for (const [id, t] of this.transports) t.setMicMuted(this.muted || id !== this.floorId);
+  /** Resolves once every transport has applied its gate. */
+  private applyGating(): Promise<void> {
+    const done: (void | Promise<void>)[] = [];
+    for (const [id, t] of this.transports) done.push(t.setMicMuted(this.muted || id !== this.floorId));
+    return Promise.all(done).then(() => undefined);
   }
 }

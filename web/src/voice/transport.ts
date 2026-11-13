@@ -64,7 +64,8 @@ export interface VoiceTransport {
   readonly panelistId: string;
   start(): Promise<void>;
   stop(): Promise<void>;
-  setMicMuted(muted: boolean): void;
+  /** Resolves once the change has taken effect (the capture track is muted); never rejects. */
+  setMicMuted(muted: boolean): void | Promise<void>;
   /** A marker turn (`[event: ...]`): the agent answers it out loud. */
   sendEvent(marker: string): void;
   /** A typed user turn (dev console). */

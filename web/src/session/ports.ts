@@ -60,6 +60,13 @@ export interface XRPort {
   dispose?(): void;
   /** Resolves once the desk is placed (dwell or fallback). */
   place(): Promise<void>;
+  /** False when no headset session is running (it ended, or was never entered). Absent: unknown. */
+  inSession?(): boolean;
+  /**
+   * Plays the start chime (the desk is down, the round begins) and resolves when it is over. The
+   * controller opens the mic and asks for the greeting only after that.
+   */
+  startCue?(): Promise<void>;
   exit?(): void;
   /** Any pinch in the room (a user gesture): the controller retries blocked audio on it. */
   onGesture?(cb: () => void): () => void;
@@ -67,7 +74,7 @@ export interface XRPort {
     setRoundState(s: RoundStatePayload & { controller: ControllerState }): void;
     showSummary(report: Report): void;
     /** The quick card a few seconds after the round: one line, the top strength and the top fix. */
-    showCard?(card: HeadsetCard): void;
+    showCard?(card: HeadsetCard, opts?: { pending?: boolean }): void;
     setStatus(text: string | null, progress?: number): void;
     onAction(cb: (action: UiAction) => void): () => void;
   };
@@ -99,6 +106,8 @@ export interface HeadSamplerPort {
 /** The parts of SessionSocket the controller uses. */
 export interface SocketPort {
   connect(): Promise<void>;
+  /** Resolves with the first frame the server sends on this socket (it has taken the hello). */
+  heard?(): Promise<void>;
   send<T extends ClientMsgType>(t: T, d: ClientMsgMap[T]): void;
   on<T extends ServerMsgType>(t: T, cb: (d: ServerMsgMap[T]) => void): () => void;
   onStatus?(cb: (s: SocketStatus) => void): () => void;

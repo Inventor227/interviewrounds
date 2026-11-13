@@ -161,9 +161,12 @@ export class FishTransport implements VoiceTransport {
     if (s) await s.end().catch(() => undefined);
   }
 
-  setMicMuted(muted: boolean): void {
+  /** Resolves once the SDK has muted or unmuted the capture track; a failure is reported as an error event. */
+  setMicMuted(muted: boolean): Promise<void> {
     this.muted = muted;
-    void this.session?.setMicMuted(muted).catch((e) => this.events.emit('error', toVoiceError(e)));
+    const s = this.session;
+    if (!s) return Promise.resolve();
+    return s.setMicMuted(muted).catch((e) => void this.events.emit('error', toVoiceError(e)));
   }
 
   sendEvent(marker: string): void {
