@@ -74,6 +74,53 @@ describe('Report', () => {
     expect($(root, 'share-link')).not.toBeNull();
   });
 
+  it('report_share_transcript_change_leaves_one_live_link', async () => {
+    const server = useFakeServer();
+    const root = await renderApp('/report/demo');
+    await click($(root, 'share-toggle'));
+    expect([...server.state.shares.keys()]).toHaveLength(1);
+    await click($(root, 'share-transcript'));
+    const live = [...server.state.shares.entries()];
+    expect(live).toHaveLength(1);
+    expect(live[0]![1]).toEqual({ session_id: 'demo', include_transcript: true });
+    expect(($(root, 'share-link')?.querySelector('input') as HTMLInputElement).value).toContain(`/s/${live[0]![0]}`);
+    await click($(root, 'share-transcript'));
+    expect([...server.state.shares.values()]).toEqual([{ session_id: 'demo', include_transcript: false }]);
+    await click($(root, 'share-toggle'));
+    expect(server.state.shares.size).toBe(0);
+  });
+
+  it('report_meeting_without_details_shows_no_decision', async () => {
+    const report = { ...fakeReport('meeting'), round_details: undefined };
+    useFakeServer({ routes: { 'GET /api/sessions/meeting/report': () => report } });
+    const root = await renderApp('/report/meeting');
+    expect($(root, 'no-signal')?.dataset.kind).toBe('meeting');
+    expect($(root, 'verdict')).toBeNull();
+    expect($(root, 'report-broken')).toBeNull();
+  });
+
+  it('report_with_a_verdict_but_no_round_details_still_shows_it', async () => {
+    const report = { ...fakeReport('demo'), round_details: undefined };
+    useFakeServer({ routes: { 'GET /api/sessions/demo/report': () => report } });
+    const root = await renderApp('/report/demo');
+    expect($(root, 'verdict')).not.toBeNull();
+  });
+
+  it('report_that_cannot_render_shows_a_calm_retry', async () => {
+    let broken = true;
+    useFakeServer({
+      routes: { 'GET /api/sessions/demo/report': () => (broken ? { ...fakeReport('demo'), competencies: null } : fakeReport('demo')) },
+    });
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const root = await renderApp('/report/demo');
+    expect($(root, 'report-broken')).not.toBeNull();
+    broken = false;
+    await click($(root, 'report-broken-retry'));
+    expect($(root, 'report-broken')).toBeNull();
+    expect($(root, 'verdict')).not.toBeNull();
+    spy.mockRestore();
+  });
+
   it('report_says_not_enough_signal_instead_of_a_verdict', async () => {
     useFakeServer();
     const root = await renderApp('/report/nosignal');

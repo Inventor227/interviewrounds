@@ -282,7 +282,7 @@ export interface FakeServerOptions {
 export interface FakeServer {
   fetch: typeof fetch;
   calls: FakeCall[];
-  state: { me: Me; reportPolls: Record<string, number> };
+  state: { me: Me; reportPolls: Record<string, number>; shares: Map<string, { session_id: string; include_transcript: boolean }> };
 }
 
 const json = (status: number, body: unknown) =>
@@ -294,9 +294,14 @@ const fail = (status: number, code: string, message: string, extra: Record<strin
 
 export function createFakeServer(opts: FakeServerOptions = {}): FakeServer {
   const scenario = opts.scenario ?? '1';
-  const state = { me: opts.me ?? fakeMe(scenario), reportPolls: {} as Record<string, number> };
+  const state = {
+    me: opts.me ?? fakeMe(scenario),
+    reportPolls: {} as Record<string, number>,
+    /** Live public links: slug → what it shares. */
+    shares: new Map<string, { session_id: string; include_transcript: boolean }>(),
+  };
   const calls: FakeCall[] = [];
-  let shareSlug: string | null = null;
+  let shareSeq = 0;
   let lastScoringPoll = 0;
   let created = 0;
 
@@ -348,11 +353,14 @@ export function createFakeServer(opts: FakeServerOptions = {}): FakeServer {
       return json(200, { meeting_plan_id: 'mp_demo', plan: fakePlan(setup) });
     }
     if (key === 'POST /api/shares') {
-      shareSlug = 'k7m2q9';
-      return json(200, { slug: shareSlug, url: `${url.origin}/s/${shareSlug}` });
+      // Worst case for the client: every POST makes a new link (no upsert).
+      const b = body as { session_id: string; include_transcript: boolean };
+      const slug = `k7m2q${++shareSeq}`;
+      state.shares.set(slug, { session_id: b.session_id, include_transcript: b.include_transcript });
+      return json(200, { slug, url: `${url.origin}/s/${slug}` });
     }
     if (method === 'DELETE' && p.startsWith('/api/shares/')) {
-      shareSlug = null;
+      state.shares.delete(decodeURIComponent(p.slice('/api/shares/'.length)));
       return json(204, undefined);
     }
     if (method === 'GET' && (m = p.match(/^\/api\/sessions\/([^/]+)\/report$/))) {

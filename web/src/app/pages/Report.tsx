@@ -2,7 +2,7 @@
 // weaknesses, weakest moment with Retry, next drills, delivery, transcript and board, share.
 // Also: scoring in progress (polls until ready), not enough signal, meeting outcome, failed.
 
-import type { ComponentChildren, JSX } from 'preact';
+import { Component, type ComponentChildren, type JSX } from 'preact';
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { api, ApiError } from '../../net/api';
 import type { Catalog, Delivery, Evidence, MeetingDetails, NextDrill, Report as ReportData, SessionStatus } from '../../shared/types';
@@ -170,20 +170,22 @@ function drillHref(d: NextDrill, r: ReportData): string | null {
   }
 }
 
-function NoSignal(props: { r: ReportData }) {
+function NoSignal(props: { r: ReportData; meeting: boolean }) {
   const mins = Math.max(1, Math.round(props.r.session.duration_sec / 60));
+  const again = props.meeting ? '/meeting/new' : props.r.session.round_id ? `/round/${props.r.session.round_id}` : '/start';
   return (
-    <div class="nosignal" data-test="no-signal">
+    <div class="nosignal" data-test="no-signal" data-kind={props.meeting ? 'meeting' : 'interview'}>
       <p class="chip chip-mid">
-        <span class="chip-name">Not enough signal yet</span>
+        <span class="chip-name">{props.meeting ? 'No decision recorded' : 'Not enough signal yet'}</span>
       </p>
       <p class="verdict-summary">{props.r.headline.summary}</p>
       <p>
-        The round lasted about {plural(mins, 'minute')}, which is not enough to score fairly. We would rather say that than guess.
-        A full answer or two is enough for a first read.
+        {props.meeting
+          ? `The meeting lasted about ${plural(mins, 'minute')} and ended before the room made a decision. What they said is below.`
+          : `The round lasted about ${plural(mins, 'minute')}, which is not enough to score fairly. We would rather say that than guess. A full answer or two is enough for a first read.`}
       </p>
-      <a class="btn btn-primary" href={props.r.session.round_id ? `/round/${props.r.session.round_id}` : '/start'} data-test="no-signal-again">
-        Try the round again
+      <a class="btn btn-primary" href={again} data-test="no-signal-again">
+        {props.meeting ? 'Rehearse it again' : 'Try the round again'}
       </a>
     </div>
   );
@@ -395,6 +397,12 @@ function Share(props: { r: ReportData }) {
     setBusy(true);
     setErr(null);
     try {
+      // Changing what is shared: take the old link down first, so only one stays public.
+      if (slug) {
+        await api.deleteShare(slug);
+        setSlug(null);
+        setUrl(null);
+      }
       const res = await api.createShare(props.r.session.id, transcript);
       setSlug(res.slug);
       setUrl(res.url);
@@ -487,7 +495,6 @@ function ReportBody(props: { r: ReportData }) {
   const meeting = r.session.mode === 'meeting';
   const details = r.round_details;
   const md = details?.kind === 'meeting' ? details : null;
-  const noSignal = !meeting && !r.headline.verdict;
   const title = catalog.data?.rounds.find((x) => x.id === r.session.round_id)?.title ?? (meeting ? 'Meeting rehearsal' : 'Your round');
   const mins = Math.max(1, Math.round(r.session.duration_sec / 60));
   const board = details && (details.kind === 'system_design' || details.kind === 'object_design') ? details : null;
@@ -506,15 +513,19 @@ function ReportBody(props: { r: ReportData }) {
         <Section name="verdict" title={meeting ? 'Outcome' : 'Verdict'} hideTitle>
           {md ? (
             <MeetingOutcome details={md} summary={r.headline.summary} overall={r.headline.overall_score} />
-          ) : noSignal ? (
-            <NoSignal r={r} />
+          ) : r.headline.verdict ? (
+            <Verdict verdict={r.headline.verdict} summary={r.headline.summary} />
           ) : (
-            <Verdict verdict={r.headline.verdict!} summary={r.headline.summary} />
+            <NoSignal r={r} meeting={meeting} />
           )}
         </Section>
 
         {r.competencies.length > 0 && (
-          <Section name="competencies" title="Competencies" lede="Scored 1 to 4 against the bar for your level. 3 meets the bar.">
+          <Section
+            name="competencies"
+            title={meeting ? 'How you ran it' : 'Competencies'}
+            lede={meeting ? 'Scored 1 to 4. 3 is a solid, professional meeting.' : 'Scored 1 to 4 against the bar for your level. 3 meets the bar.'}
+          >
             <Bars competencies={r.competencies} />
           </Section>
         )}
@@ -654,10 +665,53 @@ function Waiting(props: { since: number; status: SessionStatus }) {
   );
 }
 
+/** Keeps a malformed report from blanking the page: a calm message and another try. */
+class ReportBoundary extends Component<{ onRetry: () => void; children: ComponentChildren }, { broken: boolean }> {
+  override state = { broken: false };
+  static override getDerivedStateFromError() {
+    return { broken: true };
+  }
+  override componentDidCatch(err: unknown) {
+    console.error('report render failed', err);
+  }
+  override render() {
+    if (!this.state.broken) return this.props.children;
+    return (
+      <Page test="report" title="We couldn't show this report" back={{ href: '/history', label: 'History' }}>
+        <div class="state" role="alert" data-test="report-broken">
+          <p>Something in this report did not display. Your other reports are fine.</p>
+          <div class="row">
+            <button
+              type="button"
+              class="btn btn-primary"
+              onClick={() => {
+                this.setState({ broken: false });
+                this.props.onRetry();
+              }}
+              data-test="report-broken-retry"
+            >
+              Try again
+            </button>
+            <a class="btn" href="/history">
+              Your history
+            </a>
+          </div>
+        </div>
+      </Page>
+    );
+  }
+}
+
 export function Report(props: { id?: string }) {
   const id = props.id ?? '';
   const [view, reload] = useReport(id);
-  if (view.kind === 'ready') return <ReportBody r={view.report} />;
+  if (view.kind === 'ready') {
+    return (
+      <ReportBoundary onRetry={reload}>
+        <ReportBody r={view.report} />
+      </ReportBoundary>
+    );
+  }
   if (view.kind === 'waiting') return <Waiting since={view.since} status={view.status} />;
   if (view.kind === 'failed' || view.kind === 'abandoned') {
     return (
