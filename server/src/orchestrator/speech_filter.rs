@@ -70,6 +70,11 @@ impl SpeechFilter {
         }
     }
 
+    /// A tool name written as text was found and everything from it on was dropped.
+    pub fn cut_tool_text(&self) -> bool {
+        self.dropping
+    }
+
     /// Feeds one delta; returns the text that is safe to speak now (possibly empty).
     pub fn push(&mut self, delta: &str) -> String {
         for c in delta.chars() {

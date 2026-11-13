@@ -683,6 +683,20 @@ fn turn_stream(
         let mut spoken = guard.spoken.clone();
 
         let (mut reply, calls) = asm.take();
+        if filter.cut_tool_text() {
+            // A tool written out as text never enters the history: the model would see its own text-form call on
+            // every later turn. The recorded text is what was spoken.
+            let mut first = true;
+            reply.retain_mut(|b| match b {
+                ContentBlock::Text { text, .. } => {
+                    let keep = first;
+                    first = false;
+                    *text = spoken.trim().to_string();
+                    keep
+                }
+                _ => true,
+            });
+        }
         let mut tool_calls = earlier_calls;
         let silent_failure = spoken.trim().is_empty() && last_error.is_some();
         if silent_failure {
