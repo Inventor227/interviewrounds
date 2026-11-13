@@ -1,8 +1,10 @@
 // Loading avatars and their clip libraries.
 //
 // The avatar GLBs use meshopt geometry and KTX2 (Basis) textures, which IWSDK's own glTF loader does not decode
-// with its defaults, so we keep our own GLTFLoader with MeshoptDecoder and KTX2Loader. KTX2Loader in this three
-// build locates its transcoder with import.meta.url, so Vite bundles it and nothing is fetched from a CDN.
+// with its defaults, so we keep our own GLTFLoader with MeshoptDecoder and KTX2Loader. The Basis transcoder is served
+// from /vendor/basis/ (a copy of three's, pinned by a test). KTX2Loader's own default finds it with
+// import.meta.url, which breaks under the Vite dev server: three is pre-bundled there, the URL 404s, the SPA answers
+// with index.html and the transcoder worker never starts. IWSDK's default would fetch it from a CDN.
 
 import type { AnimationClip, WebGLRenderer } from 'three';
 import { GLTFLoader, type GLTF } from 'three/examples/jsm/loaders/GLTFLoader.js';
@@ -11,6 +13,7 @@ import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.j
 import type { AvatarManifest, AvatarManifestEntry } from './types';
 
 export const MANIFEST_URL = '/avatars/manifest.json';
+export const BASIS_PATH = '/vendor/basis/';
 
 let loader: GLTFLoader | null = null;
 let ktx2: KTX2Loader | null = null;
@@ -20,7 +23,7 @@ let manifest: Promise<AvatarManifest> | null = null;
 /** Sets up the shared loader for this renderer (KTX2 needs it to pick a GPU format). Safe to call again. */
 export function configureAvatarLoader(renderer: WebGLRenderer): GLTFLoader {
   if (loader) return loader;
-  ktx2 = new KTX2Loader().detectSupport(renderer);
+  ktx2 = new KTX2Loader().setTranscoderPath(BASIS_PATH).detectSupport(renderer);
   loader = new GLTFLoader().setMeshoptDecoder(MeshoptDecoder).setKTX2Loader(ktx2);
   return loader;
 }
