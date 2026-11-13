@@ -2,8 +2,8 @@
 // Pure math in the desk frame; room.ts turns it into meshes and the avatar runtime places people on SeatPose.
 //
 // The desk frame: origin = the sheet's near edge centre on the desk top (where the fingertip rested), yaw = the
-// user's facing. The user's head sits about 0.20 m behind the origin (research/06 §2.1: sheet near edge 0.20 m
-// forward).
+// user's facing. The user's head sits about 0.20 m behind the origin (the sheet's near edge lies 0.20 m in front of
+// a seated user, in easy reach).
 
 import { add, addScaled, DEG, forwardOf, rightOf, v3, type Vec3 } from './math';
 import type { DeskPose } from './placement';
@@ -112,7 +112,7 @@ export function wallboardPose(desk: DeskFrame): BoardFrame {
   return { pos: v3(p.x, desk.deskY + 1.02, p.z), yaw: desk.yaw, width: 1.6, height: 1.0 };
 }
 
-/** Sheet size and tilt (research/06 §2.1). */
+/** Sheet size and tilt: 64 × 40 cm, lifted 2 cm, far edge raised 15° toward the user to ease neck and reading. */
 export const SHEET_W = 0.64;
 export const SHEET_D = 0.4;
 export const SHEET_LIFT = 0.02;

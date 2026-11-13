@@ -20,6 +20,7 @@ export const STATUS_COPY: Record<StatusStage, { title: string; detail: string }>
   scoring: { title: 'Writing your scorecard', detail: 'Reading back through the conversation.' },
   done: { title: 'Your scorecard is ready', detail: '' },
   paused: { title: 'Paused', detail: 'Your interviewer will wait. Press Resume when you are ready.' },
+  hear: { title: 'Tap to hear your interviewer', detail: 'Your browser may be holding the sound back.' },
   error: { title: 'We lost the connection', detail: 'Trying again. Your progress is saved.' },
 };
 
@@ -30,6 +31,7 @@ export class StatusCard {
   private readonly detail;
   private readonly progress;
   private readonly resume: Button;
+  private readonly hear: Button;
 
   constructor(emit: (a: RoundAction) => void = () => {}) {
     this.group.name = 'status-card';
@@ -38,26 +40,29 @@ export class StatusCard {
     this.detail = text('', { fontSize: DETAIL_FONT_CM, color: INK_MUTED, textAlign: 'center' });
     this.progress = bar(STATUS_WIDTH_CM - 8);
     this.resume = button('Resume', { width: 16, height: 5, primary: true, onClick: () => emit('resume') });
-    root.add(this.title, this.detail, this.progress.root, this.resume.root);
+    this.hear = button('Tap to hear', { width: 18, height: 5, primary: true, onClick: () => emit('hear') });
+    root.add(this.title, this.detail, this.progress.root, this.resume.root, this.hear.root);
     this.doc = new UIKitDocument(root);
     this.group.add(this.doc);
     this.group.visible = false;
     show(this.resume.root, false);
+    show(this.hear.root, false);
   }
 
   /** Shows a stage; pct (0..1) shows the progress bar, null hides it. Paused shows the Resume button. */
   set(stage: StatusStage, pct: number | null = null): void {
     const copy = STATUS_COPY[stage];
-    this.showText(copy.title, copy.detail, pct, stage === 'paused');
+    this.showText(copy.title, copy.detail, pct, stage === 'paused' ? 'resume' : stage === 'hear' ? 'hear' : null);
   }
 
-  showText(title: string, detail = '', pct: number | null = null, withResume = false): void {
+  showText(title: string, detail = '', pct: number | null = null, action: 'resume' | 'hear' | null = null): void {
     set(this.title, { text: title });
     set(this.detail, { text: detail });
     show(this.detail, detail.length > 0);
     show(this.progress.root, pct !== null);
     if (pct !== null) this.progress.set(pct);
-    show(this.resume.root, withResume);
+    show(this.resume.root, action === 'resume');
+    show(this.hear.root, action === 'hear');
     this.group.visible = true;
   }
 

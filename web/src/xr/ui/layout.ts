@@ -1,4 +1,4 @@
-// Where the panels go. In the headset they are placed in the desk frame (research/06 §2.1): the round bar below the
+// Where the panels go. In the headset they are placed in the desk frame: the round bar below the
 // sheet's near-right edge tilted 35° toward the user, the brief card on the sheet's top-left corner, the status and
 // summary cards standing at eye level across the desk, captions low between the sheet and the interviewer.
 // In the 2D preview the chrome rides with the camera like a HUD so the mouse can reach it.

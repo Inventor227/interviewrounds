@@ -70,6 +70,7 @@ export class Room {
   private shadows: Entity[] = [];
   private seats: SeatPose[] = [];
   private deskPose: DeskPose | null = null;
+  private wallboardWanted = true;
   private readonly slabMat = new MeshStandardMaterial({ color: SLAB_COLOR, roughness: 0.62, metalness: 0, vertexColors: true, transparent: true });
   private readonly chairMat = new MeshStandardMaterial({ color: 0x2e3135, roughness: 0.85, metalness: 0.05 });
   private readonly occluderMat = new MeshBasicMaterial({ colorWrite: false });
@@ -99,7 +100,7 @@ export class Room {
     return this.seats.map((s) => ({ ...s, pos: { ...s.pos }, eye: { ...s.eye } }));
   }
 
-  /** Attach the board canvas (Task 15 mirrors the sheet into it); null restores the clean surface. */
+  /** Attach the board canvas (the board mirrors the sheet into it); null restores the clean surface. */
   wallboardTexture(tex: Texture | null): void {
     this.wallboard.setTexture(tex);
   }
@@ -159,7 +160,7 @@ export class Room {
     this.light.target.position.set(lead.eye.x, lead.eye.y - 0.3, lead.eye.z);
 
     this.wallboard.place(wallboardPose(desk));
-    this.wallboard.group.visible = true;
+    this.wallboard.group.visible = this.wallboardWanted;
 
     const sp = sheetPoint(desk, 0, 0, 0);
     this.sheetAnchor.position.set(sp.x, sp.y, sp.z);
@@ -197,8 +198,24 @@ export class Room {
     this.shadows = [];
   }
 
+  /** Wall board on or off (e.g. off outside board rounds, where it would only float behind the panel). */
+  setWallboardVisible(on: boolean): void {
+    this.wallboardWanted = on;
+    this.wallboard.group.visible = on && this.deskPose !== null;
+  }
+
+  /** Frees everything the room made: meshes, materials, the sheet and wall board textures, the key light. */
   dispose(): void {
     this.clear();
+    this.sheet.geometry.dispose();
+    this.sheet.material.map?.dispose();
+    this.sheet.material.dispose();
+    this.wallboard.dispose();
+    this.slabMat.dispose();
+    this.chairMat.dispose();
+    this.occluderMat.dispose();
+    this.light.dispose();
+    this.root.removeFromParent();
     this.rootEntity.destroy();
   }
 }

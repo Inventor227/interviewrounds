@@ -1,9 +1,10 @@
-// Round bar: timer, Mute, Pause, captions and End (hold 1 s, a ring fills). Lies below the sheet's near-right edge,
-// tilted toward the user, in reach of a poke (research/06 §2.1 and §4).
+// Round bar: timer, Mute, Pause, captions and End (hold 1 s until the ring fills, then lift). Lies below the sheet's
+// near-right edge, tilted toward the user, in easy poke reach and in the lower half of view.
 
 import { UIKitDocument } from '@iwsdk/core';
 import { Group } from 'three';
 import { AMBER, button, clock, holdRing, INK, INK_MUTED, panel, set, text, TEXT_SECONDARY, type Button } from './style';
+import { HoldToConfirm } from './hold';
 import type { RoundAction, RoundUIState } from './types';
 
 const PAD = 1.2;
@@ -27,11 +28,14 @@ export class RoundBar {
   private readonly ring;
   private state: RoundUIState = { status: 'created', elapsed_s: 0, total_s: 0, muted: false, captions: false };
   private shownSecond = -1;
-  private holdStart: number | null = null;
-  private holdFired = false;
+  private readonly hold = new HoldToConfirm(END_HOLD_MS);
   private now = 0;
 
-  constructor(private readonly emit: (a: RoundAction) => void) {
+  /** emit: an action (plays the press sound); press: the sound alone, for the start of the End hold. */
+  constructor(
+    private readonly emit: (a: RoundAction) => void,
+    private readonly press: () => void = () => {},
+  ) {
     this.group.name = 'round-bar';
     const root = panel({ flexDirection: 'row', alignItems: 'center', gap: GAP, padding: PAD, width: ROUND_BAR_WIDTH_CM, borderRadius: 1.8 });
     const tbox = panel({ backgroundColor: 'transparent', padding: 0, gap: 0.1, width: W.timer, alignItems: 'flex-start' });
@@ -44,7 +48,7 @@ export class RoundBar {
     this.end = button('End', {
       width: W.end,
       onDown: () => this.beginHold(),
-      onUp: () => this.cancelHold(),
+      onUp: () => this.endHold(),
     });
     root.add(tbox, this.mute.root, this.pause.root, this.cc.root, this.end.root);
     this.doc = new UIKitDocument(root);
@@ -73,25 +77,21 @@ export class RoundBar {
       this.state.elapsed_s += dt;
       this.render(false);
     }
-    if (this.holdStart !== null && !this.holdFired) {
-      const p = Math.min(1, (nowMs - this.holdStart) / END_HOLD_MS);
-      this.ring.set(p);
-      if (p >= 1) {
-        this.holdFired = true;
-        this.emit('end');
-      }
-    }
+    if (this.hold.holding) this.ring.set(Math.max(0.001, this.hold.progress(nowMs)));
   }
 
   private beginHold(): void {
-    this.holdStart = this.now || performance.now();
-    this.holdFired = false;
+    this.hold.down(this.now || performance.now());
     this.ring.set(0.001);
+    this.press();
   }
 
-  private cancelHold(): void {
-    this.holdStart = null;
+  /** Lift (pointer up or leave): End fires only when the ring was already full. */
+  private endHold(): void {
+    if (!this.hold.holding) return;
+    const fire = this.hold.up(this.now || performance.now());
     this.ring.set(0);
+    if (fire) this.emit('end');
   }
 
   private render(all: boolean): void {

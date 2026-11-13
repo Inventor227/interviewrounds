@@ -2,7 +2,7 @@
 
 import type { SessionStatus } from '../../shared/types';
 
-export type RoundAction = 'mute' | 'unmute' | 'pause' | 'resume' | 'end' | 'retry' | 'report' | 'captions';
+export type RoundAction = 'mute' | 'unmute' | 'pause' | 'resume' | 'end' | 'hear' | 'retry' | 'report' | 'captions';
 
 export interface RoundUIState {
   status: SessionStatus;
@@ -30,4 +30,4 @@ export interface SummaryView {
   canRetry: boolean;
 }
 
-export type StatusStage = 'placing' | 'connecting' | 'metrics' | 'scoring' | 'done' | 'paused' | 'error';
+export type StatusStage = 'placing' | 'connecting' | 'metrics' | 'scoring' | 'done' | 'paused' | 'hear' | 'error';

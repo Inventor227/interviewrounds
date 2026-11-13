@@ -39,7 +39,8 @@ export class RoundUI {
 
   constructor(private readonly sounds?: Sounds) {
     const emit = (a: RoundAction) => this.emit(a);
-    this.roundBar = new RoundBar(emit);
+    this.roundBar = new RoundBar(emit, () => this.sounds?.click());
+    this.brief.onPress(() => this.sounds?.click());
     this.status = new StatusCard(emit);
     this.summary = new SummaryCard(emit);
     this.setChromeVisible(false);
@@ -82,6 +83,12 @@ export class RoundUI {
     }
     this.status.set(stage, pct ?? null);
     if (stage === 'metrics' || stage === 'scoring') this.setChromeVisible(false);
+  }
+
+  /** A plain status line from the controller (its own copy), with optional progress. */
+  showStatusText(text: string, pct?: number | null): void {
+    this.lastStage = null;
+    this.status.showText(text, '', pct ?? null);
   }
 
   hideStatus(): void {
@@ -152,6 +159,7 @@ export class RoundUI {
   /** dt seconds. */
   update(dt: number, nowMs: number): void {
     this.roundBar.tick(dt, nowMs);
+    this.captions.tick(nowMs);
     this.hint.tick(nowMs);
   }
 

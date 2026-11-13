@@ -44,6 +44,14 @@ export class Wallboard {
     this.group.rotation.set(0, f.yaw, 0);
   }
 
+  /** Frees the frame and surface (not an attached board texture: its owner disposes it). */
+  dispose(): void {
+    this.surface.geometry.dispose();
+    this.surface.material.dispose();
+    this.frame.geometry.dispose();
+    (this.frame.material as { dispose(): void }).dispose();
+  }
+
   /** Shows the board canvas (or the clean surface for null). The caller sets tex.needsUpdate when it redraws. */
   setTexture(tex: Texture | null): void {
     const m = this.surface.material;
