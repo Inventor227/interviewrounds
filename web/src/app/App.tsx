@@ -20,6 +20,7 @@ export const ROUTES = {
 
 // Dev only: the board with a mouse (web/src/board), for development and screenshots.
 const DevBoard = import.meta.env.DEV ? lazy(() => import('../board/DevBoard')) : null;
+const DevSheet = import.meta.env.DEV ? lazy(() => import('../board/DevSheet')) : null;
 
 const ROLE_NAMES: Record<string, string> = { sde: 'Software Engineer', pm: 'Product Manager' };
 
@@ -214,6 +215,7 @@ export function App() {
             <Route path={ROUTES.settings} component={SettingsPage} />
             <Route path={ROUTES.pricing} component={Pricing} />
             {DevBoard ? [<Route key="dev-board" path="/dev/board" component={DevBoard} />] : []}
+            {DevSheet ? [<Route key="dev-sheet" path="/dev/sheet" component={DevSheet} />] : []}
             <Route default component={NotFound} />
           </Router>
         </main>
