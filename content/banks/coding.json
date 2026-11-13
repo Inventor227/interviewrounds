@@ -1,0 +1,626 @@
+{
+  "id": "bank.coding",
+  "round_type": "coding",
+  "title": "Coding problems",
+  "cards": [
+    {
+      "id": "coding.two_per_trip",
+      "round_type": "coding",
+      "title": "Two per trip",
+      "levels": [
+        "junior",
+        "mid",
+        "senior"
+      ],
+      "lengths": [
+        "short",
+        "full"
+      ],
+      "tags": [
+        "greedy",
+        "two pointers",
+        "sorting"
+      ],
+      "prompt": "A courier bike can carry at most two packages per trip, and their combined weight can't go over a limit W. Given the package weights, what's the fewest trips needed to deliver all of them?",
+      "brief_lines": [
+        "Packages have weights",
+        "At most two packages per trip",
+        "Combined weight per trip at most W",
+        "Return the fewest trips"
+      ],
+      "facts_if_asked": [
+        "Every single package weighs at most W.",
+        "Weights are positive integers.",
+        "Up to one hundred thousand packages.",
+        "Example: weights 3, 2, 2, 1 with W of 3 needs three trips.",
+        "The input list may be reordered."
+      ],
+      "follow_ups": [
+        "Why does pairing the heaviest with the lightest work?",
+        "What's the time and space cost?",
+        "What if every package is heavier than half of W?"
+      ],
+      "twist": "Now the bike can carry up to three packages per trip, same weight limit. What changes, and why is it harder?",
+      "hints": [
+        "What are you weighing right now?",
+        "Which package is hardest to place, and who could it share a trip with?",
+        "What if the packages were sorted by weight?",
+        "Try pairing the heaviest remaining package with the lightest remaining one, if they fit together."
+      ],
+      "strong_answer_covers": [
+        "Clarifies that no single package is over W",
+        "Sorts, then two pointers pairing heaviest with lightest",
+        "O of n log n time, constant extra space beyond the sort",
+        "A short exchange argument for why the pairing is safe",
+        "Tests: all heavy, all light, a single package, exact fits at W",
+        "Twist: sees it is a bin packing style problem, offers a reasonable heuristic and says it may not be optimal"
+      ],
+      "red_flags": [
+        "Tries every pairing with no plan to prune",
+        "Claims the three per trip version stays greedy optimal without an argument"
+      ],
+      "reference_solution": {
+        "language": "python",
+        "time": "O(n log n)",
+        "space": "O(1)",
+        "lines": [
+          {
+            "indent": 0,
+            "text": "def min_trips(weights, limit):"
+          },
+          {
+            "indent": 1,
+            "text": "weights.sort()"
+          },
+          {
+            "indent": 1,
+            "text": "lo, hi = 0, len(weights) - 1"
+          },
+          {
+            "indent": 1,
+            "text": "trips = 0"
+          },
+          {
+            "indent": 1,
+            "text": "while lo <= hi:"
+          },
+          {
+            "indent": 2,
+            "text": "if weights[lo] + weights[hi] <= limit:"
+          },
+          {
+            "indent": 3,
+            "text": "lo += 1"
+          },
+          {
+            "indent": 2,
+            "text": "hi -= 1"
+          },
+          {
+            "indent": 2,
+            "text": "trips += 1"
+          },
+          {
+            "indent": 1,
+            "text": "return trips"
+          }
+        ],
+        "distractors": [
+          {
+            "indent": 2,
+            "text": "if weights[lo] + weights[hi] < limit:"
+          },
+          {
+            "indent": 1,
+            "text": "weights.sort(reverse=True)"
+          }
+        ]
+      }
+    },
+    {
+      "id": "coding.quiet_logger",
+      "round_type": "coding",
+      "title": "Quiet logger",
+      "levels": [
+        "junior",
+        "mid"
+      ],
+      "lengths": [
+        "short",
+        "full"
+      ],
+      "tags": [
+        "hash map",
+        "design",
+        "streams"
+      ],
+      "prompt": "A service sends you log lines, each with a timestamp in seconds and a message. Print a message only if the same text wasn't printed in the last ten seconds. Write the function that decides whether to print.",
+      "brief_lines": [
+        "Input: timestamp in seconds, message text",
+        "Print unless the same text printed in the last 10 seconds",
+        "Return true to print, false to drop"
+      ],
+      "facts_if_asked": [
+        "Timestamps arrive in non decreasing order.",
+        "A message printed at second 1 may print again at second 11, not at second 10.",
+        "Messages are short strings, compared exactly.",
+        "Many different messages, millions per day."
+      ],
+      "follow_ups": [
+        "Memory grows forever. How would you bound it?",
+        "What if timestamps can arrive slightly out of order?",
+        "What's the cost per call?"
+      ],
+      "twist": "Now many threads call this at once. What breaks, and how would you fix it?",
+      "hints": [
+        "Talk me through what you need to remember between calls.",
+        "What do you need to look up when a message arrives?",
+        "Is there a structure that gives you constant time lookup by text?",
+        "What if you kept a map from message text to the last time you printed it?"
+      ],
+      "strong_answer_covers": [
+        "Map from message text to last printed time",
+        "Constant time per call",
+        "Updates the time only when it prints",
+        "Bounds memory with a queue of time and text, or periodic cleanup of entries older than ten seconds",
+        "Concurrency: a lock, or sharding the map by a hash of the message",
+        "Tests: exactly ten seconds apart, nine seconds apart, interleaved messages"
+      ],
+      "red_flags": [
+        "Updates the stored time even when the message is dropped, without noticing it changes behaviour",
+        "Scans the whole history on every call"
+      ],
+      "reference_solution": {
+        "language": "python",
+        "time": "O(1) per call",
+        "space": "O(m) for m distinct messages",
+        "lines": [
+          {
+            "indent": 0,
+            "text": "class QuietLogger:"
+          },
+          {
+            "indent": 1,
+            "text": "def __init__(self):"
+          },
+          {
+            "indent": 2,
+            "text": "self.last_printed = {}"
+          },
+          {
+            "indent": 1,
+            "text": "def should_print(self, timestamp, message):"
+          },
+          {
+            "indent": 2,
+            "text": "last = self.last_printed.get(message)"
+          },
+          {
+            "indent": 2,
+            "text": "if last is not None and timestamp - last < 10:"
+          },
+          {
+            "indent": 3,
+            "text": "return False"
+          },
+          {
+            "indent": 2,
+            "text": "self.last_printed[message] = timestamp"
+          },
+          {
+            "indent": 2,
+            "text": "return True"
+          }
+        ],
+        "distractors": [
+          {
+            "indent": 2,
+            "text": "if last is not None and timestamp - last <= 10:"
+          },
+          {
+            "indent": 2,
+            "text": "self.last_printed.clear()"
+          }
+        ]
+      }
+    },
+    {
+      "id": "coding.calm_stretch",
+      "round_type": "coding",
+      "title": "Calm stretch",
+      "levels": [
+        "mid",
+        "senior",
+        "staff"
+      ],
+      "lengths": [
+        "full"
+      ],
+      "tags": [
+        "sliding window",
+        "monotonic deque"
+      ],
+      "prompt": "You have daily sensor readings as a list of numbers. Find the length of the longest run of consecutive days where the highest and lowest reading in that run differ by at most K.",
+      "brief_lines": [
+        "Daily readings, a list of numbers",
+        "Longest run of consecutive days",
+        "Max minus min in the run at most K",
+        "Return the length"
+      ],
+      "facts_if_asked": [
+        "Up to one hundred thousand readings.",
+        "Readings are integers, can be negative.",
+        "K is zero or more.",
+        "Example: readings 8, 2, 4, 7 with K of 4 gives 2, from 2 and 4.",
+        "An empty list returns 0."
+      ],
+      "follow_ups": [
+        "What does brute force cost?",
+        "Why does each index enter and leave the window at most once?",
+        "How do you know the current max and min quickly?"
+      ],
+      "twist": "Now the readings arrive as a stream and you must report the best length so far after each reading. What changes?",
+      "hints": [
+        "What are you weighing right now?",
+        "If a window is valid, what happens when you extend it by one day?",
+        "Can you keep the window's max and min without rescanning it?",
+        "What if you kept two deques of indices, one with decreasing values for the max and one increasing for the min?"
+      ],
+      "strong_answer_covers": [
+        "Brute force is quadratic or worse and says why",
+        "Sliding window with two pointers",
+        "Max and min via two monotonic deques for linear time, or a sorted structure for n log n",
+        "Argues each index is added and removed once",
+        "Tests: K of zero, all equal, strictly increasing, a single reading",
+        "Stream twist: same window works online, best so far is a running max"
+      ],
+      "red_flags": [
+        "Recomputes max and min by scanning the window on every step and calls it linear"
+      ],
+      "reference_solution": {
+        "language": "python",
+        "time": "O(n)",
+        "space": "O(n)",
+        "lines": [
+          {
+            "indent": 0,
+            "text": "from collections import deque"
+          },
+          {
+            "indent": 0,
+            "text": "def longest_calm(readings, k):"
+          },
+          {
+            "indent": 1,
+            "text": "lows, highs = deque(), deque()"
+          },
+          {
+            "indent": 1,
+            "text": "left = best = 0"
+          },
+          {
+            "indent": 1,
+            "text": "for right, value in enumerate(readings):"
+          },
+          {
+            "indent": 2,
+            "text": "while lows and readings[lows[-1]] >= value:"
+          },
+          {
+            "indent": 3,
+            "text": "lows.pop()"
+          },
+          {
+            "indent": 2,
+            "text": "lows.append(right)"
+          },
+          {
+            "indent": 2,
+            "text": "while highs and readings[highs[-1]] <= value:"
+          },
+          {
+            "indent": 3,
+            "text": "highs.pop()"
+          },
+          {
+            "indent": 2,
+            "text": "highs.append(right)"
+          },
+          {
+            "indent": 2,
+            "text": "while readings[highs[0]] - readings[lows[0]] > k:"
+          },
+          {
+            "indent": 3,
+            "text": "left += 1"
+          },
+          {
+            "indent": 3,
+            "text": "if lows[0] < left:"
+          },
+          {
+            "indent": 4,
+            "text": "lows.popleft()"
+          },
+          {
+            "indent": 3,
+            "text": "if highs[0] < left:"
+          },
+          {
+            "indent": 4,
+            "text": "highs.popleft()"
+          },
+          {
+            "indent": 2,
+            "text": "best = max(best, right - left + 1)"
+          },
+          {
+            "indent": 1,
+            "text": "return best"
+          }
+        ],
+        "distractors": [
+          {
+            "indent": 2,
+            "text": "while readings[highs[0]] - readings[lows[0]] >= k:"
+          },
+          {
+            "indent": 2,
+            "text": "best = max(best, right - left)"
+          }
+        ]
+      }
+    },
+    {
+      "id": "coding.unlock_order",
+      "round_type": "coding",
+      "title": "Unlock order",
+      "levels": [
+        "mid",
+        "senior"
+      ],
+      "lengths": [
+        "full"
+      ],
+      "tags": [
+        "graph",
+        "topological sort",
+        "cycle detection"
+      ],
+      "prompt": "An online course has modules numbered zero to n minus one. Some modules must be finished before others unlock, given as pairs: before, after. Return an order to take every module that respects all of these, or say it's impossible.",
+      "brief_lines": [
+        "Modules 0 to n minus 1",
+        "Pairs: before, after",
+        "Return a valid order, or none if impossible"
+      ],
+      "facts_if_asked": [
+        "Up to ten thousand modules and fifty thousand pairs.",
+        "Any valid order is fine.",
+        "Pairs never repeat.",
+        "A module that depends on itself makes it impossible.",
+        "Example: n of 3, pairs 0 before 1 and 1 before 2 gives 0, 1, 2."
+      ],
+      "follow_ups": [
+        "How do you detect that it's impossible?",
+        "Could you tell the learner which modules form the loop?",
+        "Time and space?"
+      ],
+      "twist": "Modules with no dependency between them can be taken in the same term. What's the fewest terms needed?",
+      "hints": [
+        "Talk me through how you'd model the modules and pairs.",
+        "Which modules can you take right now, at the very start?",
+        "What happens to the other modules when you finish one?",
+        "What if you kept a count of unmet prerequisites per module and a queue of modules whose count is zero?"
+      ],
+      "strong_answer_covers": [
+        "Models it as a directed graph",
+        "Kahn's algorithm with in-degree counts, or DFS with three colours",
+        "Impossible exactly when not every module gets placed, meaning a cycle",
+        "Linear in modules plus pairs",
+        "Finding the loop: DFS with the recursion stack, or the leftover nodes",
+        "Twist: process the queue level by level; the number of levels is the fewest terms"
+      ],
+      "red_flags": [
+        "Repeatedly scans all modules for ready ones with no bound on the cost",
+        "Claims a cycle cannot happen without asking"
+      ],
+      "reference_solution": {
+        "language": "python",
+        "time": "O(V + E)",
+        "space": "O(V + E)",
+        "lines": [
+          {
+            "indent": 0,
+            "text": "from collections import deque"
+          },
+          {
+            "indent": 0,
+            "text": "def unlock_order(n, prereqs):"
+          },
+          {
+            "indent": 1,
+            "text": "graph = [[] for _ in range(n)]"
+          },
+          {
+            "indent": 1,
+            "text": "indegree = [0] * n"
+          },
+          {
+            "indent": 1,
+            "text": "for before, after in prereqs:"
+          },
+          {
+            "indent": 2,
+            "text": "graph[before].append(after)"
+          },
+          {
+            "indent": 2,
+            "text": "indegree[after] += 1"
+          },
+          {
+            "indent": 1,
+            "text": "ready = deque(m for m in range(n) if indegree[m] == 0)"
+          },
+          {
+            "indent": 1,
+            "text": "order = []"
+          },
+          {
+            "indent": 1,
+            "text": "while ready:"
+          },
+          {
+            "indent": 2,
+            "text": "module = ready.popleft()"
+          },
+          {
+            "indent": 2,
+            "text": "order.append(module)"
+          },
+          {
+            "indent": 2,
+            "text": "for nxt in graph[module]:"
+          },
+          {
+            "indent": 3,
+            "text": "indegree[nxt] -= 1"
+          },
+          {
+            "indent": 3,
+            "text": "if indegree[nxt] == 0:"
+          },
+          {
+            "indent": 4,
+            "text": "ready.append(nxt)"
+          },
+          {
+            "indent": 1,
+            "text": "return order if len(order) == n else None"
+          }
+        ],
+        "distractors": [
+          {
+            "indent": 2,
+            "text": "indegree[before] += 1"
+          },
+          {
+            "indent": 1,
+            "text": "return order"
+          }
+        ]
+      }
+    },
+    {
+      "id": "coding.prefix_picks",
+      "round_type": "coding",
+      "title": "Prefix picks",
+      "levels": [
+        "junior",
+        "mid",
+        "senior"
+      ],
+      "lengths": [
+        "short",
+        "full"
+      ],
+      "tags": [
+        "sorting",
+        "binary search",
+        "trie"
+      ],
+      "prompt": "A shop has a list of product names. As a user types a search word one letter at a time, after each letter show up to three products that start with what's typed so far, alphabetically first. Return the suggestions for every letter.",
+      "brief_lines": [
+        "List of product names",
+        "User types a word letter by letter",
+        "After each letter: up to 3 matches by prefix",
+        "Alphabetical order"
+      ],
+      "facts_if_asked": [
+        "Names are lowercase letters only.",
+        "Up to ten thousand products, names up to thirty letters.",
+        "If nothing matches, return an empty list for that letter.",
+        "Example: products bag, bat, bath, cat; typing ba gives bag, bat, bath after both letters."
+      ],
+      "follow_ups": [
+        "What does each keystroke cost?",
+        "What if there are a million products and many users typing at once?",
+        "Where would you do the sorting?"
+      ],
+      "twist": "Now rank suggestions by popularity instead of alphabetically. What do you store differently?",
+      "hints": [
+        "What are you weighing right now?",
+        "If the list were sorted, where would the matches for a prefix sit?",
+        "How can you jump to the first name that is at least the prefix?",
+        "What if you sorted once, then binary searched for the prefix after each letter and took the next three names?"
+      ],
+      "strong_answer_covers": [
+        "Sort once up front",
+        "Binary search for the first name at least the prefix, then check up to three",
+        "Per keystroke cost log n plus a small constant",
+        "Alternative: a trie with the top three stored at each node; trades memory for query time",
+        "Tests: no matches, fewer than three matches, a product equal to the prefix",
+        "Twist: store top three by popularity per trie node, update on popularity changes"
+      ],
+      "red_flags": [
+        "Rescans every product on every keystroke at scale without noticing the cost"
+      ],
+      "reference_solution": {
+        "language": "python",
+        "time": "O(n log n) to sort, then O(log n) per letter",
+        "space": "O(1) beyond the output",
+        "lines": [
+          {
+            "indent": 0,
+            "text": "from bisect import bisect_left"
+          },
+          {
+            "indent": 0,
+            "text": "def suggestions(products, typed):"
+          },
+          {
+            "indent": 1,
+            "text": "products.sort()"
+          },
+          {
+            "indent": 1,
+            "text": "result = []"
+          },
+          {
+            "indent": 1,
+            "text": "prefix = \"\""
+          },
+          {
+            "indent": 1,
+            "text": "for ch in typed:"
+          },
+          {
+            "indent": 2,
+            "text": "prefix += ch"
+          },
+          {
+            "indent": 2,
+            "text": "i = bisect_left(products, prefix)"
+          },
+          {
+            "indent": 2,
+            "text": "result.append([p for p in products[i:i + 3] if p.startswith(prefix)])"
+          },
+          {
+            "indent": 1,
+            "text": "return result"
+          }
+        ],
+        "distractors": [
+          {
+            "indent": 2,
+            "text": "i = bisect_left(products, ch)"
+          },
+          {
+            "indent": 2,
+            "text": "result.append(products[i:i + 3])"
+          }
+        ]
+      }
+    }
+  ]
+}

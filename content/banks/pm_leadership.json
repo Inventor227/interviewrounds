@@ -1,0 +1,189 @@
+{
+  "id": "bank.pm_leadership",
+  "round_type": "pm_leadership",
+  "title": "Leadership questions",
+  "cards": [
+    {
+      "id": "pm_leadership.said_no",
+      "round_type": "pm_leadership",
+      "title": "Saying no to a senior stakeholder",
+      "levels": [
+        "junior",
+        "mid",
+        "senior",
+        "staff"
+      ],
+      "lengths": [
+        "short",
+        "full"
+      ],
+      "targets": [
+        "influence",
+        "communication"
+      ],
+      "prompt": "Tell me about a time you said no to a senior stakeholder who wanted something on your roadmap.",
+      "follow_ups": [
+        "What did they want, and why did it matter to them?",
+        "What did you base the no on?",
+        "What did you offer instead?",
+        "How did they react, and what happened next?",
+        "Would you make the same call today?"
+      ],
+      "strong_answer_covers": [
+        "Grounds the no in goals, users and data",
+        "Offers an alternative path or timing",
+        "Keeps the relationship",
+        "Clear outcome"
+      ],
+      "red_flags": [
+        "Said yes to everything, or no with no reason",
+        "Escalated first instead of talking"
+      ]
+    },
+    {
+      "id": "pm_leadership.influence_engineering",
+      "round_type": "pm_leadership",
+      "title": "Moving a team you don't manage",
+      "levels": [
+        "junior",
+        "mid",
+        "senior",
+        "staff"
+      ],
+      "lengths": [
+        "short",
+        "full"
+      ],
+      "targets": [
+        "influence",
+        "ownership"
+      ],
+      "prompt": "Tell me about a time you needed an engineering team that didn't report to you to commit to something they didn't want to do.",
+      "follow_ups": [
+        "Why didn't they want to?",
+        "What did you change in the plan because of their concerns?",
+        "What did you give up to get agreement?",
+        "What was the result?"
+      ],
+      "strong_answer_covers": [
+        "Understands the team's incentives and constraints",
+        "Changes the plan based on their input",
+        "Agreement built on shared goals, not authority",
+        "A measured result"
+      ],
+      "red_flags": [
+        "'I told them to'",
+        "Went to their manager first"
+      ]
+    },
+    {
+      "id": "pm_leadership.failed_launch",
+      "round_type": "pm_leadership",
+      "title": "A launch that missed",
+      "levels": [
+        "junior",
+        "mid",
+        "senior",
+        "staff"
+      ],
+      "lengths": [
+        "short",
+        "full"
+      ],
+      "targets": [
+        "ownership",
+        "communication"
+      ],
+      "prompt": "Tell me about a product or feature you launched that missed its goal.",
+      "follow_ups": [
+        "What was the goal, and how far off was it?",
+        "When did you first suspect it would miss?",
+        "What did you do about it?",
+        "What did you tell leadership, and when?",
+        "What do you do differently now?"
+      ],
+      "strong_answer_covers": [
+        "A clear, measured goal and the gap",
+        "Owns the decision, not just the execution",
+        "Acted on the miss: iterated, rolled back or stopped",
+        "A lesson visible in later work"
+      ],
+      "red_flags": [
+        "Blames engineering, design or marketing",
+        "No metric, so no clear miss"
+      ]
+    },
+    {
+      "id": "pm_leadership.incomplete_data",
+      "round_type": "pm_leadership",
+      "title": "Deciding without enough data",
+      "levels": [
+        "junior",
+        "mid",
+        "senior",
+        "staff"
+      ],
+      "lengths": [
+        "short",
+        "full"
+      ],
+      "targets": [
+        "ownership",
+        "scope"
+      ],
+      "prompt": "Tell me about a decision you had to make before you had the data you wanted.",
+      "follow_ups": [
+        "What data did you have, and what was missing?",
+        "What made waiting worse than deciding?",
+        "How did you limit the risk of being wrong?",
+        "How did it turn out?"
+      ],
+      "strong_answer_covers": [
+        "Names the missing data and why waiting cost more",
+        "Makes the call with stated assumptions",
+        "Builds in a way to learn and reverse",
+        "Honest outcome"
+      ],
+      "red_flags": [
+        "Waited for certainty",
+        "Pretends the data was clear"
+      ]
+    },
+    {
+      "id": "pm_leadership.design_eng_conflict",
+      "round_type": "pm_leadership",
+      "title": "Conflict between design and engineering",
+      "levels": [
+        "junior",
+        "mid",
+        "senior",
+        "staff"
+      ],
+      "lengths": [
+        "short",
+        "full"
+      ],
+      "targets": [
+        "influence",
+        "communication"
+      ],
+      "prompt": "Tell me about a time design and engineering on your team disagreed, and you had to help resolve it.",
+      "follow_ups": [
+        "What did each side want, and why?",
+        "What did you do that a manager couldn't have?",
+        "How did you decide?",
+        "How did both sides feel afterwards?"
+      ],
+      "strong_answer_covers": [
+        "States both sides fairly",
+        "Reframes around the user and the goal",
+        "Clear decision and the reason for it",
+        "Relationships intact afterwards"
+      ],
+      "red_flags": [
+        "Picked the louder side",
+        "Took no position at all"
+      ]
+    }
+  ]
+}

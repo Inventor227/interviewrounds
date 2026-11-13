@@ -1,0 +1,159 @@
+{
+  "id": "bank.meeting",
+  "round_type": "meeting",
+  "title": "Meeting scenarios",
+  "cards": [
+    {
+      "id": "meeting.investor_pitch",
+      "round_type": "meeting",
+      "title": "Seed pitch",
+      "levels": [
+        "n/a"
+      ],
+      "lengths": [
+        "short",
+        "full"
+      ],
+      "template_id": "investor_pitch",
+      "prompt": "Raise a one point five million dollar seed round for a scheduling tool for clinics with forty paying clinics.",
+      "strong_answer_covers": [
+        "The ask and the round size in the first minute",
+        "Why now and why this team, in one or two sentences each",
+        "Traction with numbers: paying clinics, growth, churn",
+        "Market size built bottom up, not a top down headline",
+        "Biggest risk named honestly with a plan",
+        "Use of funds tied to milestones",
+        "Asks for a concrete next step, such as a partner meeting"
+      ],
+      "red_flags": [
+        "Avoids the churn question",
+        "No clear ask at the end"
+      ]
+    },
+    {
+      "id": "meeting.client_proposal",
+      "round_type": "meeting",
+      "title": "Pilot proposal",
+      "levels": [
+        "n/a"
+      ],
+      "lengths": [
+        "short",
+        "full"
+      ],
+      "template_id": "client_proposal",
+      "prompt": "Sell a six month pilot of route planning software to a regional distributor that plans routes in spreadsheets today.",
+      "strong_answer_covers": [
+        "Leads with the problem in the client's numbers: fuel, overtime, late deliveries",
+        "Price framed against savings and payback",
+        "Implementation plan that protects drivers and dispatchers",
+        "Clear pilot success criteria agreed up front",
+        "Asks for a decision and a start date"
+      ],
+      "red_flags": [
+        "Argues the spreadsheet is bad instead of showing savings",
+        "Discounts the price without being asked"
+      ]
+    },
+    {
+      "id": "meeting.exec_update",
+      "round_type": "meeting",
+      "title": "Status update with an ask",
+      "levels": [
+        "n/a"
+      ],
+      "lengths": [
+        "short",
+        "full"
+      ],
+      "template_id": "exec_update",
+      "prompt": "Tell the VP the launch is slipping three weeks and ask for one more engineer.",
+      "strong_answer_covers": [
+        "Bottom line first: the slip, the cause, the ask",
+        "Options with trade-offs, not just the ask",
+        "Who loses the engineer and what that costs",
+        "A date with confidence level",
+        "Gets an explicit decision"
+      ],
+      "red_flags": [
+        "Buries the slip under detail",
+        "Surprises the VP with new bad news when probed"
+      ]
+    },
+    {
+      "id": "meeting.salary_negotiation",
+      "round_type": "meeting",
+      "title": "Offer negotiation",
+      "levels": [
+        "n/a"
+      ],
+      "lengths": [
+        "short",
+        "full"
+      ],
+      "template_id": "salary_negotiation",
+      "prompt": "Negotiate an offer of one hundred and twenty thousand base when market data says one hundred and thirty five.",
+      "strong_answer_covers": [
+        "Expresses enthusiasm and states a specific number with a reason",
+        "Uses market data and the competing process without bluffing",
+        "Asks about every lever: base, sign on, equity, level, start date",
+        "Stays above the walk away point",
+        "Agrees concrete next steps and a date"
+      ],
+      "red_flags": [
+        "Accepts the first counter immediately",
+        "Bluffs about an offer that does not exist"
+      ]
+    },
+    {
+      "id": "meeting.performance_review",
+      "round_type": "meeting",
+      "title": "Hard performance review",
+      "levels": [
+        "n/a"
+      ],
+      "lengths": [
+        "short",
+        "full"
+      ],
+      "template_id": "performance_review",
+      "prompt": "Tell a strong engineer that missed review deadlines are frustrating the team, and agree a plan.",
+      "strong_answer_covers": [
+        "States the gap early, with specific examples and impact",
+        "Separates the person from the behaviour",
+        "Listens and acknowledges their view",
+        "Agrees a concrete plan with a check in date",
+        "Keeps the relationship and their strengths in view"
+      ],
+      "red_flags": [
+        "Softens the message until it disappears",
+        "Argues instead of listening"
+      ]
+    },
+    {
+      "id": "meeting.project_kickoff",
+      "round_type": "meeting",
+      "title": "Project kickoff",
+      "levels": [
+        "n/a"
+      ],
+      "lengths": [
+        "short",
+        "full"
+      ],
+      "template_id": "project_kickoff",
+      "prompt": "Kick off an eight week project to rebuild new user onboarding across three teams.",
+      "strong_answer_covers": [
+        "States the goal and the success metric",
+        "Scope in and out, explicitly",
+        "Named owners for each workstream",
+        "Risks and how the timeline accounts for them",
+        "Agrees the first milestone and date"
+      ],
+      "red_flags": [
+        "Commits to a date the engineering lead has already doubted, with no change in scope",
+        "Leaves owners unnamed"
+      ]
+    }
+  ]
+}

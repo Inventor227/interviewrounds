@@ -1,0 +1,264 @@
+{
+  "id": "bank.system_design",
+  "round_type": "system_design",
+  "title": "System design problems",
+  "cards": [
+    {
+      "id": "system_design.ticket_drop",
+      "round_type": "system_design",
+      "title": "Concert ticket drop",
+      "levels": [
+        "mid",
+        "senior",
+        "staff"
+      ],
+      "lengths": [
+        "short",
+        "full"
+      ],
+      "tags": [
+        "contention",
+        "queues",
+        "consistency"
+      ],
+      "prompt": "Design the ticketing system for a stadium concert: sixty thousand seats, and about three million fans trying to buy the moment sales open at ten in the morning.",
+      "brief_lines": [
+        "60,000 seats, assigned seating",
+        "About 3 million fans at 10:00",
+        "Fans pick seats, then pay"
+      ],
+      "facts_if_asked": [
+        "A seat hold lasts eight minutes while the fan pays.",
+        "Payments go through a third party processor that answers in one to five seconds and calls back with the result.",
+        "At most four tickets per account.",
+        "Most fans arrive in the first two minutes; the event usually sells out in about twenty.",
+        "Overselling a seat is unacceptable; showing a seat that just went is tolerable.",
+        "Fans are mostly on phones."
+      ],
+      "follow_ups": [
+        "How do you guarantee two fans never get the same seat?",
+        "What does the fan see while they wait?",
+        "The payment callback arrives twice. What happens?",
+        "One event is a hot partition. How do you spread the load?",
+        "How do bots change your design?"
+      ],
+      "twist": "Sales open and the seat map service starts timing out. What degrades, and what do fans see?",
+      "strong_answer_covers": [
+        "Numbers: peak arrival rate, reads far above writes, sixty thousand writes total",
+        "Virtual waiting room or admission queue to meter fans into the purchase flow",
+        "Seat hold with an expiry and an atomic conditional write, so a seat moves from free to held only once",
+        "Idempotent payment callbacks keyed by an order id; release holds on failure or timeout",
+        "Seat map reads served from a cache or snapshot, separate from the write path",
+        "Load shedding and a fair queue order; bot defence at admission"
+      ],
+      "red_flags": [
+        "Relies on a cache as the source of truth for seat ownership",
+        "Says the database will handle three million users without any queue or numbers"
+      ]
+    },
+    {
+      "id": "system_design.food_trucks",
+      "round_type": "system_design",
+      "title": "Food truck finder",
+      "levels": [
+        "junior",
+        "mid",
+        "senior"
+      ],
+      "lengths": [
+        "short",
+        "full"
+      ],
+      "tags": [
+        "geo index",
+        "write heavy",
+        "freshness"
+      ],
+      "prompt": "Design an app that shows people the open food trucks near them. Each truck's phone reports its location every thirty seconds.",
+      "brief_lines": [
+        "Trucks report location every 30 seconds",
+        "Users see open trucks near them",
+        "Map and list views"
+      ],
+      "facts_if_asked": [
+        "About fifty thousand trucks across many cities, about twenty thousand active at lunch peak.",
+        "About two million daily users; peak of five thousand searches per second at lunch.",
+        "Near means within two kilometres by default.",
+        "A truck that stops reporting for two minutes should disappear.",
+        "Results should feel fresh within a minute."
+      ],
+      "follow_ups": [
+        "Which index do you use to find nearby trucks, and why?",
+        "A truck's phone goes offline. What does the user see?",
+        "Writes or reads: which one dominates, and does it matter?",
+        "How would you add menus and photos?"
+      ],
+      "twist": "A festival puts four hundred trucks in one square kilometre. What breaks first?",
+      "strong_answer_covers": [
+        "Write rate: about seven hundred location updates per second at peak, small payloads",
+        "Geohash or grid cells, or a spatial index, in an in memory store",
+        "Time to live on positions so stale trucks drop out",
+        "Write path separate from read path; reads served from the in memory index",
+        "Static data like menus in a database with a cache and object storage for photos",
+        "Hot cell handling: finer cells or a cap and ranking of results"
+      ],
+      "red_flags": [
+        "Scans every truck in a relational table for each search with no index"
+      ]
+    },
+    {
+      "id": "system_design.team_chat",
+      "round_type": "system_design",
+      "title": "Team chat with read receipts",
+      "levels": [
+        "mid",
+        "senior",
+        "staff"
+      ],
+      "lengths": [
+        "short",
+        "full"
+      ],
+      "tags": [
+        "real time",
+        "fan out",
+        "ordering"
+      ],
+      "prompt": "Design a team chat app with group conversations and read receipts that show who has read each message.",
+      "brief_lines": [
+        "Group conversations",
+        "Read receipts per message",
+        "Mobile and desktop"
+      ],
+      "facts_if_asked": [
+        "Ten million daily active users.",
+        "Groups of up to five hundred members; most are under twenty.",
+        "About forty messages per user per day.",
+        "Messages must arrive in the same order for everyone in a conversation.",
+        "Users who were offline get everything when they come back.",
+        "Delivery should feel instant, under a second when online."
+      ],
+      "follow_ups": [
+        "How does a message reach a user who is online right now?",
+        "How do you keep ordering within a conversation?",
+        "What do read receipts cost in a five hundred person group?",
+        "A gateway server dies with a hundred thousand open connections. What happens?"
+      ],
+      "twist": "Product wants to show read receipts per message for every group size. What does that cost, and what would you push back with?",
+      "strong_answer_covers": [
+        "Rough numbers: about four hundred million messages a day, a few thousand per second at peak",
+        "Persistent connections through a gateway layer, with a registry of who is connected where",
+        "Per conversation sequence numbers for ordering; store then forward",
+        "Offline delivery from storage by last seen sequence number",
+        "Receipts stored as a last read pointer per member, batched, instead of one record per message per reader",
+        "Reconnect storms handled with backoff and resume from the last sequence number"
+      ],
+      "red_flags": [
+        "Writes a receipt row for every message for every member of large groups without noticing the cost",
+        "No ordering story"
+      ]
+    },
+    {
+      "id": "system_design.notify_hub",
+      "round_type": "system_design",
+      "title": "Notification hub",
+      "levels": [
+        "mid",
+        "senior",
+        "staff"
+      ],
+      "lengths": [
+        "short",
+        "full"
+      ],
+      "tags": [
+        "queues",
+        "idempotency",
+        "third party providers"
+      ],
+      "prompt": "Design the notification system for a ride app: push, text message and email, respecting each user's preferences and quiet hours, and never sending duplicates.",
+      "brief_lines": [
+        "Push, SMS and email",
+        "User preferences and quiet hours",
+        "No duplicate notifications"
+      ],
+      "facts_if_asked": [
+        "About five hundred million notifications a day, peaks of twenty thousand per second during evening rush.",
+        "Some are urgent, like your driver is here; most are not, like receipts and promotions.",
+        "Urgent ones should arrive within five seconds.",
+        "SMS and email go through outside providers with rate limits and occasional outages.",
+        "Quiet hours never apply to urgent ride updates."
+      ],
+      "follow_ups": [
+        "How do you avoid sending the same notification twice?",
+        "An SMS provider goes down for ten minutes. What happens?",
+        "Where do preferences and quiet hours get checked?",
+        "How do you keep promotions from delaying urgent messages?"
+      ],
+      "twist": "Retries after a provider timeout are causing users to get duplicate texts. Walk me through the fix.",
+      "strong_answer_covers": [
+        "Event intake through a durable queue",
+        "Preference and quiet hours check before fan out to channels",
+        "Idempotency key per notification, recorded before or atomically with the send",
+        "Per channel workers with backoff, and failover to a second provider",
+        "Separate priority lanes so urgent traffic never waits behind bulk",
+        "Delivery status tracking and a dead letter path"
+      ],
+      "red_flags": [
+        "Calls providers synchronously from the ride service with no queue",
+        "Claims exactly once delivery from an outside provider with no idempotency story"
+      ]
+    },
+    {
+      "id": "system_design.quiz_leaderboard",
+      "round_type": "system_design",
+      "title": "Live quiz leaderboard",
+      "levels": [
+        "mid",
+        "senior",
+        "staff"
+      ],
+      "lengths": [
+        "short",
+        "full"
+      ],
+      "tags": [
+        "real time",
+        "ranking",
+        "burst traffic"
+      ],
+      "prompt": "Design the backend for a live quiz show in an app. Players answer each question within ten seconds, and after every question everyone sees the top hundred and their own rank.",
+      "brief_lines": [
+        "Live quiz, 10 seconds per answer",
+        "After each question: top 100 and your own rank",
+        "Players join on phones"
+      ],
+      "facts_if_asked": [
+        "About two million concurrent players at peak.",
+        "Fifteen questions per show, one show a day.",
+        "Answers after the ten second window don't count; the client clock can't be trusted.",
+        "Score is points per correct answer, faster answers earn more.",
+        "Ranks can be a few seconds late but must be right."
+      ],
+      "follow_ups": [
+        "Two million answers arrive in ten seconds. How do you take them in?",
+        "How do you compute each player's exact rank?",
+        "How do you stop late answers from players with tampered clocks?",
+        "What happens if the scoring service falls behind?"
+      ],
+      "twist": "Product wants ranks within friend groups as well as globally. What changes?",
+      "strong_answer_covers": [
+        "Burst math: about two hundred thousand answers per second for ten seconds",
+        "Accept answers into a queue or partitioned log, timestamped by the server",
+        "Score in parallel by partition, then merge",
+        "Sorted set or bucketed counts for ranks; exact rank via counts above a score",
+        "Top hundred cached and pushed; own rank fetched or pushed per player",
+        "Graceful degradation: delayed ranks rather than lost answers"
+      ],
+      "red_flags": [
+        "Sorts two million players from scratch on every request",
+        "Trusts the client's timestamp"
+      ]
+    }
+  ]
+}
