@@ -236,6 +236,22 @@ impl Chunks {
     }
 }
 
+/// After a tool name was cut from a reply: its text becomes exactly what was spoken, in one block, and there is no
+/// text block at all when nothing was spoken (the hold line is added later). Other blocks (thinking) stay.
+pub fn keep_spoken_text(reply: &mut Vec<ContentBlock>, spoken: &str) {
+    let said = spoken.trim().to_string();
+    let mut first = true;
+    reply.retain_mut(|b| match b {
+        ContentBlock::Text { text, .. } => {
+            let keep = first && !said.is_empty();
+            first = false;
+            *text = said.clone();
+            keep
+        }
+        _ => true,
+    });
+}
+
 /// Collects the assistant content of one model call, in order, for the append-only history.
 #[derive(Default)]
 struct Assembler {
@@ -334,7 +350,6 @@ impl Drop for TurnGuard {
             panelist_id: self.panelist.clone(),
             input: self.input.clone(),
             draft: self.draft.take(),
-            extra: Vec::new(),
             reply: vec![ContentBlock::text(self.said.trim().to_string())],
             spoken: self.spoken.trim().to_string(),
             tool_calls: Vec::new(),
@@ -392,7 +407,6 @@ fn turn_stream(
                     panelist_id,
                     input,
                     draft,
-                    extra: Vec::new(),
                     reply: vec![ContentBlock::text(opts.hold_line.clone())],
                     spoken: opts.hold_line.clone(),
                     tool_calls: Vec::new(),
@@ -490,7 +504,6 @@ fn turn_stream(
                         id,
                         TurnCommit {
                             draft,
-                            extra: Vec::new(),
                             reply: vec![ContentBlock::text(line.clone())],
                             spoken: spoken.clone(),
                             tool_calls: Vec::new(),
@@ -557,13 +570,21 @@ fn turn_stream(
                         Ok(Some(Ok(StreamEvent::TextDelta(t)))) => {
                             text_seen = true;
                             asm.text(&t);
-                            guard.said.push_str(&t);
                             let said = filter.push(&t);
                             if !said.is_empty() {
                                 if ttft_ms.is_none() {
                                     ttft_ms = Some(started.elapsed().as_millis() as u64);
                                 }
                                 guard.spoken.push_str(&said);
+                            }
+                            // What a dropped turn records: the raw text, unless a tool name was cut from it (then
+                            // only what was spoken, so the tool text never reaches the history).
+                            if filter.cut_tool_text() {
+                                guard.said = guard.spoken.clone();
+                            } else {
+                                guard.said.push_str(&t);
+                            }
+                            if !said.is_empty() {
                                 yield Ok(chunks.content(&said));
                             }
                         }
@@ -609,9 +630,10 @@ fn turn_stream(
             }
             retried = true;
             asm = Assembler::default();
-            // Nothing was spoken, so the filter starts over (a tool name cut from the first attempt must not
-            // silence the retry).
+            // Nothing was spoken, so the filter and the raw text start over (a tool name cut from the first attempt
+            // must neither silence the retry nor be recorded if the retry is dropped).
             filter = SpeechFilter::new();
+            guard.said.clear();
             retarget_for_retry(&mut req, &live.fast_model);
         }
 
@@ -630,18 +652,7 @@ fn turn_stream(
             tracing::warn!(session_id = %session_id, panelist_id = %panelist, "tool text cut from the reply");
             // A tool written out as text never enters the history: the model would see its own text-form call on
             // every later turn. The recorded text is what was spoken.
-            // Nothing spoken before the tool name: no text block at all (the hold line below becomes the reply).
-            let said = spoken.trim().to_string();
-            let mut first = true;
-            reply.retain_mut(|b| match b {
-                ContentBlock::Text { text, .. } => {
-                    let keep = first && !said.is_empty();
-                    first = false;
-                    *text = said.clone();
-                    keep
-                }
-                _ => true,
-            });
+            keep_spoken_text(&mut reply, &spoken);
         }
         let silent_failure = spoken.trim().is_empty() && last_error.is_some();
         if silent_failure {
@@ -683,7 +694,6 @@ fn turn_stream(
                     panelist_id: panelist.clone(),
                     input: input.clone(),
                     draft: Some(draft),
-                    extra: Vec::new(),
                     reply,
                     spoken: spoken.clone(),
                     tool_calls: Vec::new(),
@@ -695,7 +705,6 @@ fn turn_stream(
                     id,
                     TurnCommit {
                         draft,
-                        extra: Vec::new(),
                         reply,
                         spoken: spoken.clone(),
                         tool_calls: Vec::new(),

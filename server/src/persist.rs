@@ -228,8 +228,6 @@ pub struct LiveSnapshot {
     #[serde(default)]
     pub last_agent_text: HashMap<String, String>,
     #[serde(default)]
-    pub pending_tool_results: Vec<String>,
-    #[serde(default)]
     pub pending_handover: HashMap<String, String>,
     #[serde(default)]
     pub pending_notes: Vec<String>,
@@ -261,7 +259,6 @@ pub fn snapshot(st: &SessionState, now: Instant) -> LiveSnapshot {
         hints_given: st.hints_given,
         hint_max_level: st.hint_max_level,
         last_agent_text: st.last_agent_text.clone(),
-        pending_tool_results: st.pending_tool_results.clone(),
         pending_handover: st.pending_handover.clone(),
         pending_notes: st.pending_notes.clone(),
         two_minute_warned: st.two_minute_warned,
@@ -297,7 +294,6 @@ pub fn restore(st: &mut SessionState, snap: LiveSnapshot, now: Instant) {
     st.hints_given = snap.hints_given;
     st.hint_max_level = snap.hint_max_level;
     st.last_agent_text = snap.last_agent_text;
-    st.pending_tool_results = snap.pending_tool_results;
     st.pending_handover = snap.pending_handover;
     st.pending_notes = snap.pending_notes;
     st.two_minute_warned = snap.two_minute_warned;

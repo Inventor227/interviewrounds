@@ -845,7 +845,6 @@ pub async fn join(
             st.commit_turn(
                 TurnCommit {
                     draft,
-                    extra: Vec::new(),
                     reply: vec![ContentBlock::text(line.clone())],
                     spoken,
                     tool_calls: Vec::new(),

@@ -33,7 +33,6 @@ pub struct TurnDraft {
     pub input: UserInput,
     /// The new user message, then the system note.
     pub messages: Vec<Message>,
-    pub tool_result_ids: Vec<String>,
     pub notes_used: usize,
     pub warned_two_minutes: bool,
     /// The user message is already in the history (recorded when the turn started); `messages` holds the note only.
@@ -113,19 +112,14 @@ pub fn request_for_draft(
     }
 }
 
-/// The user message (tool results owed by the last reply first, then the input) and the system note.
+/// The user message (the input) and the system note.
 pub fn draft_turn(
     state: &SessionState,
     panelist_id: &str,
     input: &UserInput,
     now: Instant,
 ) -> TurnDraft {
-    let mut content: Vec<ContentBlock> = state
-        .pending_tool_results
-        .iter()
-        .map(ContentBlock::tool_result_ok)
-        .collect();
-    content.push(ContentBlock::text(input.text()));
+    let content = vec![ContentBlock::text(input.text())];
     let (note, warned_two_minutes) = turn_note(state, panelist_id, input, now);
     TurnDraft {
         panelist_id: panelist_id.to_string(),
@@ -137,7 +131,6 @@ pub fn draft_turn(
             },
             Message::system_text(note),
         ],
-        tool_result_ids: state.pending_tool_results.clone(),
         notes_used: state.pending_notes.len(),
         warned_two_minutes,
         user_committed: false,
@@ -276,8 +269,7 @@ fn event_note(
 
 /// The conversation as one panelist sees it. With two or more panelists, another panelist's reply is not this
 /// panelist's own turn: it becomes a user-side line "Name said: ...", the note that panelist got before it is left
-/// out (it held that panelist's private state), and tool calls it made disappear with their results. The model's own
-/// replies stay assistant turns. The view only grows as the history grows, so the prompt cache holds.
+/// out (it held that panelist's private state). The model's own replies stay assistant turns. The view only grows as the history grows, so the prompt cache holds.
 pub fn perspective(
     state: &SessionState,
     panelist_id: &str,
@@ -300,7 +292,6 @@ pub fn perspective(
             .get(&i)
             .filter(|p| p.as_str() != panelist_id)
     };
-    let mut dropped_tools: Vec<String> = Vec::new();
     let mut out: Vec<Message> = Vec::with_capacity(messages.len());
     for (i, m) in messages.iter().enumerate() {
         match m.role {
@@ -315,11 +306,6 @@ pub fn perspective(
                         && other(i + 1).is_some()) => {}
             Role::Assistant => match other(i) {
                 Some(speaker) => {
-                    for b in &m.content {
-                        if let ContentBlock::ToolUse { id, .. } = b {
-                            dropped_tools.push(id.clone());
-                        }
-                    }
                     let said = m.text();
                     if !said.trim().is_empty() {
                         out.push(Message::user_text(format!(
@@ -331,20 +317,6 @@ pub fn perspective(
                 }
                 None => out.push(m.clone()),
             },
-            Role::User if !dropped_tools.is_empty() => {
-                let content: Vec<ContentBlock> = m
-                    .content
-                    .iter()
-                    .filter(|b| !matches!(b, ContentBlock::ToolResult { tool_use_id, .. } if dropped_tools.contains(tool_use_id)))
-                    .cloned()
-                    .collect();
-                if !content.is_empty() {
-                    out.push(Message {
-                        role: Role::User,
-                        content,
-                    });
-                }
-            }
             _ => out.push(m.clone()),
         }
     }
@@ -586,14 +558,36 @@ fn tidy_blank_runs(text: &str) -> String {
     out.trim().to_string()
 }
 
-/// Removes text blocks with no text (the API refuses them) and then messages left with no content. Run on every live
-/// and director request, so one bad history entry can never fail every later call.
+/// Removes text blocks with no text (the API refuses them), then messages left with no content, together with the
+/// system note tied to them: a note always follows a user message and comes last or right before an assistant turn,
+/// so the note before a removed reply, or after a removed user message, would break that order. Run on every live and
+/// director request, so one bad history entry can never fail every later call.
 pub fn strip_empty_text(messages: &mut Vec<Message>) {
     for m in messages.iter_mut() {
         m.content
             .retain(|b| !matches!(b, ContentBlock::Text { text, .. } if text.trim().is_empty()));
     }
-    messages.retain(|m| !m.content.is_empty());
+    let mut out: Vec<Message> = Vec::with_capacity(messages.len());
+    let mut drop_next_note = false;
+    for m in std::mem::take(messages) {
+        if m.content.is_empty() {
+            match m.role {
+                Role::Assistant if out.last().is_some_and(|p| p.role == Role::System) => {
+                    out.pop();
+                }
+                Role::User => drop_next_note = true,
+                _ => {}
+            }
+            continue;
+        }
+        if m.role == Role::System && drop_next_note {
+            drop_next_note = false;
+            continue;
+        }
+        drop_next_note = false;
+        out.push(m);
+    }
+    *messages = out;
 }
 
 /// Director-only text in the content prompts is marked `[[tool: ...]]` (a span may run over several lines once its

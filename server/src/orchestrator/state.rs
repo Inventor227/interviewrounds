@@ -226,13 +226,11 @@ pub struct Provisional {
     pub input: UserInput,
     /// The draft the reply was made from (its note goes in with the reply); None = draft again when committing.
     pub draft: Option<TurnDraft>,
-    /// Tool round trips inside the turn (inline tools).
-    pub extra: Vec<Message>,
     /// The assistant content to record.
     pub reply: Vec<ContentBlock>,
     /// What was streamed to the voice.
     pub spoken: String,
-    /// Tool calls to apply when the reply is committed (inline calls, then the director's when it finishes).
+    /// The director's tool calls, when they arrive before the reply is committed; applied with the commit.
     pub tool_calls: Vec<ToolCall>,
     /// When the reply was spoken (the turn log time, whenever it is committed).
     pub parked_at: Instant,
@@ -253,13 +251,11 @@ pub struct DirectorJob {
 #[derive(Debug)]
 pub struct TurnCommit {
     pub draft: TurnDraft,
-    /// Messages between the draft and the reply (a tool-only reply and its "ok" results).
-    pub extra: Vec<Message>,
-    /// The final assistant content, verbatim (thinking, text, tool calls).
+    /// The final assistant content, verbatim (thinking and text).
     pub reply: Vec<ContentBlock>,
     /// What was actually streamed to the voice (filtered).
     pub spoken: String,
-    /// Every tool call made in this turn, in order.
+    /// Tool calls to apply with the commit (the director's, when known already).
     pub tool_calls: Vec<ToolCall>,
     /// The reply was the pre-drafted hand-over line.
     pub handover_line_used: bool,
@@ -293,8 +289,6 @@ pub struct SessionState {
     pub closing_line: Option<String>,
     pub live: LiveSettings,
     pub question: serde_json::Value,
-    /// Tool calls of the last reply still owed an "ok" result (sent at the start of the next user message).
-    pub pending_tool_results: Vec<String>,
     /// Pre-drafted first lines for panelists who were handed the floor.
     pub pending_handover: HashMap<String, String>,
     /// Server notes for the next turn (resume, meeting changes); consumed when that turn commits.
@@ -482,7 +476,6 @@ impl SessionState {
             closing_line: None,
             live,
             question,
-            pending_tool_results: Vec::new(),
             pending_handover,
             pending_notes: Vec::new(),
             heard_note: HashMap::new(),
@@ -700,8 +693,6 @@ impl SessionState {
         user.content
             .iter_mut()
             .for_each(|c| c.set_cache_control(None));
-        self.pending_tool_results
-            .retain(|id| !draft.tool_result_ids.contains(id));
         let panelist = draft.panelist_id.clone();
         let at_ms = self.elapsed_ms(now);
         let event = draft.input.event();
@@ -873,7 +864,6 @@ impl SessionState {
             p.id,
             TurnCommit {
                 draft,
-                extra: p.extra,
                 reply: p.reply,
                 spoken: p.spoken.clone(),
                 tool_calls: p.tool_calls,
@@ -1020,7 +1010,6 @@ impl SessionState {
     pub fn commit_turn(&mut self, commit: TurnCommit, now: Instant) -> Vec<ServerEvent> {
         let TurnCommit {
             draft,
-            extra,
             reply,
             spoken,
             tool_calls,
@@ -1064,15 +1053,7 @@ impl SessionState {
             for m in messages {
                 self.push_message(&panelist, m);
             }
-            for m in extra {
-                self.push_message(&panelist, m);
-            }
             if !reply.is_empty() {
-                for block in &reply {
-                    if let ContentBlock::ToolUse { id, .. } = block {
-                        self.pending_tool_results.push(id.clone());
-                    }
-                }
                 self.push_message(
                     &panelist,
                     Message {
