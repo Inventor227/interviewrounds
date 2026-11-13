@@ -2,6 +2,7 @@
 
 pub mod api;
 pub mod app;
+pub mod board;
 pub mod claude;
 pub mod config;
 pub mod content;
@@ -12,6 +13,7 @@ pub mod fish;
 pub mod identity;
 pub mod orchestrator;
 pub mod persist;
+pub mod scribe;
 pub mod usage;
 pub mod ws;
 
