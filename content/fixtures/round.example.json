@@ -1,0 +1,26 @@
+{
+  "id": "sde.system_design.full",
+  "title": "System design",
+  "summary": "Design a real service on the sheet while two engineers probe your choices.",
+  "role": "sde",
+  "round_type": "system_design",
+  "length": "full",
+  "target_minutes": 30,
+  "hard_stop_minutes": 33,
+  "silence_wait_seconds": 20,
+  "interrupt_after_seconds": 120,
+  "panel": { "lead": "persona.daniel", "second": "persona.ana", "second_enters_phase": "deep_dive" },
+  "phases": [
+    { "id": "intro", "title": "Intro", "minutes": 1, "goal": "Introduce self and format in under 20 seconds." },
+    { "id": "requirements", "title": "Requirements", "minutes": 5, "goal": "Let candidate scope; answer with numbers; push for non-functional reqs.", "must_cover": ["functional", "non_functional"] },
+    { "id": "api", "title": "API", "minutes": 4, "goal": "Ask for main calls and core entities." },
+    { "id": "hld", "title": "Design", "minutes": 10, "goal": "Candidate draws; ask for an end-to-end request walk-through.", "uses_whiteboard": true },
+    { "id": "deep_dive", "title": "Deep dive", "minutes": 8, "goal": "Senior+: candidate picks; else interviewer picks. One failure mode, one trade-off." },
+    { "id": "wrap", "title": "Wrap up", "minutes": 2, "goal": "Improvement question; candidate questions; close." }
+  ],
+  "rubric_id": "rubric.system_design",
+  "question_pool": "bank.system_design",
+  "hands": "whiteboard",
+  "board_kit": "hld",
+  "short_version": "sde.system_design.short"
+}

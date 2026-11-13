@@ -1,0 +1,225 @@
+{
+  "id": "bank.object_design",
+  "round_type": "object_design",
+  "title": "Object design problems",
+  "cards": [
+    {
+      "id": "object_design.ev_charging",
+      "round_type": "object_design",
+      "title": "EV charging hub",
+      "levels": [
+        "junior",
+        "mid",
+        "senior"
+      ],
+      "lengths": [
+        "short",
+        "full"
+      ],
+      "tags": [
+        "state machine",
+        "strategy"
+      ],
+      "prompt": "Design the classes for an electric vehicle charging hub. It has bays with chargers of different speeds, drivers can reserve a bay or walk in, and there's an idle fee if a car stays plugged in after charging ends.",
+      "brief_lines": [
+        "Bays with chargers of different speeds",
+        "Reservations and walk ins",
+        "Pay per kilowatt hour",
+        "Idle fee after charging ends"
+      ],
+      "facts_if_asked": [
+        "Three charger speeds: standard, fast and ultra.",
+        "A reservation holds a bay for fifteen minutes past its start time, then expires.",
+        "The idle fee starts five minutes after charging completes, charged per minute.",
+        "Price per kilowatt hour depends on charger speed.",
+        "One hub, one process; ignore networking and payments processing."
+      ],
+      "follow_ups": [
+        "Who owns the price calculation?",
+        "How does a reservation expire?",
+        "What states does a charging session go through?",
+        "Two drivers try to take the last free bay at once. What happens?"
+      ],
+      "twist": "The hub adds off peak pricing: cheaper rates between ten at night and six in the morning. What changes in your model?",
+      "hints": [
+        "Talk me through what a driver does from arriving to leaving.",
+        "What are the main things that exist at the hub, and what does each one know?",
+        "What changes over the life of a single charge?",
+        "What if the session were its own class with states, and pricing lived behind its own interface?"
+      ],
+      "strong_answer_covers": [
+        "Hub, Bay, Charger with a speed type, Reservation, ChargingSession, Driver or Vehicle",
+        "PricingPolicy as an interface or strategy, chosen per charger speed",
+        "ChargingSession as a state machine: reserved, charging, complete, idle, closed",
+        "Fee calculation from energy used plus idle minutes, in one place",
+        "Bay allocation guarded for concurrent requests",
+        "Off peak extension as a new pricing policy without editing sessions"
+      ],
+      "red_flags": []
+    },
+    {
+      "id": "object_design.library_holds",
+      "round_type": "object_design",
+      "title": "Library holds",
+      "levels": [
+        "junior",
+        "mid",
+        "senior"
+      ],
+      "lengths": [
+        "short",
+        "full"
+      ],
+      "tags": [
+        "queues",
+        "concurrency",
+        "modelling"
+      ],
+      "prompt": "Design the classes for a library system where members borrow books, place holds on titles that are out, and pay fines for late returns.",
+      "brief_lines": [
+        "Members borrow and return copies",
+        "Holds queue per title",
+        "Fines for late returns"
+      ],
+      "facts_if_asked": [
+        "A title can have several physical copies.",
+        "Loans last three weeks.",
+        "When a copy is returned and someone holds the title, it's kept for that person for three days.",
+        "Fines are twenty five cents a day, capped at ten dollars per loan.",
+        "Members can have at most five loans and three holds."
+      ],
+      "follow_ups": [
+        "What's the difference between a title and a copy in your model?",
+        "Where does the hold queue live?",
+        "Two members try to claim the last copy at the same moment. What happens?",
+        "Who calculates the fine?"
+      ],
+      "twist": "The library adds e-books with a licence that allows only five loans at once. How does your model take it?",
+      "hints": [
+        "Talk me through what happens when a member walks in to borrow a book.",
+        "When a book is out, what does the member actually wait for: that copy, or any copy?",
+        "Where would the line of waiting members be kept?",
+        "What if Title and Copy were separate classes and each Title had its own hold queue?"
+      ],
+      "strong_answer_covers": [
+        "Title versus Copy split",
+        "Member, Loan, Hold, HoldQueue per Title",
+        "FinePolicy in one place, with the cap",
+        "Return flow: copy goes to the next hold, with a pickup deadline",
+        "Claiming a copy is atomic or locked",
+        "E-books through a shared Lendable interface or licence policy, without special cases everywhere",
+        "Holds go on titles, not specific copies; fine logic lives in one place"
+      ],
+      "red_flags": []
+    },
+    {
+      "id": "object_design.expense_splitter",
+      "round_type": "object_design",
+      "title": "Trip expense splitter",
+      "levels": [
+        "junior",
+        "mid",
+        "senior"
+      ],
+      "lengths": [
+        "short",
+        "full"
+      ],
+      "tags": [
+        "strategy",
+        "money",
+        "algorithms"
+      ],
+      "prompt": "Design the classes for an app where friends on a trip log shared expenses, split them equally, by exact amounts or by percentage, and then see who owes whom with as few payments as possible.",
+      "brief_lines": [
+        "Friends log shared expenses",
+        "Split equally, by exact amounts, or by percent",
+        "Show who owes whom",
+        "Fewest payments to settle"
+      ],
+      "facts_if_asked": [
+        "One currency per trip.",
+        "Amounts are in cents; splits must add up to the total.",
+        "Rounding leftovers go to the person who paid.",
+        "Expenses can be edited or deleted.",
+        "Groups of up to twenty people."
+      ],
+      "follow_ups": [
+        "Where does the split rule live?",
+        "How do you handle a total that doesn't divide evenly?",
+        "How do you compute who owes whom?",
+        "What happens to balances when an expense is edited?"
+      ],
+      "twist": "The app adds recurring expenses, like a shared rent payment every month. What changes?",
+      "hints": [
+        "Talk me through what happens when someone logs a dinner bill.",
+        "What are the different ways to split, and what do they have in common?",
+        "What do you need to know at the end: every expense, or each person's net balance?",
+        "What if each split type were its own strategy, and a ledger kept net balances?"
+      ],
+      "strong_answer_covers": [
+        "Trip, Member, Expense, Split strategies for equal, exact and percent",
+        "Validation that splits add up, in cents",
+        "A stated rounding rule",
+        "Ledger of net balances updated per expense, recomputed on edit",
+        "Settlement by matching largest debtor with largest creditor",
+        "Recurring expenses as a schedule that creates expenses, not a new split type"
+      ],
+      "red_flags": []
+    },
+    {
+      "id": "object_design.coffee_kiosk",
+      "round_type": "object_design",
+      "title": "Coffee kiosk",
+      "levels": [
+        "mid",
+        "senior"
+      ],
+      "lengths": [
+        "short",
+        "full"
+      ],
+      "tags": [
+        "state pattern",
+        "observer",
+        "inventory"
+      ],
+      "prompt": "Design the classes for a self service coffee kiosk: customers order drinks from recipes, the kiosk tracks ingredients, handles items running out, and can be put into maintenance mode.",
+      "brief_lines": [
+        "Drinks made from recipes",
+        "Ingredient inventory",
+        "Out of stock handling",
+        "Maintenance mode"
+      ],
+      "facts_if_asked": [
+        "Recipes list ingredients with amounts, like eighteen grams of beans and two hundred millilitres of milk.",
+        "Customers can add extra shots or swap milk types.",
+        "Ingredients are reserved when an order is paid and used when the drink is made.",
+        "Staff get alerted when any ingredient drops below ten percent.",
+        "In maintenance mode, no new orders are accepted, but the drink in progress finishes."
+      ],
+      "follow_ups": [
+        "What happens if an ingredient runs out between ordering and making?",
+        "Where do the kiosk's modes live?",
+        "How do staff get told about low stock?",
+        "How do customisations fit the recipe model?"
+      ],
+      "twist": "The kiosk adds a seasonal drink that is only available in certain months. How do you add it?",
+      "hints": [
+        "Talk me through a customer ordering a latte with oat milk.",
+        "What changes about the kiosk's behaviour between normal and maintenance mode?",
+        "When should ingredients be taken out of the inventory?",
+        "What if the inventory had reserve and commit steps, and the kiosk's mode were a state object?"
+      ],
+      "strong_answer_covers": [
+        "Recipe, Ingredient, Inventory, Order, Customisation",
+        "Inventory with reserve, commit and release",
+        "Kiosk modes as a state pattern: ready, making, maintenance, out of order",
+        "Low stock alerts through an observer or event",
+        "Customisations as recipe modifiers rather than new recipes",
+        "Seasonal drinks through an availability rule on the recipe"
+      ],
+      "red_flags": []
+    }
+  ]
+}

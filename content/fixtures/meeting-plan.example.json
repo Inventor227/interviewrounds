@@ -1,0 +1,43 @@
+{
+  "chair_attendee": "Dana",
+  "attendees": [
+    {
+      "name": "Dana",
+      "role": "VP of Engineering",
+      "cares_about": ["launch date", "bottom line first"],
+      "personality": "skeptical",
+      "likely_objections": ["What exactly do you need from me?", "Why is this only coming up now?"],
+      "decision_power": "approver",
+      "hidden": {
+        "stance": -1,
+        "concerns": [
+          { "id": "c1", "text": "No clear ask in the first minute", "status": "open" },
+          { "id": "c2", "text": "Why the slip was not flagged earlier", "status": "open" }
+        ],
+        "patience": 2,
+        "persona_id": "persona.viktor",
+        "avatar_id": "m05",
+        "voice_id": "voice.viktor"
+      }
+    },
+    {
+      "name": "Owen",
+      "role": "Payments lead",
+      "cares_about": ["his team's roadmap"],
+      "personality": "neutral",
+      "likely_objections": ["Losing an engineer delays the refunds work"],
+      "decision_power": "influencer",
+      "hidden": {
+        "stance": 0,
+        "concerns": [{ "id": "c3", "text": "Who covers the refunds work", "status": "open" }],
+        "patience": 3,
+        "persona_id": "persona.leo",
+        "avatar_id": "m02",
+        "voice_id": "voice.leo"
+      }
+    }
+  ],
+  "opening_line": "Thanks for coming. We have ten minutes. What do you need from us today?",
+  "success_criteria": ["A clear ask in the first minute", "A decision on the engineer", "An owner and a date for the next check"],
+  "tips": ["Lead with the answer.", "Name the one decision you need.", "Give detail only when asked."]
+}

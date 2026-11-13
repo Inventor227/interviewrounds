@@ -1,0 +1,259 @@
+{
+  "schema_version": "1.0",
+  "session": {
+    "id": "s_01JDEMO0000000000000000002",
+    "mode": "interview",
+    "role": "sde",
+    "round_id": "sde.system_design.short",
+    "round_type": "system_design",
+    "length": "short",
+    "seniority": "mid",
+    "difficulty": "standard",
+    "question_id": "hld_url_shortener",
+    "personas": [
+      "persona.daniel"
+    ],
+    "started_at": "2026-11-13T09:12:00Z",
+    "duration_sec": 492,
+    "ended_by": "completed",
+    "coverage": {
+      "phases_planned": [
+        "requirements",
+        "diagram",
+        "probe"
+      ],
+      "phases_completed": [
+        "requirements",
+        "diagram",
+        "probe"
+      ],
+      "pct": 1
+    }
+  },
+  "headline": {
+    "summary": "Clear request path and good numbers. The scaling probe stayed shallow.",
+    "verdict": {
+      "label": "leaning_hire",
+      "index": 4,
+      "is_provisional": true,
+      "confidence": "low",
+      "rationale": "Requirements and architecture meet the bar for mid level; trade-offs and failure handling need more depth."
+    },
+    "overall_score": 2.75
+  },
+  "competencies": [
+    {
+      "id": "requirements",
+      "name": "Requirements and scoping",
+      "score": 3,
+      "level_label": "meets_bar",
+      "rationale": "Asked for scale and read/write ratio, then used both to size the store.",
+      "evidence_ids": [
+        "ev1"
+      ],
+      "delta_vs_last": null
+    },
+    {
+      "id": "architecture",
+      "name": "High-level architecture",
+      "score": 3,
+      "level_label": "meets_bar",
+      "rationale": "End-to-end path from client to store was complete and justified.",
+      "evidence_ids": [
+        "ev2"
+      ],
+      "delta_vs_last": null
+    },
+    {
+      "id": "tradeoffs",
+      "name": "Depth and trade-offs",
+      "score": 2,
+      "level_label": "developing",
+      "rationale": "Named a cache but did not say what was traded for it.",
+      "evidence_ids": [
+        "ev3"
+      ],
+      "delta_vs_last": null
+    },
+    {
+      "id": "reliability",
+      "name": "Reliability and operations",
+      "score": 3,
+      "level_label": "meets_bar",
+      "rationale": "Handled a cache node failure and a hot key.",
+      "evidence_ids": [
+        "ev4"
+      ],
+      "delta_vs_last": null
+    }
+  ],
+  "evidence": [
+    {
+      "id": "ev1",
+      "t_start_sec": 41.2,
+      "t_end_sec": 58.0,
+      "speaker": "user",
+      "quote": "How many new links a day, and how many reads per write?",
+      "polarity": "positive",
+      "competency_ids": [
+        "requirements"
+      ]
+    },
+    {
+      "id": "ev2",
+      "t_start_sec": 190.5,
+      "t_end_sec": 236.1,
+      "speaker": "user",
+      "quote": "The request hits the load balancer, then the shortener service, which checks Redis before the key value store.",
+      "polarity": "positive",
+      "competency_ids": [
+        "architecture"
+      ]
+    },
+    {
+      "id": "ev3",
+      "t_start_sec": 360.0,
+      "t_end_sec": 388.4,
+      "speaker": "user",
+      "quote": "I'd just add more caching there.",
+      "polarity": "negative",
+      "competency_ids": [
+        "tradeoffs"
+      ],
+      "note": "No cost or consistency trade-off stated."
+    },
+    {
+      "id": "ev4",
+      "t_start_sec": 401.7,
+      "t_end_sec": 430.0,
+      "speaker": "user",
+      "quote": "If a cache node dies, reads fall through to the store, so I'd cap the miss rate with request coalescing.",
+      "polarity": "positive",
+      "competency_ids": [
+        "reliability"
+      ]
+    }
+  ],
+  "strengths": [
+    {
+      "title": "Scoped with numbers",
+      "detail": "You asked for volume and read/write ratio before drawing, and the numbers shaped the design.",
+      "evidence_ids": [
+        "ev1"
+      ]
+    },
+    {
+      "title": "Complete request path",
+      "detail": "Every box on the sheet had a reason and the path from client to store was clear.",
+      "evidence_ids": [
+        "ev2"
+      ]
+    }
+  ],
+  "weaknesses": [
+    {
+      "title": "Trade-offs left implicit",
+      "detail": "When asked what breaks at 10x, you added caching without naming its cost.",
+      "evidence_ids": [
+        "ev3"
+      ]
+    }
+  ],
+  "weakest_moment": {
+    "question": "What breaks first at 10x traffic?",
+    "t_start_sec": 352.0,
+    "what_happened": "You suggested more caching but did not name the bottleneck or the trade-off.",
+    "strong_answer_covers": [
+      "Name the first bottleneck with a number",
+      "Pick one fix and say what it costs",
+      "Say how you would know it worked"
+    ],
+    "model_answer": "At 10x we go from about 1,200 to 12,000 writes a second, so the key value store's write path breaks first. I'd shard it by the short code hash, which keeps lookups to one shard. The cost is resharding later, so I'd start with more shards than we need. I'd watch p99 write latency per shard to know it worked.",
+    "retry": {
+      "prompt": "Let's try that again. What breaks first at 10x traffic?",
+      "max_seconds": 120
+    },
+    "retries": [
+      {
+        "session_id": "s_01JDEMO0000000000000000003",
+        "at": "2026-11-13T09:25:30Z",
+        "before_score": 2,
+        "after_score": 3,
+        "note": "Named the write path as the bottleneck and the cost of sharding."
+      }
+    ]
+  },
+  "next_drills": [
+    {
+      "title": "Retry the 10x question",
+      "why": "Your weakest moment; two minutes.",
+      "kind": "retry_answer",
+      "est_minutes": 2
+    },
+    {
+      "title": "Short system design: rate limiter",
+      "why": "Practice naming the trade-off for each choice.",
+      "kind": "short_round",
+      "round_type": "system_design",
+      "round_id": "sde.system_design.short",
+      "question_id": "hld_rate_limiter",
+      "est_minutes": 8
+    }
+  ],
+  "delivery": {
+    "wpm": 142,
+    "wpm_band": "good",
+    "filler_per_min": 2.4,
+    "filler_band": "okay",
+    "filler_top": [
+      {
+        "word": "um",
+        "count": 9
+      },
+      {
+        "word": "basically",
+        "count": 4
+      }
+    ],
+    "long_pauses": [
+      {
+        "t_sec": 371.5,
+        "dur_sec": 6.2
+      }
+    ],
+    "talk_ratio_user": 0.71,
+    "answers": [
+      {
+        "t_start_sec": 41.2,
+        "dur_sec": 16.8,
+        "flag": "ok"
+      },
+      {
+        "t_start_sec": 190.5,
+        "dur_sec": 45.6,
+        "flag": "ok"
+      }
+    ],
+    "gaze_on_speaker_pct": 0.64,
+    "user_interruptions": 1,
+    "hints": []
+  },
+  "round_details": {
+    "kind": "system_design",
+    "board_as_text": "HLD \"Design a URL shortener\". 5 components, 4 links.",
+    "requirements_captured": [
+      "100M new URLs per day",
+      "Reads are 100x writes"
+    ],
+    "tradeoffs_discussed": [
+      "Cache in front of the store"
+    ],
+    "missing_components": [
+      "Rate limiting"
+    ]
+  },
+  "share": {
+    "public_slug": null,
+    "include_quotes": false
+  }
+}

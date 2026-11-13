@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Avatar preview</title>
+    <style>
+      html, body { margin: 0; height: 100%; background: #d9d6d0; overflow: hidden; }
+      canvas { display: block; }
+    </style>
+    <script type="importmap">
+      { "imports": { "three": "/three/build/three.module.js", "three/addons/": "/three/examples/jsm/" } }
+    </script>
+  </head>
+  <body>
+    <script type="module">
+      // Query: ?id=f01&clip=sit_table_breathe_01&t=2&view=seated|face&morphs=jawOpen:0.5,eyeBlinkLeft:1
+      import * as THREE from 'three';
+      import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+      import { KTX2Loader } from 'three/addons/loaders/KTX2Loader.js';
+      import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
+
+      const q = new URLSearchParams(location.search);
+      const id = q.get('id') ?? 'f01';
+      const clipName = q.get('clip') ?? 'sit_table_breathe_01';
+      const t = Number(q.get('t') ?? 2);
+      const view = q.get('view') ?? 'seated';
+      const morphs = (q.get('morphs') ?? '').split(',').filter(Boolean).map((s) => s.split(':'));
+
+      const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+      renderer.setPixelRatio(1);
+      renderer.setSize(innerWidth, innerHeight);
+      renderer.outputColorSpace = THREE.SRGBColorSpace;
+      document.body.appendChild(renderer.domElement);
+
+      const scene = new THREE.Scene();
+      scene.background = new THREE.Color(0xd9d6d0);
+      scene.add(new THREE.HemisphereLight(0xffffff, 0x8a8070, 1.6));
+      const sun = new THREE.DirectionalLight(0xffffff, 1.8);
+      sun.position.set(0.8, 2.5, 2);
+      scene.add(sun);
+
+      // Plain props: floor, chair seat at 0.47 m, desk top at 0.74 m between the avatar and the camera.
+      const grey = (c) => new THREE.MeshStandardMaterial({ color: c, roughness: 0.8 });
+      const floor = new THREE.Mesh(new THREE.PlaneGeometry(6, 6), grey(0xbdb8ae));
+      floor.rotation.x = -Math.PI / 2;
+      scene.add(floor);
+      const seat = new THREE.Mesh(new THREE.BoxGeometry(0.48, 0.06, 0.46), grey(0x3a3a3a));
+      seat.position.set(0, 0.44, -0.05);
+      scene.add(seat);
+      const back = new THREE.Mesh(new THREE.BoxGeometry(0.46, 0.55, 0.05), grey(0x3a3a3a));
+      back.position.set(0, 0.75, -0.3);
+      scene.add(back);
+      const desk = new THREE.Mesh(new THREE.BoxGeometry(1.4, 0.04, 0.75), grey(0x8b6b4a));
+      desk.position.set(0, 0.74, 0.62);
+      scene.add(desk);
+
+      const ktx2 = new KTX2Loader().setTranscoderPath('/three/examples/jsm/libs/basis/').detectSupport(renderer);
+      const loader = new GLTFLoader().setMeshoptDecoder(MeshoptDecoder).setKTX2Loader(ktx2);
+
+      const manifest = await (await fetch('/avatars/manifest.json')).json();
+      const entry = manifest.avatars.find((a) => a.id === id);
+      const [avatar, anims] = await Promise.all([loader.loadAsync(entry.glb), loader.loadAsync(entry.anims)]);
+      const model = avatar.scene;
+      scene.add(model);
+
+      const mixer = new THREE.AnimationMixer(model);
+      const clip = anims.animations.find((c) => c.name === clipName);
+      if (!clip) throw new Error(`clip ${clipName} not found`);
+      mixer.clipAction(clip).play();
+      mixer.setTime(t);
+
+      let faceMeshes = [];
+      model.traverse((o) => {
+        if (o.isMesh && o.morphTargetDictionary) faceMeshes.push(o);
+      });
+      for (const m of faceMeshes) {
+        for (const [name, w] of morphs) {
+          const i = m.morphTargetDictionary[name];
+          if (i === undefined) throw new Error(`morph ${name} missing`);
+          m.morphTargetInfluences[i] = Number(w);
+        }
+      }
+      model.updateMatrixWorld(true);
+
+      const head = model.getObjectByName(entry.head_bone);
+      const eyeL = model.getObjectByName(entry.eye_bones[0]);
+      const eyeR = model.getObjectByName(entry.eye_bones[1]);
+      const eyes = new THREE.Vector3()
+        .addVectors(eyeL.getWorldPosition(new THREE.Vector3()), eyeR.getWorldPosition(new THREE.Vector3()))
+        .multiplyScalar(0.5);
+
+      const camera = new THREE.PerspectiveCamera(view === 'face' ? 22 : 45, innerWidth / innerHeight, 0.05, 20);
+      if (view === 'face') {
+        camera.position.set(eyes.x, eyes.y + 0.02, eyes.z + 0.75);
+        camera.lookAt(eyes.x, eyes.y - 0.05, eyes.z);
+      } else {
+        // Roughly where a seated user sits across the desk.
+        camera.position.set(0.25, 1.25, 1.8);
+        camera.lookAt(0, 0.95, 0);
+      }
+
+      renderer.render(scene, camera);
+      const box = new THREE.Box3().setFromObject(model, true);
+      window.__result = {
+        id,
+        clip: clipName,
+        t,
+        view,
+        eyes_y: +eyes.y.toFixed(3),
+        head_y: +head.getWorldPosition(new THREE.Vector3()).y.toFixed(3),
+        bbox_min_y: +box.min.y.toFixed(3),
+        calls: renderer.info.render.calls,
+        triangles: renderer.info.render.triangles,
+        textures: renderer.info.memory.textures,
+      };
+      window.__ready = true;
+    </script>
+  </body>
+</html>

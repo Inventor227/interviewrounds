@@ -1,0 +1,214 @@
+{
+  "name": "meeting: tick and untick agenda, show slide and number, park a question; unknown agenda id and code ops rejected",
+  "start": {
+    "schema": "ir.board.v1",
+    "round": {
+      "id": "s_fixture",
+      "type": "meeting",
+      "question_id": null,
+      "language": null
+    },
+    "rev": 0,
+    "size": {
+      "w": 64,
+      "h": 40
+    },
+    "brief": {
+      "question": "Fixture board",
+      "lines": []
+    },
+    "items": [],
+    "edges": [],
+    "code": null,
+    "meeting": {
+      "agenda": [
+        {
+          "id": "a1",
+          "text": "Problem",
+          "done": false,
+          "t": null
+        },
+        {
+          "id": "a2",
+          "text": "The ask",
+          "done": false,
+          "t": null
+        }
+      ],
+      "numbers": [
+        {
+          "id": "k1",
+          "label": "Payback",
+          "value": "8 months"
+        }
+      ],
+      "shown": [],
+      "parked": []
+    },
+    "focus": null,
+    "ghosts": [],
+    "op_ids": []
+  },
+  "ops": [
+    {
+      "op_id": "q1",
+      "src": "hand",
+      "op": "agenda.check",
+      "args": {
+        "id": "a1",
+        "done": true,
+        "t": 95
+      }
+    },
+    {
+      "op_id": "q2",
+      "src": "hand",
+      "op": "present.show",
+      "args": {
+        "kind": "slide",
+        "ref": 4,
+        "t": 120.5
+      }
+    },
+    {
+      "op_id": "q3",
+      "src": "hand",
+      "op": "present.show",
+      "args": {
+        "kind": "number",
+        "ref": "k1",
+        "t": 130
+      }
+    },
+    {
+      "op_id": "q4",
+      "src": "scribe",
+      "op": "park.add",
+      "args": {
+        "text": "What is the payback period?"
+      }
+    },
+    {
+      "op_id": "q5",
+      "src": "hand",
+      "op": "agenda.check",
+      "args": {
+        "id": "a1",
+        "done": false,
+        "t": 140
+      }
+    },
+    {
+      "op_id": "q6",
+      "src": "hand",
+      "op": "agenda.check",
+      "args": {
+        "id": "a2",
+        "done": true,
+        "t": 150
+      }
+    },
+    {
+      "op_id": "q7",
+      "src": "hand",
+      "op": "agenda.check",
+      "args": {
+        "id": "a9",
+        "done": true,
+        "t": 160
+      }
+    },
+    {
+      "op_id": "q8",
+      "src": "scribe",
+      "op": "code.insert",
+      "args": {
+        "line": {
+          "id": "l1",
+          "indent": 0,
+          "text": "x = 1",
+          "src": "scribe"
+        },
+        "after": null
+      }
+    },
+    {
+      "op_id": "q9",
+      "src": "hand",
+      "op": "code.complexity",
+      "args": {
+        "slot": "time",
+        "value": "O(1)"
+      }
+    }
+  ],
+  "expected": {
+    "schema": "ir.board.v1",
+    "round": {
+      "id": "s_fixture",
+      "type": "meeting",
+      "question_id": null,
+      "language": null
+    },
+    "rev": 6,
+    "size": {
+      "w": 64,
+      "h": 40
+    },
+    "brief": {
+      "question": "Fixture board",
+      "lines": []
+    },
+    "items": [],
+    "edges": [],
+    "code": null,
+    "meeting": {
+      "agenda": [
+        {
+          "id": "a1",
+          "text": "Problem",
+          "done": false,
+          "t": null
+        },
+        {
+          "id": "a2",
+          "text": "The ask",
+          "done": true,
+          "t": 150
+        }
+      ],
+      "numbers": [
+        {
+          "id": "k1",
+          "label": "Payback",
+          "value": "8 months"
+        }
+      ],
+      "shown": [
+        {
+          "kind": "slide",
+          "ref": 4,
+          "t": 120.5
+        },
+        {
+          "kind": "number",
+          "ref": "k1",
+          "t": 130
+        }
+      ],
+      "parked": [
+        "What is the payback period?"
+      ]
+    },
+    "focus": null,
+    "ghosts": [],
+    "op_ids": [
+      "q1",
+      "q2",
+      "q3",
+      "q4",
+      "q5",
+      "q6"
+    ]
+  }
+}
