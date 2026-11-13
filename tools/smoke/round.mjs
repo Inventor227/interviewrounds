@@ -219,8 +219,17 @@ function validateReport(data) {
 
 const MODE = opt("--only", "both");
 
+async function diagCheck() {
+  // A device check result, stored for the caller (a guest).
+  if (!cookie) await api("GET", "/api/me");
+  const blob = { kind: "smoke", ua: "smoke-round", checks: { mic: "ok", audio_out: "ok" }, at: new Date().toISOString() };
+  const res = await api("POST", "/api/diag", blob);
+  check("device check result stored", res.status >= 200 && res.status < 300, { status: res.status, body: res.data });
+}
+
 async function main() {
   mkdirSync(OUT, { recursive: true });
+  await diagCheck();
   if (MODE !== "meeting") await interviewRound();
   if (MODE !== "interview") {
     try {
