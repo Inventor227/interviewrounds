@@ -245,7 +245,8 @@ pub async fn me(
     }
     Ok(Json(json!({
         "identity": who,
-        "sign_in_available": app.config.google_client_id.is_some(),
+        // No sign-in in this build: everyone is a guest on their device (the auth routes are not mounted).
+        "sign_in_available": false,
         "settings": settings,
         "onboarding_done": identity.onboarding_done,
         "streak": streak,

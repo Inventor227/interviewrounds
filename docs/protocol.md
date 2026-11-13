@@ -59,7 +59,9 @@ JSON; cookie `ir_id` identifies the device/user; all under same origin. A new gu
   `POST /api/shares` is an upsert per session: a session has at most one live public link, and a new POST for a
   session that already has one replaces it (the old slug stops working). The web app still deletes the old slug
   before posting a change, so either side alone keeps a single live link.
-- `GET /s/{slug}` server-rendered scorecard; `GET /auth/google/start`, `/auth/google/callback`, `POST /auth/logout`
+- `GET /s/{slug}` server-rendered scorecard
+- `GET /auth/google/start`, `/auth/google/callback`, `POST /auth/logout`: not mounted in this build (no sign-in:
+  everyone is a guest on their device, `sign_in_available` is always `false`).
 - `POST /v1/chat/completions` Fish custom LLM (bearer `FISH_LLM_SECRET`, or the session `client_token` when the session's
   voice is `fake`); OpenAI chat format in, SSE `chat.completion.chunk` out. Turns are served only while the round is `live`
   (or ending, for the goodbye): else `409 {code: "session_not_live"}`. With the `client_token` a turn is at most 2,000
