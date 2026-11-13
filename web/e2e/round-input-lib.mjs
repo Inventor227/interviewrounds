@@ -24,7 +24,7 @@ export const inputState = () =>
 export const pointers = () => page(() => globalThis.__round.room.debug.pointers());
 
 /** Controllers in hand; the right one's tip touches the desk and its trigger places it. */
-export async function placeWithController(S, shotName) {
+export async function placeWithController(S, shotName, { rest = true } = {}) {
   await call('xr', 'set-input-mode', { mode: 'controller' });
   await call('xr', 'set-transform', { device: 'headset', position: S.head, orientation: { pitch: -38, yaw: 0, roll: 0 } });
   await hold('left', { x: S.head.x - 0.3, y: 0.95, z: S.head.z - 0.1 }, { x: S.head.x - 0.3, y: 0.9, z: S.head.z - 1.1 });
@@ -38,8 +38,8 @@ export async function placeWithController(S, shotName) {
   await hold('right', tip, { x: tip.x, y: tip.y - 0.03, z: tip.z - 0.3 });
   await sleep(1200);
   await pull('right', 0.25);
-  const desk = await until('the desk placement', () => globalThis.__xrApp.desk$.value, null, 120000, 1000);
-  await hold('right', { x: S.head.x + 0.3, y: 0.9, z: S.head.z - 0.12 }, { x: S.head.x + 0.3, y: 0.85, z: S.head.z - 1.1 });
+  const desk = await until('the desk placement', () => globalThis.__xrApp.desk$.value, null, 120000, 700);
+  if (rest) await hold('right', { x: S.head.x + 0.3, y: 0.9, z: S.head.z - 0.12 }, { x: S.head.x + 0.3, y: 0.85, z: S.head.z - 1.1 });
   return desk;
 }
 
