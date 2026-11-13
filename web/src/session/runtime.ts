@@ -330,6 +330,8 @@ export function createRoundRuntime({ preview }: RuntimeOptions): RoundController
           if (desk !== lastDesk) {
             lastDesk = desk;
             if (desk) people?.place(a.room.seatPoses());
+            // The sheet is for drawing: the brief card stands beyond it instead of lying on it.
+            if (desk && hasBoard && !preview) a.ui.layoutBriefBeyondSheet(desk);
           }
           if (a.room.sheet.visible) a.room.sheet.visible = false;
           const h = a.headPose().pos;

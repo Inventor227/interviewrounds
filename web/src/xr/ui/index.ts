@@ -10,7 +10,7 @@ import type { Sounds } from '../sound';
 import { BriefCard } from './briefCard';
 import { Captions } from './captions';
 import { Hint } from './hint';
-import { layoutDesk, layoutHeadStatus, layoutHint, layoutHud, type PanelName, type PanelPose } from './layout';
+import { layoutBriefBeyondSheet, layoutDesk, layoutHeadStatus, layoutHint, layoutHud, type PanelName, type PanelPose } from './layout';
 import { RoundBar } from './roundBar';
 import { StatusCard } from './statusCard';
 import { quickCardFromHeadset, SummaryCard, summaryFromReport } from './summaryCard';
@@ -148,6 +148,11 @@ export class RoundUI {
     const poses = layoutDesk(desk);
     const g = this.groups;
     for (const k of Object.keys(poses) as PanelName[]) if (!except.includes(k)) apply(g[k], poses[k]);
+  }
+
+  /** Rounds with a board: stand the brief card beyond the sheet instead of on it. */
+  layoutBriefBeyondSheet(desk: DeskFrame): void {
+    apply(this.brief.group, layoutBriefBeyondSheet(desk));
   }
 
   layoutHeadStatus(head: HeadPose): void {

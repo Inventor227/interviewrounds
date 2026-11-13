@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { DEG, dist, v3 } from '../math';
-import { userPoint } from '../seats';
+import { SHEET_D, sheetPoint, userPoint } from '../seats';
 import { BRIEF_MIN_FONT_CM } from './briefCard';
 import { CAPTION_MAX_CHARS, CAPTIONS_MIN_FONT_CM, captionLines } from './captions';
-import { layoutDesk } from './layout';
+import { layoutBriefBeyondSheet, layoutDesk } from './layout';
 import { ROUND_BAR_GAP_CM, ROUND_BAR_MIN_FONT_CM } from './roundBar';
 import { STATUS_MIN_FONT_CM } from './statusCard';
 import { SUMMARY_BUTTON_GAP_CM, SUMMARY_MIN_FONT_CM } from './summaryCard';
@@ -30,6 +30,16 @@ describe('readability and reach', () => {
       expect(deg).toBeGreaterThanOrEqual(MIN_DEG);
     });
   }
+
+  it('the_brief_card_beyond_the_sheet_is_off_the_sheet_and_still_readable', () => {
+    const p = layoutBriefBeyondSheet(desk);
+    // Beyond the far edge: further from the user than any point of the sheet.
+    expect(p.pos.z).toBeLessThan(sheetPoint(desk, 0, SHEET_D, 0).z);
+    expect(p.pos.y).toBeGreaterThan(sheetPoint(desk, 0, SHEET_D, 0).y);
+    const deg = Math.atan(BRIEF_MIN_FONT_CM / 100 / dist(eye, p.pos)) / DEG;
+    expect(deg).toBeGreaterThanOrEqual(MIN_DEG);
+    expect(p.tilt).toBeLessThan(0); // leans back to face the eyes
+  });
 
   it('summary_card_buttons_are_in_direct_touch_reach_below_the_eyes', () => {
     const p = poses.summary.pos;

@@ -49,6 +49,18 @@ export function layoutDesk(desk: DeskFrame): Record<PanelName, PanelPose> {
   };
 }
 
+/**
+ * The brief card in a round with a board: standing just beyond the sheet's far edge on the left, facing the eyes,
+ * so the whole sheet stays free for drawing (on the sheet it would cover the top-left cards).
+ */
+export function layoutBriefBeyondSheet(desk: DeskFrame): PanelPose {
+  const edge = sheetPoint(desk, -SHEET_W / 2 + BRIEF_W / 2, SHEET_D + 0.03, 0);
+  const eye = desk.head ? v3(desk.head.x, desk.head.y, desk.head.z) : v3(userPoint(desk).x, desk.deskY + 0.45, userPoint(desk).z);
+  const pos = v3(edge.x, edge.y + BRIEF_H / 2 + 0.01, edge.z);
+  const ahead = Math.hypot(pos.x - eye.x, pos.z - eye.z);
+  return { pos, yaw: desk.yaw, tilt: -Math.atan2(Math.max(0, eye.y - pos.y), ahead) };
+}
+
 /** The status card before the desk is known: in front of the head, a little low. */
 export function layoutHeadStatus(head: HeadPose): PanelPose {
   // Low in view, where the eyes go when told to touch the desk; tilted to face the eyes.
