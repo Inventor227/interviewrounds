@@ -1,23 +1,13 @@
-import { render } from 'preact';
-import { act } from 'preact/test-utils';
 import { afterEach, describe, expect, it } from 'vitest';
-import { App } from './App';
-
-function renderAt(path: string): HTMLElement {
-  history.replaceState(null, '', path);
-  const root = document.createElement('div');
-  document.body.append(root);
-  act(() => render(<App />, root));
-  return root;
-}
+import { isQuestBrowser } from './App';
+import { $, cleanup, renderApp, useFakeServer } from './test-utils';
 
 describe('App shell', () => {
-  afterEach(() => {
-    document.body.innerHTML = '';
-  });
+  afterEach(cleanup);
 
   it.each([
     ['/', 'page-home'],
+    ['/start', 'page-pick-role'],
     ['/start/sde', 'page-pick-round'],
     ['/round/sde.system_design.short', 'page-start'],
     ['/meeting/new', 'page-meeting'],
@@ -26,14 +16,34 @@ describe('App shell', () => {
     ['/history', 'page-history'],
     ['/settings', 'page-settings'],
     ['/pricing', 'page-pricing'],
+    ['/not-supported', 'page-not-supported'],
     ['/nope', 'page-not-found'],
-  ])('routes %s to its placeholder', (path, test) => {
-    const root = renderAt(path);
-    expect(root.querySelector(`[data-test="${test}"]`)).not.toBeNull();
+  ])('routes %s to its page', async (path, test) => {
+    useFakeServer();
+    const root = await renderApp(path);
+    expect($(root, test)).not.toBeNull();
   });
 
-  it('passes_route_params', () => {
-    const root = renderAt('/round/sde.coding.short');
-    expect(root.textContent).toContain('sde.coding.short');
+  it('passes_route_params', async () => {
+    useFakeServer();
+    const root = await renderApp('/round/sde.coding.short');
+    expect($(root, 'page-start')?.dataset.round).toBe('sde.coding.short');
+  });
+
+  it('every_page_has_one_h1', async () => {
+    useFakeServer();
+    for (const path of ['/', '/start', '/start/pm', '/round/sde.coding.short', '/meeting/new', '/report/demo', '/history', '/settings', '/pricing']) {
+      const root = await renderApp(path);
+      expect(root.querySelectorAll('h1')).toHaveLength(1);
+      cleanup();
+      useFakeServer();
+    }
+  });
+
+  it('quest_browser_gets_the_dim_palette', () => {
+    const quest = 'Mozilla/5.0 (X11; Linux x86_64; Quest 3) AppleWebKit/537.36 (KHTML, like Gecko) OculusBrowser/40.0 Chrome/138 Safari/537.36';
+    expect(isQuestBrowser(quest, '')).toBe(true);
+    expect(isQuestBrowser('Mozilla/5.0 (Macintosh) Chrome/138 Safari/537.36', '')).toBe(false);
+    expect(isQuestBrowser('Mozilla/5.0 (Macintosh)', '?device=quest')).toBe(true);
   });
 });
