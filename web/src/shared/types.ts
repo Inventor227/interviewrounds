@@ -781,8 +781,6 @@ export interface Me {
   resumable: { session_id: string; round_title: string; expires_at: string } | null;
   limits: Limits;
   entitlements: Entitlements;
-  /** A started round whose browser dropped less than 3 minutes ago; null when there is none. */
-  resumable: { session_id: string; round_title: string; expires_at: string } | null;
 }
 
 export interface HistoryItem {

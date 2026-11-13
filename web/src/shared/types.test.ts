@@ -319,7 +319,6 @@ const S = {
     resumable: 'req|null',
     limits: 'req',
     entitlements: 'req',
-    resumable: 'req|null',
   }),
   identity: spec<Me['identity']>()({ kind: 'req', name: 'opt', email: 'opt' }),
   resumable: spec<NonNullable<Me['resumable']>>()({ session_id: 'req', round_title: 'req', expires_at: 'req' }),
