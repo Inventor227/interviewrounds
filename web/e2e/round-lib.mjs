@@ -207,7 +207,7 @@ export async function enterFromTap(test = 'start-round') {
 }
 
 /** Sits the user at the desk, rests the right index tip on it and waits for the placement. */
-export async function placeDesk(S, shotName = '03-placing') {
+export async function placeDesk(S, shotName = '03-placing', { onboarding = 'skip' } = {}) {
   await call('xr', 'set-input-mode', { mode: 'hand' });
   await call('xr', 'set-transform', { device: 'headset', position: S.head, orientation: { pitch: -38, yaw: 0, roll: 0 } });
   await call('xr', 'set-transform', { device: 'hand-left', position: { x: S.head.x - 0.3, y: 0.95, z: S.head.z - 0.1 }, orientation: 'auto' });
@@ -220,7 +220,29 @@ export async function placeDesk(S, shotName = '03-placing') {
   // Hand off the sheet again.
   await call('xr', 'set-transform', { device: 'hand-right', position: { x: S.head.x + 0.3, y: 0.82, z: S.head.z - 0.15 }, orientation: 'auto' });
   await call('xr', 'set-hand-pose', { device: 'hand-right', poseId: 'default' });
+  // A new guest's first round with a sheet teaches the gesture first; runs about something else skip it.
+  if (onboarding === 'skip') await skipOnboarding();
   return desk;
+}
+
+/** The first-round onboarding step on the sheet, if one is showing ('box' or 'name'). */
+export const onboardingStep = () => page(() => globalThis.__round?.room?.debug?.onboarding?.showing?.() ?? null);
+
+/** Skips the first-round onboarding when it shows (a new guest gets it on a round with a sheet). Returns the step skipped. */
+export async function skipOnboarding(waitMs = 6000) {
+  const end = Date.now() + waitMs;
+  for (;;) {
+    const step = await onboardingStep().catch(() => null);
+    if (step) {
+      await page(() => globalThis.__round.room.debug.onboarding.skip());
+      stage('onboarding skipped', { step });
+      return step;
+    }
+    const st = await page(() => globalThis.__round?.controller.state).catch(() => null);
+    if (st && st !== 'placing') return null;
+    if (Date.now() > end) return null;
+    await sleep(700);
+  }
 }
 
 export const look = (S, pitch, yaw = 0) => call('xr', 'set-transform', { device: 'headset', position: S.head, orientation: { pitch, yaw, roll: 0 } });

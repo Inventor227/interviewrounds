@@ -11,13 +11,13 @@
 // 2D pages nothing. The session page reads the live room through ./room.
 
 import type { RuntimeOptions } from '../app/launch';
-import { loadMe } from '../app/components/data';
+import { loadMe, setMe } from '../app/components/data';
 import type { BoardXR } from '../board/boardXR';
 import type { BoardPoint, PointerAdapter } from '../board/input';
 import type { BoardStore } from '../board/ops';
 import { api } from '../net/api';
 import { SessionSocket } from '../net/ws';
-import type { CreateSessionRes, Panelist, Settings } from '../shared/types';
+import type { CreateSessionRes, Me, Panelist, Settings } from '../shared/types';
 import { isMarker, type TransportOptions, type VoiceTransport } from '../voice/transport';
 import type { Avatar } from '../xr/avatar';
 import type { XRApp } from '../xr/world';
@@ -27,6 +27,7 @@ import * as browser from './browser';
 import type { RoundControllerDeps } from './controller';
 import { wireCues, type Cues } from './cues';
 import { createHeadPort } from './headPort';
+import { needsOnboarding, Onboarding } from './onboarding';
 import { People, type AvatarLike } from './people';
 import type { HeadSamplerPort, SocketPort, UiAction, XRPort, XRVisibilityLike } from './ports';
 import { clearLiveRoom, setLiveRoom, type LiveRoom } from './room';
@@ -64,6 +65,11 @@ class RelayPointer implements PointerAdapter {
   destroy(): void {
     for (const s of Object.values(this.sets)) s.clear();
   }
+}
+
+/** The session id of a room socket path (`/ws/session/{id}`), for the calls the room makes itself (the board picture). */
+export function sessionIdOf(wsUrl: string): string | null {
+  return /\/ws\/session\/([^/?#]+)/.exec(wsUrl)?.[1] ?? null;
 }
 
 /** Dev flags for emulator tooling: from the query, else from this tab's storage (they survive client routing). */
@@ -107,6 +113,12 @@ export function createRoundRuntime({ preview }: RuntimeOptions): RoundController
   let sync: BoardSync | null = null;
   let socket: SessionSocket | null = null;
   let settings: Settings | null = null;
+  let me: Me | null = null;
+  let onboarding: Onboarding | null = null;
+  let taught = false;
+  /** Builds the board for a dominant hand (the tray goes opposite); set once the board's parts are loaded. */
+  let makeBoard: ((hand: 'left' | 'right') => BoardXR) | null = null;
+  let boardHand: 'left' | 'right' = 'right';
   let relay: RelayPointer | null = null;
   let cues: Cues | null = null;
   let sheetToWorld: ((x: number, y: number, h: number) => { x: number; y: number; z: number }) | null = null;
@@ -191,6 +203,9 @@ export function createRoundRuntime({ preview }: RuntimeOptions): RoundController
     for (const c of cleanups.splice(0)) c();
     sync = null;
     cues = null;
+    onboarding?.dispose();
+    onboarding = null;
+    makeBoard = null;
     board?.destroy();
     board = null;
     store = null;
@@ -230,11 +245,12 @@ export function createRoundRuntime({ preview }: RuntimeOptions): RoundController
   async function loadBoard(a: XRApp, res: CreateSessionRes): Promise<void> {
     const kitName = res.round.board_kit;
     if (!kitName) return;
-    const [{ createBoardXR }, { BoardStore }, { emptyBoard }, { sheetToWorld: toWorld }] = await Promise.all([
+    const [{ createBoardXR }, { BoardStore }, { emptyBoard }, { sheetToWorld: toWorld }, { dominantFor }] = await Promise.all([
       import('../board/boardXR'),
       import('../board/ops'),
       import('../board/model'),
       import('../board/sheetMath'),
+      import('../board/tray'),
     ]);
     if (disposed) return;
     // The same empty board the server starts the round with: the kit, plus an empty code or meeting section.
@@ -244,9 +260,10 @@ export function createRoundRuntime({ preview }: RuntimeOptions): RoundController
     const s = new BoardStore(start);
     store = s;
     if (preview) relay = new RelayPointer();
-    board = createBoardXR(a, {
+    boardHand = dominantFor(null, settings?.dominant_hand);
+    const build = (hand: 'left' | 'right') => createBoardXR(a, {
       store: s,
-      dominantHand: settings?.dominant_hand ?? 'right',
+      dominantHand: hand,
       // The kit follows the board's round type; the round clock stamps traces and agenda ticks.
       now_s: roundClock,
       send: (op) => {
@@ -261,6 +278,18 @@ export function createRoundRuntime({ preview }: RuntimeOptions): RoundController
       pointer: relay ?? undefined,
       ghostSettleMs: Number(devFlag('ghost_settle')) > 0 ? Number(devFlag('ghost_settle')) * 1000 : undefined,
     });
+    board = build(boardHand);
+    // The hand that touched the desk is the dominant one for this round, whatever the 2D setting says: the tray
+    // (and in coding rounds the panel) is laid out again for it, before anything is on the sheet.
+    makeBoard = (hand) => {
+      const want = dominantFor(hand, settings?.dominant_hand);
+      if (want !== boardHand && board) {
+        board.destroy();
+        boardHand = want;
+        board = build(want);
+      }
+      return board!;
+    };
     sheetToWorld = (x, y, h) => toWorld(a.sheetAnchor, x, y, h);
     wireSocket();
     if (import.meta.env.DEV) {
@@ -379,6 +408,7 @@ export function createRoundRuntime({ preview }: RuntimeOptions): RoundController
       return () => sessionEndCbs.delete(cb);
     },
     cue: (name) => app?.sounds.play(name),
+    onboard,
     dispose() {
       if (disposed) return;
       disposed = true;
@@ -392,12 +422,58 @@ export function createRoundRuntime({ preview }: RuntimeOptions): RoundController
     room: { seatPoses: () => port?.room.seatPoses() ?? [] },
   };
 
+  /**
+   * The first round with a sheet on this device: the ghost hand shows the one gesture and the round waits until the
+   * user has drawn a box (or skipped). Asked again (a second Enter after leaving the headset view) it answers `none`
+   * once it has been taught.
+   */
+  async function onboard(): Promise<'done' | 'skipped' | 'none'> {
+    const a = app;
+    const b = board;
+    const s = store;
+    if (!a || !b || !s || taught || !needsOnboarding({ kit: b.kit.id, done: me?.onboarding_done, preview })) return 'none';
+    if (!onboarding) {
+      const { OnboardingView, mountOnboardingView } = await import('../xr/onboardingView');
+      if (disposed || app !== a) return 'none';
+      const skips = new Set<() => void>();
+      const view = new OnboardingView(() => {
+        a.sounds.click();
+        for (const cb of [...skips]) cb();
+      });
+      cleanups.push(
+        mountOnboardingView(a.world, a.sheetAnchor, view),
+        a.onFrame((_dt, t) => view.update(t)),
+      );
+      onboarding = new Onboarding({
+        cards: () => s.board.items.filter((i) => i.kind !== 'ink').map((i) => ({ id: i.id, labelled: !!((i as { label?: string | null }).label ?? (i as { text?: string | null }).text) })),
+        onBoard: (cb) => s.onChange(() => cb()),
+        show: (step) => view.show(step, performance.now()),
+        onSkip: (cb) => {
+          skips.add(cb);
+          return () => skips.delete(cb);
+        },
+      });
+      if (import.meta.env.DEV && room.debug) {
+        const ob = onboarding;
+        room.debug.onboarding = { showing: () => ob.showing, skip: () => [...skips].forEach((cb) => cb()), view };
+      }
+    }
+    const result = await onboarding.run();
+    taught = true;
+    // The next round in this tab does not teach again (the server remembers it for later visits).
+    if (me) {
+      me = { ...me, onboarding_done: true };
+      setMe(me);
+    }
+    return result;
+  }
+
   async function build(res: CreateSessionRes): Promise<void> {
     {
       // In dev the managed emulator browser keeps a small tooling world on 2D pages; a script can ask to drop it.
       if (devFlag('one_world') === '1') await import('../xr/devtools').then((m) => m.stopToolingWorld()).catch(() => undefined);
       timings.begin('chunk');
-      const [world, project, portMod, me] = await Promise.all([
+      const [world, project, portMod, loaded] = await Promise.all([
         import('../xr/world'),
         import('virtual:iwsdk-project'),
         import('../xr/port'),
@@ -405,7 +481,8 @@ export function createRoundRuntime({ preview }: RuntimeOptions): RoundController
       ]);
       timings.mark('chunk_loaded');
       if (disposed) return;
-      settings = me?.settings ?? null;
+      me = loaded;
+      settings = loaded?.settings ?? null;
       const n = Math.max(1, Math.min(3, res.panel.length)) as 1 | 2 | 3;
       const fallbackS = Number(devFlag('fallback'));
       const a = await world.createXRApp(host, {
@@ -462,6 +539,7 @@ export function createRoundRuntime({ preview }: RuntimeOptions): RoundController
           if (desk !== lastDesk) {
             lastDesk = desk;
             if (desk) people?.place(a.room.seatPoses());
+            if (desk?.hand && !preview) makeBoard?.(desk.hand);
             // The sheet is for drawing: the brief card stands beyond it instead of lying on it.
             if (desk && hasBoard && !preview) a.ui.layoutBriefBeyondSheet(desk);
           }
@@ -533,7 +611,7 @@ export function createRoundRuntime({ preview }: RuntimeOptions): RoundController
 
   const makeSocket = (wsUrl: string, clientToken: string): SocketPort => {
     socket = new SessionSocket(wsUrl, clientToken);
-    sessionId = /\/ws\/session\/([^/?#]+)/.exec(wsUrl)?.[1] ?? null;
+    sessionId = sessionIdOf(wsUrl);
     wireSocket();
     return socket;
   };
