@@ -1869,8 +1869,13 @@ a.drill:hover {
 }
 .chart .axis {
   fill: var(--muted);
-  font-size: 12px;
+  font-size: 10px;
   font-family: var(--font);
+}
+@media (max-width: 560px) {
+  .chart .axis {
+    font-size: 22px;
+  }
 }
 .series polyline {
   fill: none;
@@ -1931,6 +1936,9 @@ a.drill:hover {
 .set-group {
   margin-bottom: var(--space-6);
   max-width: 640px;
+}
+.save-state + .set-group .section-title {
+  margin-top: var(--space-3);
 }
 .field {
   margin-bottom: var(--space-5);
@@ -2013,7 +2021,7 @@ textarea {
   position: sticky;
   top: 0;
   min-height: 1.6em;
-  margin: 0 0 var(--space-3);
+  margin: 0;
   font-size: 0.92rem;
   color: var(--muted);
 }

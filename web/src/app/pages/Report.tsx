@@ -304,8 +304,10 @@ function Room(props: { m: MeetingDetails }) {
           {m.attendees.map((a) => (
             <li key={a.name}>
               <p class="person-head">
-                <strong>{a.name}</strong>
-                {a.role && <span class="muted">, {a.role}</span>}
+                <span>
+                  <strong>{a.name}</strong>
+                  {a.role && <span class="muted">, {a.role}</span>}
+                </span>
               </p>
               {a.stance_start != null && a.stance_end != null && (
                 <p class="stance" data-test="stance">

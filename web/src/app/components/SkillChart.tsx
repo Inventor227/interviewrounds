@@ -5,8 +5,8 @@ import type { Skills } from '../../shared/types';
 import { dayLabel } from './format';
 
 const MAX_SESSIONS = 10;
-const W = 480;
-const H = 200;
+const W = 640;
+const H = 220;
 const PAD = { l: 28, r: 12, t: 12, b: 26 };
 
 export function SkillChart(props: { skills: Skills }) {
@@ -35,9 +35,11 @@ export function SkillChart(props: { skills: Skills }) {
           </g>
         ))}
         {comps.map((c, ci) => {
+          // A small vertical offset per series keeps equal scores from hiding each other.
+          const dy = (ci - (comps.length - 1) / 2) * 3;
           const pts = c.points
             .filter((p) => index.has(p.session_id))
-            .map((p) => [x(index.get(p.session_id)!), y(p.score)] as const);
+            .map((p) => [x(index.get(p.session_id)!), y(p.score) + dy] as const);
           if (pts.length === 0) return null;
           return (
             <g key={c.id} class={`series c${ci % 4}`}>

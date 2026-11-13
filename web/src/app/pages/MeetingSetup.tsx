@@ -267,8 +267,10 @@ function Prepared(props: {
           <li key={a.name} class="person-plan" data-test="plan-attendee">
             <p class="person-head">
               <Monogram name={a.name} size="sm" />
-              <strong>{a.name}</strong>
-              <span class="muted">, {a.role}</span>
+              <span>
+                <strong>{a.name}</strong>
+                <span class="muted">, {a.role}</span>
+              </span>
             </p>
             <ul class="objs">
               {(a.likely_objections ?? []).map((o, j) => (
