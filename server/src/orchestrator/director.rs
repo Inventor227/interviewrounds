@@ -79,6 +79,8 @@ pub fn build_request(
     let speaker_system = panelist.director_system.clone();
     let mut messages =
         super::prompt::perspective(state, &panelist.panelist_id, state.history.clone());
+    // Its system prompt and tools differ from the live call's: no thinking block made there is valid here.
+    crate::claude::strip_thinking(&mut messages);
     super::prompt::strip_empty_text(&mut messages);
     // The history ends on the turn's user message (recorded at turn start); the line follows it as another user
     // message, which the API joins with it.

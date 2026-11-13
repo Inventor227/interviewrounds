@@ -415,12 +415,18 @@ impl Hub {
     /// The user is back (a live turn, or `ui.event resume`): a clock held since a socket drop or a restart runs
     /// again. A reconnect alone never does this.
     pub async fn wake(&self, app: &AppState, handle: &Mutex<SessionState>) {
+        // While the model is down the clock stays held: the user is back, but the resume is logged when a turn gets
+        // through and the clock really runs (`degraded_changed`).
+        let degraded = handle.lock().await.degraded;
         let (logged, connected) = {
             let mut h = self.inner.lock().await;
             if !h.held {
                 return;
             }
             h.held = false;
+            if degraded {
+                return;
+            }
             let connected = h.connections > 0;
             // Without a socket the clock stays stopped; the resume is logged when the next connect runs it.
             let logged = connected && std::mem::take(&mut h.held_logged);
@@ -774,6 +780,64 @@ fn state_value(hub: &Hub, st: &SessionState, now: Instant, time_check_due: bool)
 pub fn stop_clock(st: &mut SessionState, now: Instant) {
     if st.paused_since.is_none() {
         st.paused_since = Some(now);
+    }
+}
+
+/// The round became degraded (`true`: its clock stopped) or a turn got through again (`false`). Logged as a pause
+/// and a resume, so the report's round time leaves the hold out like any other pause. On recovery the clock runs
+/// only if the user is there (a socket connected, not held after a drop); otherwise the resume stays owed and is
+/// logged when the next connect or `wake` runs the clock.
+pub async fn degraded_changed(
+    app: &AppState,
+    session_id: &str,
+    handle: &Mutex<SessionState>,
+    degraded: bool,
+) {
+    let id = Uuid::parse_str(session_id).ok();
+    let now = Instant::now();
+    if degraded {
+        let at_ms = handle.lock().await.elapsed_ms(now) as i64;
+        tracing::warn!(session_id = %session_id, "model unavailable for several turns; round clock held");
+        let d = json!({"kind": "pause", "reason": "degraded", "at_ms": at_ms});
+        if let Some(id) = id
+            && let Err(err) = store_event(app, id, "ui.event", &d).await
+        {
+            tracing::warn!(session_id = %id, error = %err, "could not log the degraded hold");
+        }
+        return;
+    }
+    let hub = app.hubs.get(session_id);
+    let present = match &hub {
+        // No socket hub (a turn with no room open): nothing else would restart the clock.
+        None => true,
+        Some(h) => {
+            let mut i = h.inner.lock().await;
+            let present = i.connections > 0 && !i.held;
+            i.held_logged = !present;
+            present
+        }
+    };
+    let at_ms = {
+        let mut st = handle.lock().await;
+        if !present || st.status != SessionStatus::Live {
+            None
+        } else {
+            run_clock(&mut st, now);
+            Some(st.elapsed_ms(now) as i64)
+        }
+    };
+    tracing::info!(session_id = %session_id, clock_runs = at_ms.is_some(), "model back");
+    // Always logged: it closes the outage hold in the report even while the user is paused or away (their own
+    // hold, logged separately, covers the rest).
+    let at_ms = match at_ms {
+        Some(ms) => ms,
+        None => handle.lock().await.elapsed_ms(now) as i64,
+    };
+    if let Some(id) = id {
+        let d = json!({"kind": "resume", "reason": "model_back", "at_ms": at_ms});
+        if let Err(err) = store_event(app, id, "ui.event", &d).await {
+            tracing::warn!(session_id = %id, error = %err, "could not log the end of the degraded hold");
+        }
     }
 }
 
@@ -1352,6 +1416,13 @@ async fn connect(app: &AppState, hub: &Hub, handle: &Mutex<SessionState>, record
     if started {
         hub.inner.lock().await.wall_start = Some(Utc::now());
     }
+    // While the model is down the clock did not run: the resume stays owed until it does.
+    let resume_owed = if resume_owed && handle.lock().await.degraded {
+        hub.inner.lock().await.held_logged = true;
+        false
+    } else {
+        resume_owed
+    };
     if resume_owed {
         // The user came back while no socket was connected; the clock runs from now.
         let d = json!({"kind": "resume", "reason": "back", "at_ms": elapsed_ms(handle).await});

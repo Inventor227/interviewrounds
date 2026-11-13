@@ -45,6 +45,16 @@ fn run_async(fut: impl Future<Output = anyhow::Result<()>>) -> ExitCode {
 async fn serve() -> anyhow::Result<()> {
     init_tracing();
     let config = Config::from_env().context("reading configuration")?;
+    if config.live_fallback_model == config.live_model
+        || config.live_fallback_model == config.fast_model
+    {
+        tracing::warn!(
+            live_model = %config.live_model,
+            fast_model = %config.fast_model,
+            fallback = %config.live_fallback_model,
+            "LIVE_FALLBACK_MODEL equals the live or fast model: an overload of that model has no real fallback"
+        );
+    }
     tracing::info!(
         origin = %config.app_origin,
         usage_phase = config.usage_phase.as_str(),

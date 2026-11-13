@@ -517,8 +517,13 @@ async fn resume_after_long_paused_drop_stays_live() {
 
 #[tokio::test]
 async fn resume_of_paused_round_after_restart_stays_live() {
+    // A 3 s window: the drop is faked an hour back, and two process starts fit inside it even on a loaded runner.
+    let window = || SessionTiming {
+        offline_limit: Duration::from_secs(3),
+        ..roomy()
+    };
     let app = live::test_app(Options {
-        timing: roomy(),
+        timing: window(),
         ..Options::default()
     })
     .await;
@@ -534,7 +539,7 @@ async fn resume_of_paused_round_after_restart_stays_live() {
         .execute(&app.state.db)
         .await
         .unwrap();
-    let app2 = restarted(&app, roomy()).await;
+    let app2 = restarted(&app, window()).await;
     let base2 = app2.serve().await;
     let res = resume(&app2, &cookie, &id).await;
     assert_eq!(res.status, StatusCode::OK, "{}", res.body);
@@ -542,7 +547,7 @@ async fn resume_of_paused_round_after_restart_stays_live() {
     tokio::time::sleep(Duration::from_millis(500)).await;
     assert_eq!(status(&app2, &id).await, ("live".to_string(), None));
     // A further restart before the page connects: the janitor sees a fresh window too.
-    let app3 = restarted(&app, roomy()).await;
+    let app3 = restarted(&app, window()).await;
     persist::sweep_stale(&app3.state).await.unwrap();
     assert_eq!(status(&app2, &id).await, ("live".to_string(), None));
     let mut ws = hello(&base2, &id, &token, 0).await;
@@ -1043,4 +1048,270 @@ async fn join_is_refused_while_paused_with_voices_released() {
         .await;
     assert_eq!(res.status, StatusCode::CONFLICT, "{}", res.body);
     assert_eq!(app.fish_calls("POST", "/v1/agent/sessions").await.len(), 1);
+}
+
+const ALL_MODELS: [&str; 3] = ["claude-sonnet-5-5", "claude-haiku-5-5", "claude-opus-5-5"];
+
+async fn ui_events(app: &live::TestApp, id: &str) -> Vec<Value> {
+    sqlx::query_scalar(
+        "select data from session_events where session_id = $1 and kind = 'ui.event' order by id",
+    )
+    .bind(Uuid::parse_str(id).unwrap())
+    .fetch_all(&app.state.db)
+    .await
+    .unwrap()
+}
+
+#[tokio::test]
+async fn degraded_hold_is_logged_as_a_pause_and_the_clock_waits_for_a_real_reply() {
+    let app = live::test_app(Options {
+        timing: roomy(),
+        ..Options::default()
+    })
+    .await;
+    let base = app.serve().await;
+    let (_, id, token) = new_session(&app, "fake").await;
+    let mut ws = hello(&base, &id, &token, 0).await;
+    frame_of(&mut ws, "round.state", WAIT).await.unwrap();
+    // Every model is down: three hold lines, then the round is degraded.
+    *app.llm.down.lock().unwrap() = ALL_MODELS.iter().map(|m| m.to_string()).collect();
+    for i in 0..3 {
+        let res = app.turn(&token, &id, &format!("Point number {i}.")).await;
+        assert_eq!(res.status, StatusCode::OK);
+    }
+    let handle = app.state.registry.get(&id).unwrap();
+    assert!(handle.lock().await.degraded);
+    live::eventually("degraded hold logged", WAIT, || async {
+        ui_events(&app, &id)
+            .await
+            .iter()
+            .any(|e| e["kind"] == "pause" && e["reason"] == "degraded")
+    })
+    .await;
+    // The browser is told.
+    let until = tokio::time::Instant::now() + WAIT;
+    loop {
+        let left = until.saturating_duration_since(tokio::time::Instant::now());
+        match live::next(&mut ws, left).await {
+            Some(live::Next::Frame(f)) if f["t"] == "round.state" && f["d"]["degraded"] == true => {
+                break;
+            }
+            Some(live::Next::Frame(_)) => {}
+            other => panic!("no degraded round.state: {other:?}"),
+        }
+    }
+    // Held, also across a `ui.event resume` (the user is there; the model is not).
+    let before = round_ms(&app, &id).await;
+    send(&mut ws, "ui.event", 1, json!({"kind": "resume"})).await;
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    let held = round_ms(&app, &id).await;
+    assert!(held.abs_diff(before) <= 5, "{before} -> {held}");
+    // The model is back: a real reply, the clock runs, and the resume closes the pause span.
+    app.llm.down.lock().unwrap().clear();
+    let res = app.turn(&token, &id, "Point number three.").await;
+    assert_eq!(res.status, StatusCode::OK);
+    assert!(!handle.lock().await.degraded);
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(round_ms(&app, &id).await > before + 100);
+    let events = ui_events(&app, &id).await;
+    let paused = events
+        .iter()
+        .position(|e| e["kind"] == "pause" && e["reason"] == "degraded")
+        .unwrap();
+    assert!(
+        events[paused..]
+            .iter()
+            .any(|e| e["kind"] == "resume" && e["reason"] == "model_back"),
+        "{events:?}"
+    );
+    // No resume was logged while the clock stood still.
+    assert!(
+        !events[paused..]
+            .iter()
+            .any(|e| e["kind"] == "resume" && e["reason"] == "back"),
+        "{events:?}"
+    );
+}
+
+/// The report's view of held time (union of the logged holds) against the server's round clock.
+async fn report_round_ms(app: &live::TestApp, id: &str) -> i64 {
+    use ir_server::scoring::clock::{RoundClock, hold_spans, hold_toggle};
+    let uuid = Uuid::parse_str(id).unwrap();
+    let rows: Vec<(Value, DateTime<Utc>)> = sqlx::query_as(
+        "select data, created_at from session_events where session_id = $1 and kind = 'ui.event' order by id",
+    )
+    .bind(uuid)
+    .fetch_all(&app.state.db)
+    .await
+    .unwrap();
+    let started: DateTime<Utc> =
+        sqlx::query_scalar("select started_at from sessions where id = $1")
+            .bind(uuid)
+            .fetch_one(&app.state.db)
+            .await
+            .unwrap();
+    let toggles: Vec<(i64, bool, bool)> = rows
+        .iter()
+        .filter_map(|(d, at)| hold_toggle(d, at.timestamp_millis()))
+        .collect();
+    let now = Utc::now().timestamp_millis();
+    RoundClock::new(started.timestamp_millis(), hold_spans(&toggles, now), 0).wall_to_round(now)
+}
+
+async fn degrade(app: &live::TestApp, id: &str, token: &str) {
+    *app.llm.down.lock().unwrap() = ALL_MODELS.iter().map(|m| m.to_string()).collect();
+    for i in 0..3 {
+        let res = app.turn(token, id, &format!("Outage point {i}.")).await;
+        assert_eq!(res.status, StatusCode::OK);
+    }
+    assert!(app.state.registry.get(id).unwrap().lock().await.degraded);
+}
+
+async fn wait_status(app: &live::TestApp, id: &str, want: ir_server::orchestrator::SessionStatus) {
+    let handle = app.state.registry.get(id).unwrap();
+    live::eventually("status", WAIT, || async {
+        handle.lock().await.status == want
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn report_clock_matches_the_server_when_a_pause_overlaps_an_outage() {
+    use ir_server::orchestrator::SessionStatus;
+    let app = live::test_app(Options {
+        timing: roomy(),
+        ..Options::default()
+    })
+    .await;
+    let base = app.serve().await;
+
+    // 1. Pause during the outage, resume while still degraded, then the model comes back.
+    let (_, id, token) = new_session(&app, "fake").await;
+    let mut ws = hello(&base, &id, &token, 0).await;
+    frame_of(&mut ws, "round.state", WAIT).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    degrade(&app, &id, &token).await;
+    send(
+        &mut ws,
+        "ui.event",
+        1,
+        json!({"kind": "pause", "reason": "headset_removed"}),
+    )
+    .await;
+    wait_status(&app, &id, SessionStatus::Paused).await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    send(&mut ws, "ui.event", 2, json!({"kind": "resume"})).await;
+    wait_status(&app, &id, SessionStatus::Live).await;
+    tokio::time::sleep(Duration::from_millis(600)).await;
+    app.llm.down.lock().unwrap().clear();
+    assert_eq!(
+        app.turn(&token, &id, "Back to the design.").await.status,
+        StatusCode::OK
+    );
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let server = round_ms(&app, &id).await as i64;
+    let report = report_round_ms(&app, &id).await;
+    assert!(
+        (server - report).abs() < 250,
+        "server {server} ms, report {report} ms"
+    );
+    drop(ws);
+
+    // 2. The model comes back while the user is still paused; then the user resumes.
+    let (_, id, token) = new_session(&app, "fake").await;
+    let mut ws = hello(&base, &id, &token, 0).await;
+    frame_of(&mut ws, "round.state", WAIT).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    degrade(&app, &id, &token).await;
+    send(
+        &mut ws,
+        "ui.event",
+        1,
+        json!({"kind": "pause", "reason": "headset_removed"}),
+    )
+    .await;
+    wait_status(&app, &id, SessionStatus::Paused).await;
+    app.llm.down.lock().unwrap().clear();
+    // A turn that was already in flight gets through while the user is away (the gate refuses new turns while
+    // paused): the round leaves the outage with the user still paused.
+    let handle = app.state.registry.get(&id).unwrap();
+    let change = handle
+        .lock()
+        .await
+        .note_live_turn(false, false, std::time::Instant::now());
+    assert_eq!(change, Some(false));
+    ws::degraded_changed(&app.state, &id, &handle, false).await;
+    assert!(!handle.lock().await.degraded);
+    tokio::time::sleep(Duration::from_millis(600)).await;
+    send(&mut ws, "ui.event", 2, json!({"kind": "resume"})).await;
+    wait_status(&app, &id, SessionStatus::Live).await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let server = round_ms(&app, &id).await as i64;
+    let report = report_round_ms(&app, &id).await;
+    assert!(
+        (server - report).abs() < 250,
+        "server {server} ms, report {report} ms"
+    );
+    let events = ui_events(&app, &id).await;
+    assert!(
+        events
+            .iter()
+            .any(|e| e["kind"] == "resume" && e["reason"] == "model_back"),
+        "model_back is logged even while paused: {events:?}"
+    );
+}
+
+#[tokio::test]
+async fn me_resumable_lists_a_paused_round_with_its_socket_connected() {
+    let app = live::test_app(Options {
+        timing: SessionTiming {
+            offline_limit: Duration::from_secs(3),
+            ..timing()
+        },
+        ..Options::default()
+    })
+    .await;
+    let base = app.serve().await;
+    let (cookie, id, token) = new_session(&app, "fake").await;
+    // Live with the socket connected: nothing to resume.
+    let mut ws = hello(&base, &id, &token, 0).await;
+    frame_of(&mut ws, "round.state", WAIT).await.unwrap();
+    let me = app.call(Method::GET, "/api/me", Some(&cookie), None).await;
+    assert!(me.body["resumable"].is_null(), "{}", me.body);
+    // Paused (the XR session ended), the 2D page still holds the socket: listed, with the pause budget deadline.
+    send(
+        &mut ws,
+        "ui.event",
+        1,
+        json!({"kind": "pause", "reason": "blurred"}),
+    )
+    .await;
+    live::eventually("paused", WAIT, || async {
+        app.state.registry.get(&id).unwrap().lock().await.status
+            == ir_server::orchestrator::SessionStatus::Paused
+    })
+    .await;
+    let me = app.call(Method::GET, "/api/me", Some(&cookie), None).await;
+    let r = &me.body["resumable"];
+    assert_eq!(r["session_id"], id, "{}", me.body);
+    assert_eq!(r["paused"], true);
+    let expires: DateTime<Utc> = r["expires_at"].as_str().unwrap().parse().unwrap();
+    let left = expires - Utc::now();
+    assert!(
+        left > chrono::Duration::seconds(500) && left <= chrono::Duration::seconds(600),
+        "{left:?}"
+    );
+    // A live round whose socket dropped: listed as not paused.
+    send(&mut ws, "ui.event", 2, json!({"kind": "resume"})).await;
+    live::eventually("live", WAIT, || async {
+        app.state.registry.get(&id).unwrap().lock().await.status
+            == ir_server::orchestrator::SessionStatus::Live
+    })
+    .await;
+    drop(ws);
+    live::eventually("listed after the drop", WAIT, || async {
+        let me = app.call(Method::GET, "/api/me", Some(&cookie), None).await;
+        me.body["resumable"]["paused"] == false
+    })
+    .await;
 }

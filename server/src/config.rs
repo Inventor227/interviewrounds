@@ -169,6 +169,20 @@ impl Config {
                 reason: format!("expected low, medium, high, xhigh or max, got {live_effort:?}"),
             });
         }
+        // Sonnet and Haiku 5.5 run live turns with thinking off, which allows effort `high` at most: a higher value
+        // would make every live call a 400, so it fails here, at boot.
+        let live_model_name = get("LIVE_MODEL").unwrap_or_else(|| DEFAULT_LIVE_MODEL.into());
+        if matches!(live_effort.as_str(), "xhigh" | "max")
+            && (live_model_name.starts_with("claude-sonnet-5-5")
+                || live_model_name.starts_with("claude-haiku-5-5"))
+        {
+            return Err(ConfigError::Invalid {
+                var: "LIVE_EFFORT",
+                reason: format!(
+                    "{live_effort} is above high, the most {live_model_name} allows with thinking off (live turns)"
+                ),
+            });
+        }
 
         let panel_mode = match get("PANEL_MODE").as_deref().unwrap_or("swap") {
             "swap" => PanelMode::Swap,
@@ -500,6 +514,29 @@ mod tests {
                 "{bad} was accepted"
             );
         }
+    }
+
+    #[test]
+    fn live_effort_above_high_needs_a_thinking_live_model() {
+        // The default live model (Sonnet) runs with thinking off: effort above high fails at boot.
+        for effort in ["xhigh", "max"] {
+            let mut env = base();
+            env.insert("LIVE_EFFORT", effort.into());
+            assert!(matches!(
+                load(&env),
+                Err(ConfigError::Invalid {
+                    var: "LIVE_EFFORT",
+                    ..
+                })
+            ));
+        }
+        let mut env = base();
+        env.insert("LIVE_EFFORT", "max".into());
+        env.insert("LIVE_MODEL", "claude-opus-5-5".into());
+        assert_eq!(load(&env).unwrap().live_effort, "max");
+        let mut env = base();
+        env.insert("LIVE_EFFORT", "high".into());
+        assert_eq!(load(&env).unwrap().live_effort, "high");
     }
 
     #[test]

@@ -803,7 +803,8 @@ export interface Me {
   /** Today's suggested short round; null when there is none. */
   daily: { round_id: string; title: string } | null;
   /** A dropped live session that can still be resumed until expires_at; null when there is none. */
-  resumable: { session_id: string; round_title: string; expires_at: string } | null;
+  /** A round to resume until expires_at: paused (even with the socket still open), or live with a dropped socket. */
+  resumable: { session_id: string; round_title: string; expires_at: string; paused: boolean } | null;
   limits: Limits;
   entitlements: Entitlements;
 }

@@ -66,7 +66,22 @@ pub fn retarget(req: &MessagesRequest, model: &str) -> MessagesRequest {
         Some(Thinking::Disabled | Thinking::BetweenTools) => crate::claude::thinking_for(model),
     };
     out.fallbacks = crate::claude::fallbacks_for(model);
+    cap_effort_for_thinking_off(&mut out);
     out
+}
+
+/// Thinking off (`disabled`, `between_tools`) is accepted at effort `high` or below: a higher `LIVE_EFFORT` is
+/// lowered to `high` on such a request, so a retarget never makes an invalid request.
+pub fn cap_effort_for_thinking_off(req: &mut MessagesRequest) {
+    use crate::claude::Thinking;
+    if matches!(
+        req.thinking,
+        Some(Thinking::Disabled | Thinking::BetweenTools)
+    ) && let Some(cfg) = req.output_config.as_mut()
+        && matches!(cfg.effort.as_deref(), Some("xhigh" | "max"))
+    {
+        cfg.effort = Some("high".into());
+    }
 }
 
 #[async_trait]
@@ -145,8 +160,6 @@ pub fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
 pub struct OrchestratorOptions {
     /// Time to the first text from the live model before giving up on it.
     pub first_text_timeout: Duration,
-    /// Same, for the one retry on the fast model.
-    pub retry_first_text_timeout: Duration,
     /// Longest gap between stream events once text is flowing.
     pub idle_timeout: Duration,
     /// How long a turn waits for the previous turn of the same session to finish.
@@ -164,7 +177,6 @@ impl Default for OrchestratorOptions {
     fn default() -> Self {
         OrchestratorOptions {
             first_text_timeout: Duration::from_millis(5000),
-            retry_first_text_timeout: Duration::from_millis(3500),
             idle_timeout: Duration::from_secs(8),
             turn_wait: Duration::from_secs(6),
             turn_deadline: Duration::from_millis(8500),

@@ -199,6 +199,7 @@ pub fn note_failure(
     call: &'static str,
     model: String,
     error: &'static str,
+    status: Option<u16>,
 ) {
     let session = current_session();
     let Ok(rt) = tokio::runtime::Handle::try_current() else {
@@ -212,7 +213,10 @@ pub fn note_failure(
         .bind(session)
         .bind(&model)
         .bind(phase.as_str())
-        .bind(json!({"call": call, "error": error}))
+        .bind(match status {
+            Some(status) => json!({"call": call, "error": error, "status": status}),
+            None => json!({"call": call, "error": error}),
+        })
         .execute(&db)
         .await;
         if let Err(err) = res {
@@ -268,6 +272,7 @@ impl LlmApi for MeteredLlm {
                     call,
                     req.model.clone(),
                     e.kind(),
+                    e.status(),
                 );
             }
             return res;
@@ -281,6 +286,7 @@ impl LlmApi for MeteredLlm {
                 call,
                 req.model.clone(),
                 e.kind(),
+                e.status(),
             );
         }
         if let Ok(r) = &res {
@@ -320,6 +326,7 @@ impl LlmApi for MeteredLlm {
                     "stream",
                     req.model.clone(),
                     e.kind(),
+                    e.status(),
                 );
                 return Err(e);
             }
@@ -382,7 +389,14 @@ impl Stream for MeteredStream {
         if let Poll::Ready(Some(Err(e))) = &next {
             // An error event after the stream opened (an overload mid-stream): its usage comes as an estimate.
             let m = &self.meter;
-            note_failure(m.db.clone(), m.phase, "stream", m.model.clone(), e.kind());
+            note_failure(
+                m.db.clone(),
+                m.phase,
+                "stream",
+                m.model.clone(),
+                e.kind(),
+                e.status(),
+            );
         }
         if let Poll::Ready(Some(Ok(ev))) = &next {
             match ev {

@@ -2500,3 +2500,62 @@ async fn headset_card_retries_on_the_fallback_when_its_model_is_down() {
         .expect("card call ledgered");
     assert_eq!(card.model, "claude-haiku-5-5");
 }
+
+// ---------- outage and user holds (R62 N1) ----------
+
+fn hold(kind: &str, reason: &str, at: i64) -> (i64, bool, bool) {
+    ir_server::scoring::clock::hold_toggle(&json!({"kind": kind, "reason": reason}), at).unwrap()
+}
+
+fn held_ms(events: &[(i64, bool, bool)], end: i64) -> i64 {
+    use ir_server::scoring::clock::{RoundClock, hold_spans};
+    let c = RoundClock::new(0, hold_spans(events, end), 0);
+    end - c.wall_to_round(end)
+}
+
+#[test]
+fn outage_and_user_holds_are_a_union_in_any_order() {
+    // Pause during the outage, resume while still degraded, model back later: held 100..600.
+    let e = [
+        hold("pause", "degraded", 100),
+        hold("pause", "headset_removed", 200),
+        hold("resume", "user", 300),
+        hold("resume", "model_back", 600),
+    ];
+    assert_eq!(held_ms(&e, 1000), 500);
+    // Model back while the user is still paused: held 100..700.
+    let e = [
+        hold("pause", "degraded", 100),
+        hold("pause", "headset_removed", 200),
+        hold("resume", "model_back", 400),
+        hold("resume", "user", 700),
+    ];
+    assert_eq!(held_ms(&e, 1000), 600);
+    // The user paused first, the outage started during the pause and outlasted it: held 100..800.
+    let e = [
+        hold("pause", "user", 100),
+        hold("pause", "degraded", 200),
+        hold("resume", "user", 300),
+        hold("resume", "model_back", 800),
+    ];
+    assert_eq!(held_ms(&e, 1000), 700);
+    // A restart in the middle of the outage (its own hold, closed by the user's return): held 100..900.
+    let e = [
+        hold("pause", "degraded", 100),
+        hold("pause", "restart", 400),
+        hold("resume", "back", 500),
+        hold("resume", "model_back", 900),
+    ];
+    assert_eq!(held_ms(&e, 1000), 800);
+    // Two separate holds: 100..200 and 500..600.
+    let e = [
+        hold("pause", "degraded", 100),
+        hold("resume", "model_back", 200),
+        hold("pause", "user", 500),
+        hold("resume", "user", 600),
+    ];
+    assert_eq!(held_ms(&e, 1000), 200);
+    // An outage that lasts to the end held the clock to the end; an open user pause does not count.
+    assert_eq!(held_ms(&[hold("pause", "degraded", 400)], 1000), 600);
+    assert_eq!(held_ms(&[hold("pause", "user", 400)], 1000), 0);
+}

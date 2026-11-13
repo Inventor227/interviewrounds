@@ -80,10 +80,12 @@ JSON; cookie `ir_id` identifies the device/user; all under same origin. A new gu
   headset card). At most 2 calls per retry, each ledgered as a `retry_scoring` row; `POST
   /api/sessions/{id}/report` on a failed retry gives 2 fresh ones, as for rounds.
 - `GET /api/me` → `{identity:{kind:"guest"|"user", name?, email?}, sign_in_available, settings, onboarding_done,
-  streak:{current, best, today_done}, daily:{round_id, title}|null, resumable:{session_id, round_title, expires_at}|null,
-  limits, entitlements}`. `resumable` is a dropped live session the user can still resume (`POST /api/sessions/{id}/resume`)
-  until `expires_at` (3 minutes after the drop, or the end of the pause budget when that comes first; for a paused
-  round, the end of the pause budget); `null` when there is none
+  streak:{current, best, today_done}, daily:{round_id, title}|null,
+  resumable:{session_id, round_title, expires_at, paused}|null, limits, entitlements}`. `resumable` is a round the user
+  can still resume (`POST /api/sessions/{id}/resume`) until `expires_at`: a **paused** round (`paused: true`), whether or
+  not its socket is still connected (the XR session can end while the 2D page keeps the socket), until its pause budget
+  ends; or a **live** round whose socket dropped (`paused: false`), until 3 minutes after the drop or the end of the pause
+  budget, whichever comes first. A live round with a socket connected is not listed; `null` when there is none
 - `GET /api/me/history?role=` → `[{session_id, round_id, title, started_at, headline}]` where `started_at` is a date-time
   and `headline: string` is the session report's `headline.summary`
 - `GET /api/me/skills?role=` → `{competencies:[{id, name, points:[{session_id, at, score}]}]}`
@@ -174,12 +176,17 @@ Sequencing and acks:
   `hello` (status `created` until then). After a drop (or a server restart) a reconnect alone does not restart it: the
   next live turn (the resume flow's `[event: resume]`) or `ui.event {kind: "resume"}` does. The same holds after
   `POST /resume` from a pause: the clock waits for the user, and the report counts the pause until then. Nothing is
-  spoken on a reconnect. `degraded: true` means the interviewer's model has failed 3 live turns in a row, even after
-  its fallback model (each of those turns said the hold line "Sorry, give me a second."). The round clock is then
-  held, as in a pause, until a turn gets a real reply, and that snapshot carries `degraded: false`. The browser shows
-  "Your interviewer is reconnecting…" while it is true. Held time counts toward the 10-minute pause budget.
-  (Each live turn first retries once on a different model: the fallback, `LIVE_FALLBACK_MODEL`, when the model was
-  overloaded, rate limited, failed with a 5xx or gave no text in time.) `time_check_due: true` is sent once per phase boundary, on the snapshot when the
+  spoken on a reconnect. `degraded: true` means the interviewer's model was unavailable for 3 live turns in a row,
+  even after its fallback model (each of those turns said the hold line "Sorry, give me a second."; a refusal does not
+  count). The round clock is then held, as in a pause, and the hold is logged as a pause for the report, until a turn
+  gets a real reply. That snapshot carries `degraded: false`. The browser shows "Your interviewer is reconnecting…"
+  while it is true. Held time counts toward the 10-minute pause budget.
+  (Each live turn retries within its time budget, never after any of the reply was spoken: first on a different
+  model, the fallback `LIVE_FALLBACK_MODEL`, when the model was overloaded, rate limited, failed with a 5xx or gave
+  no text in time; then, while both only refuse, once more on the first model after a short pause. A request the API
+  rejects as invalid is not retried. A start marker
+  whose attempts all fail gets a written opener (who is speaking, which round, the question is on the card) instead
+  of the hold line, recorded as the opener.) `time_check_due: true` is sent once per phase boundary, on the snapshot when the
   current phase runs out of time, and again on the snapshot after a `hello` while that time check is still owed (no
   `[event: time_check]` has reached the server since the boundary); it is `false` otherwise. On `true` the browser sends
   `[event: time_check]`. In an interview `brief` holds the question card's title and brief lines from the first snapshot,
@@ -203,8 +210,9 @@ Sequencing and acks:
   none, pauses the same way; it is only logged. While paused:
   - **Hold.** A paused round whose socket drops is held: it does not end after the 3-minute offline window. It ends
     only when its pause budget (10 minutes of pauses in total) runs out, with `time_limit` (scored when the candidate
-    spoke). A round that drops while live keeps the 3-minute rule. `GET /api/me` `resumable.expires_at` is that
-    deadline: the end of the pause budget for a paused round, the end of the offline window for a live one.
+    spoke). A round that drops while live keeps the 3-minute rule. `GET /api/me` lists a paused round as
+    `resumable` (`paused: true`) even while its socket is connected, and `resumable.expires_at` is that deadline: the
+    end of the pause budget for a paused round, the end of the offline window for a live one.
   - **Voice release.** After 45 s in one pause (a new pause starts the 45 s again) the server ends every voice
     session of the round (they bill per minute while idle) and sets `round.state.voices_released: true`; the browser
     also sees its voice sessions end. It survives a restart: a reloaded round keeps the time its pause began, and the

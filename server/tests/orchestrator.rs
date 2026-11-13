@@ -38,6 +38,10 @@ enum Script {
     ThenHang(Vec<StreamEvent>),
     Fail(ClaudeError),
     Hang,
+    /// Opens the stream, then sends these events after a delay (a slow model).
+    Delay(Duration, Vec<StreamEvent>),
+    /// Opens the stream, then fails with this error after a delay.
+    DelayFail(Duration, ClaudeError),
 }
 
 #[derive(Default)]
@@ -47,6 +51,8 @@ struct ScriptedLlm {
     /// Non-streamed (director) replies, and the requests they answered.
     creates: Mutex<VecDeque<MessagesResponse>>,
     created: Mutex<Vec<MessagesRequest>>,
+    /// When each stream was asked for (tokio time, so paused-time tests can measure gaps).
+    stream_times: Mutex<Vec<tokio::time::Instant>>,
     /// The next this many creates fail as overloaded.
     failing_creates: Mutex<usize>,
 }
@@ -96,10 +102,23 @@ impl LlmApi for ScriptedLlm {
         req: &MessagesRequest,
     ) -> Result<BoxStream<'static, Result<StreamEvent, ClaudeError>>, ClaudeError> {
         self.requests.lock().unwrap().push(req.clone());
+        self.stream_times
+            .lock()
+            .unwrap()
+            .push(tokio::time::Instant::now());
         match self.scripts.lock().unwrap().pop_front() {
             Some(Script::Reply(events)) => Ok(stream::iter(events.into_iter().map(Ok)).boxed()),
             Some(Script::Fail(err)) => Err(err),
             Some(Script::Hang) => Ok(stream::pending().boxed()),
+            Some(Script::DelayFail(d, err)) => Ok(stream::once(async move {
+                tokio::time::sleep(d).await;
+                Err::<StreamEvent, ClaudeError>(err)
+            })
+            .boxed()),
+            Some(Script::Delay(d, events)) => Ok(stream::once(tokio::time::sleep(d))
+                .filter_map(|_| async { None::<Result<StreamEvent, ClaudeError>> })
+                .chain(stream::iter(events.into_iter().map(Ok)))
+                .boxed()),
             Some(Script::ThenHang(events)) => Ok(stream::iter(events.into_iter().map(Ok))
                 .chain(stream::pending())
                 .boxed()),
@@ -179,7 +198,6 @@ fn test_app_with(
     // Most tests check the commit itself, so replies to speech are committed at once unless a test opts in.
     let mut opts = OrchestratorOptions {
         first_text_timeout: Duration::from_millis(300),
-        retry_first_text_timeout: Duration::from_millis(300),
         confirm_speech_turns: false,
         ..OrchestratorOptions::default()
     };
@@ -838,8 +856,8 @@ async fn failed_call_retries_once_on_the_fast_model() {
     assert_eq!(llm.request(0).model, "claude-opus-5-5");
     let retry = llm.request(1);
     assert_eq!(retry.model, "claude-haiku-5-5");
-    // Adaptive (omitted) on the retry: thinking off over another model's history made the fast model think aloud.
-    assert_eq!(retry.thinking, None);
+    // Haiku runs the retry with thinking off (allowed at effort high or below): faster, and no thinking block.
+    assert_eq!(retry.thinking, Some(ir_server::claude::Thinking::Disabled));
     assert_eq!(
         retry.output_config.as_ref().unwrap().effort.as_deref(),
         Some("low")
@@ -1149,7 +1167,6 @@ async fn one_turn_deadline_covers_the_call_and_any_retry() {
     let llm = ScriptedLlm::new(vec![Script::Hang, Script::Hang]);
     let (app, state) = test_app_with(llm.clone(), |o| {
         o.first_text_timeout = Duration::from_secs(5);
-        o.retry_first_text_timeout = Duration::from_secs(5);
         o.turn_deadline = Duration::from_millis(800);
     });
     state
@@ -2402,7 +2419,7 @@ async fn a_reply_that_opens_with_a_tool_name_never_leaves_an_empty_block() {
     state
         .registry
         .insert(new_state("s1", "sde.system_design.short", VoiceKind::Fish));
-    // Nothing is spoken before the tool name: the hold line is said and recorded instead.
+    // Nothing is spoken before the tool name: on the start marker the written opener is said and recorded instead.
     let res = post_chat(
         &app,
         SECRET,
@@ -2413,15 +2430,19 @@ async fn a_reply_that_opens_with_a_tool_name_never_leaves_an_empty_block() {
         ),
     )
     .await;
-    assert_eq!(res.text(), "Sorry, give me a second.");
+    let opener = state
+        .registry
+        .get("s1")
+        .unwrap()
+        .lock()
+        .await
+        .templated_opener("p1");
+    assert_eq!(res.text(), opener);
     {
         let handle = state.registry.get("s1").unwrap();
         let st = handle.lock().await;
         assert!(no_empty_text(&st.history), "{:?}", st.history);
-        assert_eq!(
-            st.history.last().unwrap().text(),
-            "Sorry, give me a second."
-        );
+        assert_eq!(st.history.last().unwrap().text(), opener);
     }
     // The next turn goes through, with a clean history.
     let res = post_chat(
@@ -2432,7 +2453,7 @@ async fn a_reply_that_opens_with_a_tool_name_never_leaves_an_empty_block() {
             "p1",
             json!([
                 {"role": "user", "content": "[event: start]"},
-                {"role": "assistant", "content": "Sorry, give me a second."},
+                {"role": "assistant", "content": opener},
                 {"role": "user", "content": "Hi, I'd start with the requirements."}
             ]),
         ),
@@ -2448,7 +2469,7 @@ async fn a_reply_that_opens_with_a_tool_name_never_leaves_an_empty_block() {
             "p1",
             json!([
                 {"role": "user", "content": "[event: start]"},
-                {"role": "assistant", "content": "Sorry, give me a second."},
+                {"role": "assistant", "content": opener},
                 {"role": "user", "content": "Hi, I'd start with the requirements."},
                 {"role": "assistant", "content": "Okay. Where would you start?"},
                 {"role": "user", "content": "With the reads."}
@@ -2664,7 +2685,8 @@ async fn overload_with_prod_settings_retries_on_the_fallback_model() {
         retry.model, "claude-haiku-5-5",
         "never the model that failed"
     );
-    assert_eq!(retry.thinking, None);
+    assert_eq!(retry.thinking, Some(ir_server::claude::Thinking::Disabled));
+    assert_eq!(retry.fallbacks, None);
     // A model that stalls before its first text is unavailable too.
     let llm = ScriptedLlm::new(vec![Script::Hang, reply("Okay.")]);
     let (app, state) = test_app(llm.clone());
@@ -2682,7 +2704,8 @@ async fn overload_with_prod_settings_retries_on_the_fallback_model() {
 #[tokio::test]
 async fn three_failed_turns_hold_the_clock_until_a_turn_gets_through() {
     let mut scripts = Vec::new();
-    for _ in 0..6 {
+    // Three attempts per turn while the models only refuse.
+    for _ in 0..9 {
         scripts.push(Script::Fail(ClaudeError::Overloaded));
     }
     scripts.push(reply("Back again. Where were we?"));
@@ -2763,4 +2786,360 @@ async fn director_retries_once_on_the_fallback_model() {
     assert_eq!(created.len(), 2);
     assert_eq!(created[0].model, "claude-sonnet-5-5");
     assert_eq!(created[1].model, "claude-haiku-5-5");
+    assert_eq!(
+        created[1].thinking,
+        Some(ir_server::claude::Thinking::Disabled)
+    );
+    assert_eq!(created[1].fallbacks, None);
+}
+
+fn has_thinking(req: &MessagesRequest) -> bool {
+    req.messages.iter().any(|m| {
+        m.content.iter().any(|b| {
+            matches!(
+                b,
+                ContentBlock::Thinking { .. } | ContentBlock::RedactedThinking { .. }
+            )
+        })
+    })
+}
+
+#[tokio::test]
+async fn a_fallback_reply_with_thinking_never_reaches_the_history_or_the_director() {
+    let thinking_reply = Script::Reply(vec![
+        StreamEvent::Block(ContentBlock::Thinking {
+            thinking: String::new(),
+            signature: "haiku-sig".into(),
+        }),
+        StreamEvent::TextDelta("Okay. Go on.".into()),
+        stop("end_turn"),
+    ]);
+    let llm = ScriptedLlm::with_creates(
+        vec![
+            Script::Fail(ClaudeError::Overloaded),
+            thinking_reply,
+            reply("Right. And the database?"),
+        ],
+        vec![director_reply(json!([])), director_reply(json!([]))],
+    );
+    let (app, state) = test_app(llm.clone());
+    state.registry.insert(prod_state("s1"));
+    let first = post_chat(
+        &app,
+        SECRET,
+        chat_body(
+            "s1",
+            "p1",
+            json!([{"role": "user", "content": "We start with the API."}]),
+        ),
+    )
+    .await;
+    assert_eq!(first.text(), "Okay. Go on.");
+    assert_eq!(llm.request(1).model, "claude-haiku-5-5");
+    {
+        let handle = state.registry.get("s1").unwrap();
+        let st = handle.lock().await;
+        assert!(
+            st.history.iter().all(|m| m
+                .content
+                .iter()
+                .all(|b| !matches!(b, ContentBlock::Thinking { .. }))),
+            "the history stays text only"
+        );
+    }
+    let second = post_chat(
+        &app,
+        SECRET,
+        chat_body(
+            "s1",
+            "p1",
+            json!([
+                {"role": "user", "content": "We start with the API."},
+                {"role": "assistant", "content": "Okay. Go on."},
+                {"role": "user", "content": "Then a Postgres table per tenant."}
+            ]),
+        ),
+    )
+    .await;
+    assert_eq!(second.text(), "Right. And the database?");
+    assert!(!has_thinking(&llm.request(2)), "the next live request");
+    // Both director calls (the fallback turn's and the next one's) carry no thinking block.
+    for _ in 0..100 {
+        if llm.created.lock().unwrap().len() >= 2 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let created = llm.created.lock().unwrap().clone();
+    assert!(created.len() >= 2, "{}", created.len());
+    assert!(created.iter().all(|r| !has_thinking(r)));
+}
+
+#[tokio::test]
+async fn start_marker_gets_a_reply_when_both_models_fail_once() {
+    let llm = ScriptedLlm::new(vec![
+        Script::Fail(ClaudeError::Overloaded),
+        Script::Fail(ClaudeError::Overloaded),
+        reply("Hi, I'm Daniel. Where would you start?"),
+    ]);
+    let (app, state) = test_app(llm.clone());
+    state.registry.insert(prod_state("s1"));
+    let res = post_chat(
+        &app,
+        SECRET,
+        chat_body(
+            "s1",
+            "p1",
+            json!([{"role": "user", "content": "[event: start]"}]),
+        ),
+    )
+    .await;
+    assert_eq!(res.text(), "Hi, I'm Daniel. Where would you start?");
+    let models: Vec<String> = (0..3).map(|i| llm.request(i).model).collect();
+    assert_eq!(
+        models,
+        ["claude-sonnet-5-5", "claude-haiku-5-5", "claude-sonnet-5-5"]
+    );
+    // A failure that is not a refusal (a bad request) gets no third attempt.
+    let llm = ScriptedLlm::new(vec![
+        Script::Fail(ClaudeError::Overloaded),
+        Script::Fail(ClaudeError::BadRequest("400 invalid".into())),
+        reply("Never asked."),
+    ]);
+    let (app, state) = test_app(llm.clone());
+    state.registry.insert(prod_state("s2"));
+    let res = post_chat(
+        &app,
+        SECRET,
+        chat_body("s2", "p1", json!([{"role": "user", "content": "Hi."}])),
+    )
+    .await;
+    assert_eq!(res.text(), "Sorry, give me a second.");
+    assert_eq!(llm.calls(), 2);
+}
+
+#[tokio::test(start_paused = true)]
+async fn slow_fallback_gets_the_rest_of_the_turn() {
+    // Sonnet refuses; Haiku's stream opens and its first text comes 5 s later, past the old 3.5 s retry window
+    // (and the test's 300 ms one) but inside the 8.5 s turn.
+    let llm = ScriptedLlm::new(vec![
+        Script::Fail(ClaudeError::Overloaded),
+        Script::Delay(
+            Duration::from_secs(5),
+            vec![
+                StreamEvent::TextDelta("Okay, slow but here.".into()),
+                stop("end_turn"),
+            ],
+        ),
+    ]);
+    let (app, state) = test_app(llm.clone());
+    state.registry.insert(prod_state("s1"));
+    let res = post_chat(
+        &app,
+        SECRET,
+        chat_body("s1", "p1", json!([{"role": "user", "content": "Hi."}])),
+    )
+    .await;
+    assert_eq!(res.text(), "Okay, slow but here.");
+    assert_eq!(llm.request(1).model, "claude-haiku-5-5");
+}
+
+#[tokio::test]
+async fn start_marker_says_a_written_opener_when_every_attempt_fails() {
+    let llm = ScriptedLlm::new(vec![
+        Script::Fail(ClaudeError::Overloaded),
+        Script::Fail(ClaudeError::Overloaded),
+        Script::Fail(ClaudeError::Overloaded),
+        reply("Good. What comes first?"),
+    ]);
+    let (app, state) = test_app(llm.clone());
+    state.registry.insert(prod_state("s1"));
+    let res = post_chat(
+        &app,
+        SECRET,
+        chat_body(
+            "s1",
+            "p1",
+            json!([{"role": "user", "content": "[event: start]"}]),
+        ),
+    )
+    .await;
+    let opener = res.text();
+    let handle = state.registry.get("s1").unwrap();
+    let (name, title) = {
+        let st = handle.lock().await;
+        (
+            st.panelist("p1").unwrap().persona.display_name.clone(),
+            st.round.title.to_lowercase(),
+        )
+    };
+    assert!(
+        opener.starts_with(&format!("Hi, I'm {name}, and this is your")),
+        "{opener}"
+    );
+    assert!(opener.contains(&title), "{opener}");
+    assert!(opener.contains("on your card"), "{opener}");
+    assert!(
+        !opener.contains('\u{2014}') && !opener.contains('\u{2013}'),
+        "no dashes: {opener}"
+    );
+    assert_eq!(
+        opener.matches(". ").count() + 1,
+        2,
+        "two sentences: {opener}"
+    );
+    // Recorded as the opener: the next request's history starts with it.
+    let res = post_chat(
+        &app,
+        SECRET,
+        chat_body(
+            "s1",
+            "p1",
+            json!([
+                {"role": "user", "content": "[event: start]"},
+                {"role": "assistant", "content": opener},
+                {"role": "user", "content": "I'd start with the requirements."}
+            ]),
+        ),
+    )
+    .await;
+    assert_eq!(res.text(), "Good. What comes first?");
+    let next = llm.request(3);
+    assert!(
+        next.messages
+            .iter()
+            .any(|m| m.role == Role::Assistant && m.text() == opener),
+        "the opener is in the history"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn third_attempt_waits_400_ms_and_needs_time_left() {
+    let llm = ScriptedLlm::new(vec![
+        Script::Fail(ClaudeError::Overloaded),
+        Script::Fail(ClaudeError::Overloaded),
+        reply("Hi. Where would you start?"),
+    ]);
+    let (app, state) = test_app(llm.clone());
+    state.registry.insert(prod_state("s1"));
+    let res = post_chat(
+        &app,
+        SECRET,
+        chat_body("s1", "p1", json!([{"role": "user", "content": "Hi."}])),
+    )
+    .await;
+    assert_eq!(res.text(), "Hi. Where would you start?");
+    let times = llm.stream_times.lock().unwrap().clone();
+    assert!(
+        times[2] - times[1] >= Duration::from_millis(400),
+        "{:?}",
+        times[2] - times[1]
+    );
+    // The third attempt is the live model again, with its own fast settings.
+    let third = llm.request(2);
+    assert_eq!(third.model, "claude-sonnet-5-5");
+    assert_eq!(
+        third.thinking,
+        Some(ir_server::claude::Thinking::BetweenTools)
+    );
+    assert_eq!(
+        third.fallbacks,
+        ir_server::claude::fallbacks_for("claude-sonnet-5-5")
+    );
+
+    // The fallback refuses only after 6.8 s of the 8.5 s turn: under 1.9 s left, so no third attempt.
+    let llm = ScriptedLlm::new(vec![
+        Script::Fail(ClaudeError::Overloaded),
+        Script::DelayFail(Duration::from_millis(6800), ClaudeError::Overloaded),
+        reply("Too late."),
+    ]);
+    let (app, state) = test_app(llm.clone());
+    state.registry.insert(prod_state("s2"));
+    let res = post_chat(
+        &app,
+        SECRET,
+        chat_body("s2", "p1", json!([{"role": "user", "content": "Hi."}])),
+    )
+    .await;
+    assert_eq!(res.text(), "Sorry, give me a second.");
+    assert_eq!(llm.calls(), 2);
+}
+
+#[tokio::test]
+async fn a_bad_request_is_not_retried() {
+    let llm = ScriptedLlm::new(vec![
+        Script::Fail(ClaudeError::BadRequest(
+            "400 invalid_request_error: bad".into(),
+        )),
+        reply("Never asked."),
+    ]);
+    let (app, state) = test_app(llm.clone());
+    state.registry.insert(prod_state("s1"));
+    let res = post_chat(
+        &app,
+        SECRET,
+        chat_body("s1", "p1", json!([{"role": "user", "content": "Hi."}])),
+    )
+    .await;
+    assert_eq!(res.text(), "Sorry, give me a second.");
+    assert_eq!(llm.calls(), 1);
+}
+
+#[test]
+fn a_retarget_to_thinking_off_caps_the_effort_at_high() {
+    let req = MessagesRequest {
+        model: "claude-sonnet-5-5".into(),
+        thinking: Some(ir_server::claude::Thinking::BetweenTools),
+        output_config: Some(ir_server::claude::OutputConfig {
+            effort: Some("max".into()),
+            format: None,
+        }),
+        ..MessagesRequest::default()
+    };
+    let out = ir_server::orchestrator::retarget(&req, "claude-haiku-5-5");
+    assert_eq!(out.thinking, Some(ir_server::claude::Thinking::Disabled));
+    assert_eq!(out.output_config.unwrap().effort.as_deref(), Some("high"));
+}
+
+#[tokio::test]
+async fn live_effort_above_high_is_capped_where_thinking_is_off() {
+    // Opus first (thinking on, effort max), overloaded; the Haiku retry has thinking off, so effort high.
+    let llm = ScriptedLlm::new(vec![Script::Fail(ClaudeError::Overloaded), reply("Okay.")]);
+    let (app, state) = test_app(llm.clone());
+    let mut st = new_state("s1", "sde.system_design.short", VoiceKind::Fish);
+    st.live = LiveSettings {
+        model: "claude-opus-5-5".into(),
+        fast_model: "claude-sonnet-5-5".into(),
+        fallback_model: "claude-haiku-5-5".into(),
+        effort: "max".into(),
+        max_tokens: 300,
+    };
+    state.registry.insert(st);
+    let res = post_chat(
+        &app,
+        SECRET,
+        chat_body("s1", "p1", json!([{"role": "user", "content": "Hi."}])),
+    )
+    .await;
+    assert_eq!(res.text(), "Okay.");
+    let effort = |r: MessagesRequest| r.output_config.unwrap().effort.unwrap();
+    assert_eq!(effort(llm.request(0)), "max");
+    let retry = llm.request(1);
+    assert_eq!(retry.model, "claude-haiku-5-5");
+    assert_eq!(retry.thinking, Some(ir_server::claude::Thinking::Disabled));
+    assert_eq!(effort(retry), "high");
+
+    // A Sonnet live model with effort max (config refuses it; the request is still made valid): high.
+    let llm = ScriptedLlm::new(vec![reply("Okay.")]);
+    let (app, state) = test_app(llm.clone());
+    let mut st = prod_state("s2");
+    st.live.effort = "max".into();
+    state.registry.insert(st);
+    post_chat(
+        &app,
+        SECRET,
+        chat_body("s2", "p1", json!([{"role": "user", "content": "Hi."}])),
+    )
+    .await;
+    assert_eq!(effort(llm.request(0)), "high");
 }

@@ -182,7 +182,11 @@ async fn check_status(res: Response) -> Result<Response, ClaudeError> {
     let message = scrub(&format!("{} {}", status.as_u16(), message));
     Err(match status {
         StatusCode::TOO_MANY_REQUESTS => ClaudeError::RateLimited { retry_after },
-        s if s.as_u16() == 529 || s.is_server_error() => ClaudeError::Overloaded,
+        s if s.as_u16() == 529 => ClaudeError::Overloaded,
+        // A timeout on the way (408) is as transient as a 5xx: the other model gets its try.
+        s if s.is_server_error() || s == StatusCode::REQUEST_TIMEOUT => {
+            ClaudeError::ServerError { status: s.as_u16() }
+        }
         _ => ClaudeError::BadRequest(message),
     })
 }

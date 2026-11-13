@@ -713,3 +713,71 @@ async fn retry_counts_as_quick_round_for_guest_limits() {
     let quick = app.create(&me, short_req("fake")).await;
     assert_eq!(quick.status, StatusCode::TOO_MANY_REQUESTS);
 }
+
+#[tokio::test]
+async fn retry_scoring_second_attempt_runs_on_another_model_after_an_overload() {
+    let app = live::test_app(Options::default()).await;
+    let base = app.serve().await;
+    let me = app.guest().await;
+    let parent = scored(&app, &me, short_req("fake"), &LEAD_ASKS, example_report).await;
+    *app.llm.scribe.lock().unwrap() =
+        Some(r#"{"after_score": 3, "note": "You named the write path this time."}"#.into());
+    let res = retry(&app, &me, &parent).await;
+    assert_eq!(res.status, StatusCode::OK, "{}", res.body);
+    let child = res.body["session_id"].as_str().unwrap().to_string();
+    let token = res.body["client_token"].as_str().unwrap().to_string();
+    go_live(&base, &res.body).await;
+    turn_text(&app, &token, &child, "[event: start]").await;
+    turn_text(
+        &app,
+        &token,
+        &child,
+        "I'd shard the key value store by the short code.",
+    )
+    .await;
+    let end = app
+        .call(
+            Method::POST,
+            &format!("/api/sessions/{child}/end"),
+            Some(&me),
+            Some(json!({"reason": "user_ended"})),
+        )
+        .await;
+    assert_eq!(end.status, StatusCode::ACCEPTED);
+    // Sonnet (the fast model) is overloaded while the retry is scored.
+    *app.llm.down.lock().unwrap() = vec!["claude-sonnet-5-5".to_string()];
+    let mut deps = ScoringDeps::new(
+        app.state.db.clone(),
+        app.state.llm.clone(),
+        Arc::new(fixture_catalog()),
+        Arc::new(schema()),
+        "claude-opus-5-5",
+    );
+    deps.fast_model = "claude-sonnet-5-5".into();
+    let child_id = Uuid::parse_str(&child).unwrap();
+    score_session(&deps, child_id)
+        .await
+        .expect("scored on the second model");
+    let models: Vec<String> = app
+        .llm
+        .scribe_calls()
+        .iter()
+        .filter(|r| r.messages[0].text().contains("2 of 4"))
+        .map(|r| r.model.clone())
+        .collect();
+    assert_eq!(models, ["claude-sonnet-5-5", "claude-haiku-5-5"]);
+    let rows: Vec<Option<String>> = sqlx::query_scalar(
+        "select model from usage_events where session_id = $1 and kind = 'retry_scoring' order by id",
+    )
+    .bind(child_id)
+    .fetch_all(&app.state.db)
+    .await
+    .unwrap();
+    assert_eq!(
+        rows,
+        [
+            Some("claude-sonnet-5-5".to_string()),
+            Some("claude-haiku-5-5".to_string())
+        ]
+    );
+}

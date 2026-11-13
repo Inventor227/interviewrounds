@@ -321,7 +321,7 @@ const S = {
     entitlements: 'req',
   }),
   identity: spec<Me['identity']>()({ kind: 'req', name: 'opt', email: 'opt' }),
-  resumable: spec<NonNullable<Me['resumable']>>()({ session_id: 'req', round_title: 'req', expires_at: 'req' }),
+  resumable: spec<NonNullable<Me['resumable']>>()({ session_id: 'req', round_title: 'req', expires_at: 'req', paused: 'req' }),
   limits: spec<Limits>()({ short_left_today: 'req|null', full_left: 'req|null', resets_at: 'req|null', reason: 'req|null' }),
   entitlements: spec<Entitlements>()({
     plan: 'req',

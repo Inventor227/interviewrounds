@@ -172,8 +172,11 @@ impl StreamDecoder {
                     .and_then(Value::as_str)
                     .unwrap_or("");
                 return Err(match etype {
-                    "overloaded_error" | "api_error" => ClaudeError::Overloaded,
+                    "overloaded_error" => ClaudeError::Overloaded,
+                    "api_error" => ClaudeError::ServerError { status: 500 },
                     "rate_limit_error" => ClaudeError::RateLimited { retry_after: None },
+                    // The API gave up waiting mid-stream: transient, like a gateway timeout.
+                    "timeout_error" => ClaudeError::ServerError { status: 504 },
                     _ => ClaudeError::BadRequest(scrub(&format!("{etype}: {msg}"))),
                 });
             }

@@ -119,11 +119,17 @@ impl LiveSettings {
     /// The model of the one retry after a live call that said nothing: the fallback when the model was unavailable
     /// or when the fast model is the one that failed, the fast model otherwise.
     pub fn retry_model(&self, failed: &str, unavailable: bool) -> &str {
-        if unavailable || self.fast_model == failed {
-            &self.fallback_model
+        let order = if unavailable || self.fast_model == failed {
+            [&self.fallback_model, &self.fast_model]
         } else {
-            &self.fast_model
-        }
+            [&self.fast_model, &self.fallback_model]
+        };
+        // The first that is not the model that failed (a fallback set equal to the live model must not bring back
+        // the same-model retry).
+        order
+            .into_iter()
+            .find(|m| m.as_str() != failed)
+            .unwrap_or(&self.fallback_model)
     }
 }
 
@@ -592,10 +598,47 @@ impl SessionState {
             .unwrap_or_else(|| panelist_id.to_string())
     }
 
-    /// Counts a finished live turn: failed (the hold line) or answered. Returns `Some(true)` when the round just
-    /// became degraded (its clock stops), `Some(false)` when it just recovered (its clock runs again unless the round
-    /// is paused), `None` when nothing changed.
-    pub fn note_live_turn(&mut self, failed: bool, now: Instant) -> Option<bool> {
+    /// The opener said when the start marker's model calls all failed: who is speaking, which round, and where the
+    /// question is. One or two plain sentences, no model needed.
+    pub fn templated_opener(&self, panelist_id: &str) -> String {
+        let name = self
+            .panelist(panelist_id)
+            .map(|p| p.persona.display_name.clone())
+            .unwrap_or_default();
+        let hi = if name.is_empty() {
+            "Hi".to_string()
+        } else {
+            format!("Hi, I'm {name}")
+        };
+        if self.mode == Mode::Meeting {
+            return format!(
+                "{hi}, thanks for joining. Over to you: what would you like to cover today?"
+            );
+        }
+        let title = self.round.title.trim().to_lowercase();
+        let round = if title.is_empty() {
+            "your round".to_string()
+        } else {
+            format!("your {title} round")
+        };
+        format!(
+            "{hi}, and this is {round}. The question is on your card, so take a look and tell me where you'd like to start."
+        )
+    }
+
+    /// Counts a finished live turn: failed (the hold line) or answered. Only failures of an unavailable model count
+    /// (a refusal or a silent stop neither counts nor clears). Returns `Some(true)` when the round just became
+    /// degraded (its clock stops), `Some(false)` when it just recovered (the caller restarts the clock if the user is
+    /// there, `ws::degraded_changed`), `None` when nothing changed.
+    pub fn note_live_turn(
+        &mut self,
+        failed: bool,
+        unavailable: bool,
+        now: Instant,
+    ) -> Option<bool> {
+        if failed && !unavailable {
+            return None;
+        }
         if failed {
             self.failed_turns += 1;
             if self.failed_turns >= DEGRADED_AFTER && !self.degraded {
@@ -612,11 +655,6 @@ impl SessionState {
             return None;
         }
         self.degraded = false;
-        if self.status == SessionStatus::Live
-            && let Some(since) = self.paused_since.take()
-        {
-            self.paused_total_ms += now.saturating_duration_since(since).as_millis() as u64;
-        }
         Some(false)
     }
 

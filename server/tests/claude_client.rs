@@ -497,3 +497,61 @@ async fn live_smoke_three_models() {
         assert!(stop.is_some(), "{model} stream ended without stop");
     }
 }
+
+#[tokio::test]
+async fn transient_timeouts_are_retryable_and_other_4xx_are_final() {
+    let server = MockServer::start().await;
+    for (model, status) in [
+        ("timeout", 408u16),
+        ("conflict", 409),
+        ("gone", 404),
+        ("large", 413),
+    ] {
+        Mock::given(method("POST"))
+            .and(body_partial_json(json!({"model": model})))
+            .respond_with(ResponseTemplate::new(status).set_body_json(
+                json!({"type": "error", "error": {"type": "some_error", "message": "x"}}),
+            ))
+            .mount(&server)
+            .await;
+    }
+    let c = client(&server);
+    let e = c.create(&request("timeout")).await.unwrap_err();
+    assert_eq!(e, ClaudeError::ServerError { status: 408 });
+    assert!(e.is_unavailable());
+    for model in ["conflict", "gone", "large"] {
+        let e = c.create(&request(model)).await.unwrap_err();
+        assert!(matches!(e, ClaudeError::BadRequest(_)), "{model}: {e:?}");
+        assert!(!e.is_unavailable(), "{model}");
+    }
+
+    // A stream that times out mid-way is retryable too.
+    let body = sse(&[
+        (
+            "message_start",
+            json!({"type": "message_start", "message": {"id": "m", "usage": {"input_tokens": 5}}}),
+        ),
+        (
+            "error",
+            json!({"type": "error", "error": {"type": "timeout_error", "message": "Timed out"}}),
+        ),
+    ]);
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(body))
+        .mount(&server)
+        .await;
+    let events: Vec<_> = client(&server)
+        .stream(&request("claude-haiku-5-5"))
+        .await
+        .unwrap()
+        .collect()
+        .await;
+    match events.last() {
+        Some(Err(e)) => {
+            assert_eq!(*e, ClaudeError::ServerError { status: 504 });
+            assert!(e.is_unavailable());
+        }
+        other => panic!("{other:?}"),
+    }
+}

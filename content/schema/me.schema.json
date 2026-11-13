@@ -40,13 +40,14 @@
     "resumable": {
       "type": ["object", "null"],
       "additionalProperties": false,
-      "required": ["session_id", "round_title", "expires_at"],
+      "required": ["session_id", "round_title", "expires_at", "paused"],
       "properties": {
         "session_id": { "type": "string" },
         "round_title": { "type": "string" },
-        "expires_at": { "type": "string", "format": "date-time" }
+        "expires_at": { "type": "string", "format": "date-time" },
+        "paused": { "type": "boolean", "description": "True for a paused round (listed even while a socket is still connected); false for a live round whose socket dropped." }
       },
-      "description": "A dropped live session that can still be resumed (POST /api/sessions/{id}/resume) until expires_at; null when there is none."
+      "description": "A round the user can still resume (POST /api/sessions/{id}/resume) until expires_at: a paused round until its pause budget ends, or a live round with a dropped socket until its offline window (or pause budget) ends; null when there is none."
     },
     "limits": { "$ref": "#/$defs/limits" },
     "entitlements": { "$ref": "#/$defs/entitlements" }

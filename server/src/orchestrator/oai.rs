@@ -282,22 +282,28 @@ impl Assembler {
     }
 }
 
-/// The one retry after a silent failure. Thinking is left adaptive (omitted) at the same low effort: with thinking
-/// turned off over a history written by another model, a fast model was seen speaking its reasoning aloud.
-/// Sonnet 5.5 is the exception: its `between_tools` (thinking off) is safe over its own or another model's history and
-/// keeps the retry fast.
+/// The one retry after a silent failure, at the same low effort. Sonnet 5.5 (`between_tools`) and Haiku 5.5
+/// (`disabled`, allowed at effort `high` or below) run it with thinking off: faster, no thinking tokens out of the
+/// 300-token budget, and no thinking block to keep out of the shared history. Other models keep adaptive thinking
+/// (omitted): a fast model was once seen speaking its reasoning aloud with thinking off over another model's history.
 fn retarget_for_retry(req: &mut MessagesRequest, model: &str) {
     req.model = model.to_string();
-    req.thinking = if model.starts_with("claude-sonnet-5-5") {
-        thinking_for(model)
-    } else {
-        None
-    };
+    req.thinking =
+        if model.starts_with("claude-sonnet-5-5") || model.starts_with("claude-haiku-5-5") {
+            thinking_for(model)
+        } else {
+            None
+        };
     req.fallbacks = fallbacks_for(model);
+    crate::orchestrator::cap_effort_for_thinking_off(req);
 }
 
 /// A retry is only worth starting with at least this much of the turn deadline left.
 const MIN_RETRY_WINDOW: Duration = Duration::from_millis(1500);
+/// Attempts per live turn: the live model, the fallback, and the live model again while they only refuse.
+const MAX_ATTEMPTS: u32 = 3;
+/// The pause before the third attempt.
+const THIRD_ATTEMPT_PAUSE: Duration = Duration::from_millis(400);
 
 /// The director gets this long; it runs while the line is being spoken.
 const DIRECTOR_TIMEOUT: Duration = Duration::from_secs(8);
@@ -554,11 +560,26 @@ fn turn_stream(
         let mut usage = Usage::default();
         let mut ttft_ms: Option<u64> = None;
         let mut retried = false;
+        let mut attempts = 0u32;
+        let first_model = req.model.clone();
         let mut last_error: Option<String> = None;
+        // Whether the last attempt failed because its model was unavailable (only those make a round degraded).
+        let mut last_unavailable;
+        // Whether every attempt so far was refused by an unavailable model (overloaded, 5xx, 429, network): only
+        // then is a third attempt made.
+        let mut all_refused = true;
 
         loop {
-            let per_call = if retried { opts.retry_first_text_timeout } else { opts.first_text_timeout };
-            let deadline = (tokio::time::Instant::now() + per_call).min(turn_deadline);
+            attempts += 1;
+            // The first attempt has its own first-text window; a retry gets whatever is left of the turn.
+            let deadline = if retried {
+                turn_deadline
+            } else {
+                (tokio::time::Instant::now() + opts.first_text_timeout).min(turn_deadline)
+            };
+            let mut refused = false;
+            // The request itself was refused as invalid: no other attempt would fare better.
+            let mut bad_request = false;
             let mut text_seen = !guard.spoken.is_empty();
             let mut stop_reason: Option<String> = None;
             let mut error: Option<String> = None;
@@ -569,10 +590,12 @@ fn turn_stream(
                 Err(_) => {
                     error = Some("no response before the first-text deadline".into());
                     unavailable = true;
-                    crate::usage::note_failure(app.db.clone(), app.config.usage_phase, "live_turn", req.model.clone(), "timeout");
+                    crate::usage::note_failure(app.db.clone(), app.config.usage_phase, "live_turn", req.model.clone(), "timeout", None);
                 }
                 Ok(Err(e)) => {
                     unavailable = e.is_unavailable();
+                    refused = unavailable;
+                    bad_request = matches!(e, crate::claude::ClaudeError::BadRequest(_));
                     error = Some(e.to_string());
                 }
                 Ok(Ok(mut events)) => loop {
@@ -586,7 +609,7 @@ fn turn_stream(
                         Err(_) => {
                             error = Some(if text_seen { "stream stalled or turn deadline" } else { "no text before the first-text deadline" }.into());
                             unavailable = !text_seen;
-                            crate::usage::note_failure(app.db.clone(), app.config.usage_phase, "live_turn", req.model.clone(), "timeout");
+                            crate::usage::note_failure(app.db.clone(), app.config.usage_phase, "live_turn", req.model.clone(), "timeout", None);
                             break;
                         }
                         Ok(None) => {
@@ -595,6 +618,8 @@ fn turn_stream(
                         }
                         Ok(Some(Err(e))) => {
                             unavailable = !text_seen && e.is_unavailable();
+                            refused = unavailable;
+                            bad_request = matches!(e, crate::claude::ClaudeError::BadRequest(_));
                             error = Some(e.to_string());
                             break;
                         }
@@ -634,6 +659,8 @@ fn turn_stream(
             }
 
             let silent = guard.spoken.trim().is_empty();
+            last_unavailable = unavailable;
+            all_refused &= refused;
             match (stop_reason.as_deref(), error) {
                 (Some("refusal"), None) if silent => {
                     last_error = Some("refusal".into());
@@ -654,11 +681,21 @@ fn turn_stream(
                 }
                 (None, None) => break,
             }
-            // Nothing was said yet: one retry, never on the model that just failed (the fallback when it was
-            // unavailable or is the fast model itself), if the turn deadline leaves room for it.
+            // Nothing was said yet: a retry, never on the model that just failed (the fallback when it was
+            // unavailable or is the fast model itself), if the turn deadline leaves room for it. While the models
+            // only refuse (overloaded, 5xx, 429, network), a third attempt goes back to the first model after a
+            // short pause: an overload often clears within a second.
             let left = turn_deadline.saturating_duration_since(tokio::time::Instant::now());
-            if retried || left < MIN_RETRY_WINDOW {
+            let third = attempts == 2 && all_refused;
+            if attempts >= MAX_ATTEMPTS
+                || bad_request
+                || (attempts == 2 && !third)
+                || left < MIN_RETRY_WINDOW + if third { THIRD_ATTEMPT_PAUSE } else { Duration::ZERO }
+            {
                 break;
+            }
+            if third {
+                tokio::time::sleep(THIRD_ATTEMPT_PAUSE).await;
             }
             retried = true;
             asm = Assembler::default();
@@ -666,7 +703,11 @@ fn turn_stream(
             // must neither silence the retry nor be recorded if the retry is dropped).
             filter = SpeechFilter::new();
             guard.said.clear();
-            let target = live.retry_model(&req.model, unavailable).to_string();
+            let target = if third {
+                first_model.clone()
+            } else {
+                live.retry_model(&req.model, unavailable).to_string()
+            };
             tracing::info!(session_id = %session_id, panelist_id = %panelist, failed = %req.model, retry = %target, unavailable, "live retry");
             retarget_for_retry(&mut req, &target);
         }
@@ -693,15 +734,20 @@ fn turn_stream(
             // Whatever the failed call left half-done is dropped.
             reply.clear();
         }
-        // A reply made only of thinking is no reply.
-        if reply.iter().all(is_thinking) {
-            reply.clear();
-        }
+        // The shared history stays text only: a thinking block is valid only under the exact prefix it was made
+        // with (a fallback model's, or one the director replays under its own prompt, would be refused).
+        reply.retain(|b| !is_thinking(b));
         if spoken.trim().is_empty() {
-            // Fish counts an empty reply as a failure: say the hold line instead.
+            // Fish counts an empty reply as a failure: say the hold line instead. The start marker gets a written
+            // opener, so the round still starts properly (and the next request's history begins with a greeting).
+            let line = if matches!(input, UserInput::Event(EventKind::Start)) {
+                session.lock().await.templated_opener(&panelist)
+            } else {
+                opts.hold_line.clone()
+            };
             let at = reply.iter().position(|b| !is_thinking(b)).unwrap_or(reply.len());
-            reply.insert(at, ContentBlock::text(opts.hold_line.clone()));
-            spoken = opts.hold_line.clone();
+            reply.insert(at, ContentBlock::text(line.clone()));
+            spoken = line;
             ttft_ms.get_or_insert(started.elapsed().as_millis() as u64);
             // Kept by the guard too, in case the request is dropped right after this chunk.
             guard.spoken = spoken.clone();
@@ -717,15 +763,12 @@ fn turn_stream(
         // (the browser reports playback as the first words play, so this costs no time for played lines and saves
         // the call for drafts the voice platform throws away).
         let speech = input.speech().is_some();
+        let degraded_change;
         let jobs = {
             let mut st = session.lock().await;
             // Several failed turns in a row (even after the fallback): the round clock holds and the browser is told
             // (`round.state.degraded`) until a turn gets through.
-            match st.note_live_turn(silent_failure, Instant::now()) {
-                Some(true) => tracing::warn!(session_id = %session_id, "model unavailable for several turns; round clock held"),
-                Some(false) => tracing::info!(session_id = %session_id, "model back; round clock runs"),
-                None => {}
-            }
+            degraded_change = st.note_live_turn(silent_failure, silent_failure && last_unavailable, Instant::now());
             let id = st.new_turn_id();
             let director_req = (!silent_failure)
                 .then(|| director::build_request(&st, &panelist, &draft, &spoken, &live.fast_model));
@@ -762,6 +805,9 @@ fn turn_stream(
         guard.done = true;
         drop(guard);
         spawn_directors(&app, &session, &session_id, jobs);
+        if let Some(degraded) = degraded_change {
+            crate::ws::degraded_changed(&app, &session_id, &session, degraded).await;
+        }
         tracing::info!(
             session_id = %session_id,
             panelist_id = %panelist,

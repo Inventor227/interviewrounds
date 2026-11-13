@@ -1071,7 +1071,7 @@ fn side_request(
     user: String,
     schema: Value,
 ) -> MessagesRequest {
-    MessagesRequest {
+    let mut req = MessagesRequest {
         model: model.to_string(),
         max_tokens,
         system: vec![SystemBlock::cached(system)],
@@ -1084,7 +1084,10 @@ fn side_request(
         fallbacks: fallbacks_for(model),
         stream: true,
         ..MessagesRequest::default()
-    }
+    };
+    // A `SCORING_EFFORT` above high would make a thinking-off side call invalid.
+    crate::orchestrator::cap_effort_for_thinking_off(&mut req);
+    req
 }
 
 /// The headset card schema: a line, the top strength and the top fix, each pointing at a candidate quote.
@@ -1412,12 +1415,25 @@ impl Drop for PendingCall {
     }
 }
 
-/// The scoring model could not answer (overloaded or another 5xx, rate limited, connection failed): the next try
-/// goes to the fallback model.
+/// A scoring call that gave no answer within its ceiling.
+#[derive(Debug)]
+pub struct CallTimedOut(pub u64);
+
+impl std::fmt::Display for CallTimedOut {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "model call took longer than {} s", self.0)
+    }
+}
+
+impl std::error::Error for CallTimedOut {}
+
+/// The scoring model could not answer (overloaded or another 5xx, rate limited, connection failed, or no answer
+/// within the call's ceiling): the next try goes to the fallback model.
 pub fn model_unavailable(err: &anyhow::Error) -> bool {
     err.chain().any(|c| {
-        c.downcast_ref::<crate::claude::ClaudeError>()
-            .is_some_and(crate::claude::ClaudeError::is_unavailable)
+        c.is::<CallTimedOut>()
+            || c.downcast_ref::<crate::claude::ClaudeError>()
+                .is_some_and(crate::claude::ClaudeError::is_unavailable)
     })
 }
 
@@ -1469,7 +1485,7 @@ async fn run_model(
     };
     tokio::time::timeout(timeout, call)
         .await
-        .map_err(|_| anyhow!("model call took longer than {} s", timeout.as_secs()))?
+        .map_err(|_| anyhow::Error::new(CallTimedOut(timeout.as_secs())))?
 }
 
 // ---------- assembling the report ----------
