@@ -1,63 +1,55 @@
 // Shared types for the web app. They mirror docs/protocol.md (REST and WebSocket)
-// and content/schema/*.json (board, report, round, persona, attendee, meeting template)
-// field for field. When one of those files changes, change this file with it.
+// and content/schema/*.json field for field. When one of those files changes, change this
+// file with it; types.test.ts checks every property, its nullability and the enums below
+// against the schemas. Rubric, QuestionBank and Voices (rubric, bank, voices schemas) are
+// server-side content with no web consumer yet, so they are not mirrored here.
+//
+// Enums that a schema also lists are const arrays, so the test can compare values.
 
 // ---------- Small enums ----------
 
 export type Role = 'sde' | 'pm';
 export type Mode = 'interview' | 'meeting';
 export type Length = 'short' | 'full';
-export type Level = 'junior' | 'mid' | 'senior' | 'staff';
-export type Style = 'warm' | 'neutral' | 'tough';
+export const LEVELS = ['junior', 'mid', 'senior', 'staff'] as const;
+export type Level = (typeof LEVELS)[number];
+export const STYLES = ['warm', 'neutral', 'tough'] as const;
+export type Style = (typeof STYLES)[number];
 export type VoiceChoice = 'fish' | 'fake';
 export type PanelMode = 'swap' | 'joined';
 export type Seat = 0 | 1 | 2;
 
-export type RoundType =
-  | 'coding'
-  | 'system_design'
-  | 'object_design'
-  | 'behavioral'
-  | 'recruiter_screen'
-  | 'pm_product_sense'
-  | 'pm_execution'
-  | 'pm_estimation'
-  | 'pm_strategy'
-  | 'pm_leadership'
-  | 'meeting';
+export const ROUND_TYPES = ['coding', 'system_design', 'object_design', 'behavioral', 'recruiter_screen', 'pm_product_sense', 'pm_execution', 'pm_estimation', 'pm_strategy', 'pm_leadership', 'meeting'] as const;
+export type RoundType = (typeof ROUND_TYPES)[number];
 
-export type EndReason = 'completed' | 'user_ended' | 'time_limit' | 'disconnected' | 'headset_removed';
+export const END_REASONS = ['completed', 'user_ended', 'time_limit', 'disconnected', 'headset_removed'] as const;
+export type EndReason = (typeof END_REASONS)[number];
 
 export type SessionStatus = 'created' | 'live' | 'paused' | 'scoring' | 'scored' | 'failed' | 'abandoned';
 
 // ---------- Board (content/schema/board.v1.schema.json) ----------
 
-export type BoardKit = 'hld' | 'lld' | 'coding' | 'pm' | 'meeting';
-export type BoardSrc = 'hand' | 'voice_grammar' | 'scribe' | 'interviewer';
-export type ComponentType =
-  | 'client'
-  | 'lb'
-  | 'api_gateway'
-  | 'service'
-  | 'db'
-  | 'kv'
-  | 'cache'
-  | 'queue'
-  | 'cdn'
-  | 'object_store'
-  | 'search'
-  | 'worker'
-  | 'external'
-  | 'note'
-  | 'blank';
-export type ClassKind = 'class' | 'interface' | 'abstract' | 'enum';
-export type MetricRole = 'north_star' | 'input' | 'guardrail';
-export type Lane = 'user' | 'pain' | 'idea' | 'metric';
+export const BOARD_KITS = ['hld', 'lld', 'coding', 'pm', 'meeting'] as const;
+export type BoardKit = (typeof BOARD_KITS)[number];
+export const BOARD_SRCS = ['hand', 'voice_grammar', 'scribe', 'interviewer'] as const;
+export type BoardSrc = (typeof BOARD_SRCS)[number];
+export const COMPONENT_TYPES = ['client', 'lb', 'api_gateway', 'service', 'db', 'kv', 'cache', 'queue', 'cdn', 'object_store', 'search', 'worker', 'external', 'note', 'blank'] as const;
+export type ComponentType = (typeof COMPONENT_TYPES)[number];
+export const CLASS_KINDS = ['class', 'interface', 'abstract', 'enum'] as const;
+export type ClassKind = (typeof CLASS_KINDS)[number];
+export const METRIC_ROLES = ['north_star', 'input', 'guardrail'] as const;
+export type MetricRole = (typeof METRIC_ROLES)[number];
+export const LANES = ['user', 'pain', 'idea', 'metric'] as const;
+export type Lane = (typeof LANES)[number];
+export const QUADS = ['tl', 'tr', 'bl', 'br'] as const;
 /** 2x2 quadrant: t/b = impact high/low, l/r = effort low/high. */
-export type Quad = 'tl' | 'tr' | 'bl' | 'br';
-export type EdgeDir = '->' | '<->' | '--';
-export type EdgeRel = 'uses' | 'has_a' | 'is_a' | 'implements';
-export type Vis = '+' | '-' | '#' | '~';
+export type Quad = (typeof QUADS)[number];
+export const EDGE_DIRS = ['->', '<->', '--'] as const;
+export type EdgeDir = (typeof EDGE_DIRS)[number];
+export const EDGE_RELS = ['uses', 'has_a', 'is_a', 'implements'] as const;
+export type EdgeRel = (typeof EDGE_RELS)[number];
+export const VIS = ['+', '-', '#', '~'] as const;
+export type Vis = (typeof VIS)[number];
 
 export interface ComponentItem {
   id: string;
@@ -240,6 +232,8 @@ export interface OpArgsMap {
   'code.delete': { id: string };
   'code.complexity': { slot: 'time' | 'space'; value: string | null };
   'code.trace': { line: string; t: number };
+  /** Replaces code.approach (at most 6 lines). */
+  'code.approach': { lines: string[] };
   'agenda.check': { id: string; done: boolean; t: number | null };
   'present.show': { kind: 'slide' | 'number'; ref: number | string; t: number };
   'park.add': { text: string };
@@ -247,6 +241,39 @@ export interface OpArgsMap {
 }
 
 export type BoardOpName = keyof OpArgsMap;
+
+/** Every op name, in schema order (board.v1.schema.json#/$defs/op_name). */
+export const BOARD_OP_NAMES = [
+  'item.create',
+  'item.move',
+  'item.delete',
+  'item.label',
+  'item.set_type',
+  'item.note.add',
+  'edge.create',
+  'edge.delete',
+  'edge.set_dir',
+  'edge.set_rel',
+  'edge.label',
+  'group.create',
+  'member.add',
+  'member.move',
+  'member.remove',
+  'sticky.vote',
+  'sticky.set_quad',
+  'code.insert',
+  'code.edit',
+  'code.move',
+  'code.indent',
+  'code.delete',
+  'code.complexity',
+  'code.trace',
+  'code.approach',
+  'agenda.check',
+  'present.show',
+  'park.add',
+  'undo',
+] as const satisfies readonly BoardOpName[];
 export type OpArgs<K extends BoardOpName = BoardOpName> = OpArgsMap[K];
 
 type PerOp<F> = { [K in BoardOpName]: F & { op: K; args: OpArgsMap[K] } }[BoardOpName];
@@ -269,10 +296,22 @@ export interface BoardOpsFixture {
   expected: Board;
 }
 
+/** content/fixtures/board-undo/*.json: the current board is `start` with the accepted `log`
+ *  applied; applying `undo` to it gives `expected`. */
+export interface UndoFixture {
+  name: string;
+  start: Board;
+  log: OpLogEntry[];
+  undo: Extract<BoardOp, { op: 'undo' }>;
+  expected: Board;
+}
+
 // ---------- Rounds, personas, meetings (content/schema) ----------
 
-export type Hands = 'whiteboard' | 'code_panel' | 'class_cards' | 'stickies' | 'meeting_cards' | 'none';
-export type AvatarId = 'f01' | 'f02' | 'f03' | 'm02' | 'm04' | 'm05';
+export const HANDS = ['whiteboard', 'code_panel', 'class_cards', 'stickies', 'meeting_cards', 'none'] as const;
+export type Hands = (typeof HANDS)[number];
+export const AVATAR_IDS = ['f01', 'f02', 'f03', 'm02', 'm04', 'm05'] as const;
+export type AvatarId = (typeof AVATAR_IDS)[number];
 
 export interface RoundPhase {
   id: string;
@@ -347,7 +386,8 @@ export interface PersonaPublic {
   style: Style;
 }
 
-export type Personality = 'supportive' | 'neutral' | 'skeptical' | 'hostile';
+export const PERSONALITIES = ['supportive', 'neutral', 'skeptical', 'hostile'] as const;
+export type Personality = (typeof PERSONALITIES)[number];
 export type DecisionPower = 'approver' | 'influencer' | 'observer';
 
 /** attendee.schema.json */
@@ -363,13 +403,8 @@ export interface Attendee {
   voice_base?: string;
 }
 
-export type MeetingTemplateId =
-  | 'investor_pitch'
-  | 'client_proposal'
-  | 'exec_update'
-  | 'salary_negotiation'
-  | 'performance_review'
-  | 'project_kickoff';
+export const MEETING_TEMPLATE_IDS = ['investor_pitch', 'client_proposal', 'exec_update', 'salary_negotiation', 'performance_review', 'project_kickoff'] as const;
+export type MeetingTemplateId = (typeof MEETING_TEMPLATE_IDS)[number];
 
 export type MeetingDifficulty = 'friendly' | 'realistic' | 'tough';
 export interface KeyFact {
@@ -395,6 +430,8 @@ export interface MeetingTemplate {
   difficulty?: MeetingDifficulty;
   who_speaks_first?: 'user' | 'chair';
   length?: Length;
+  /** True = the user runs the meeting (e.g. a performance review); no AI attendee chairs. */
+  user_chairs?: boolean;
 }
 
 /** What the user submits to POST /api/meetings/prepare (meeting-setup.schema.json). */
@@ -426,8 +463,10 @@ export interface AttendeeHidden {
 
 /** What the server prepares from a MeetingSetup (meeting-plan.schema.json). */
 export interface MeetingPlan {
-  /** Name of the attendee who chairs. */
-  chair_attendee: string;
+  /** Name of the attendee who chairs; null exactly when user_chairs is true. */
+  chair_attendee: string | null;
+  /** True = the user runs the meeting and no AI attendee chairs. */
+  user_chairs?: boolean;
   attendees: (Attendee & { hidden: AttendeeHidden })[];
   opening_line: string;
   success_criteria: string[];
@@ -441,13 +480,8 @@ export interface MeetingPlanPublic extends Omit<MeetingPlan, 'attendees'> {
 
 // ---------- Report (content/schema/report.v1.schema.json) ----------
 
-export type VerdictLabel =
-  | 'strong_no_hire'
-  | 'no_hire'
-  | 'leaning_no_hire'
-  | 'leaning_hire'
-  | 'hire'
-  | 'strong_hire';
+export const VERDICT_LABELS = ['strong_no_hire', 'no_hire', 'leaning_no_hire', 'leaning_hire', 'hire', 'strong_hire'] as const;
+export type VerdictLabel = (typeof VERDICT_LABELS)[number];
 
 export type Confidence = 'low' | 'medium' | 'high';
 
@@ -707,12 +741,8 @@ export interface Settings {
   practice_mode: boolean;
 }
 
-export type LimitReason =
-  | 'guest_daily_limit'
-  | 'guest_full_used'
-  | 'judge_budget_reached'
-  | 'build_budget_reached'
-  | 'free_rounds_used';
+export const LIMIT_REASONS = ['guest_daily_limit', 'guest_full_used', 'judge_budget_reached', 'build_budget_reached', 'free_rounds_used'] as const;
+export type LimitReason = (typeof LIMIT_REASONS)[number];
 
 /** me.schema.json#/$defs/limits; also `limits` in CreateSessionRes. null counts mean no limit. */
 export interface Limits {
@@ -865,4 +895,6 @@ export const VOICE_MARKERS = {
   resume: '[event: resume]',
   silenceCheck: '[event: silence_check]',
   ending: '[event: ending]',
+  /** One candidate turn ran past the round's interrupt_after_seconds. */
+  longAnswer: '[event: long_answer]',
 } as const;
