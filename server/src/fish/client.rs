@@ -136,9 +136,13 @@ async fn check(res: Response) -> Result<Response, FishError> {
     let message = serde_json::from_str::<Value>(&body)
         .ok()
         .and_then(|v| {
-            ["message", "detail", "error"]
-                .iter()
-                .find_map(|k| v.get(*k).map(|m| m.as_str().map(str::to_string).unwrap_or_else(|| m.to_string())))
+            ["message", "detail", "error"].iter().find_map(|k| {
+                v.get(*k).map(|m| {
+                    m.as_str()
+                        .map(str::to_string)
+                        .unwrap_or_else(|| m.to_string())
+                })
+            })
         })
         .unwrap_or_else(|| body.chars().take(300).collect());
     Err(FishError::Http {

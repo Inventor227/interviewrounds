@@ -12,8 +12,15 @@ use super::{ClaudeError, ContentBlock, StreamEvent, Usage, scrub};
 /// One content block being assembled.
 enum Partial {
     Text,
-    ToolUse { id: String, name: String, json: String },
-    Thinking { thinking: String, signature: String },
+    ToolUse {
+        id: String,
+        name: String,
+        json: String,
+    },
+    Thinking {
+        thinking: String,
+        signature: String,
+    },
     /// Any other block type: kept whole as it started (deltas for it are ignored).
     Other(Value),
 }
@@ -88,13 +95,20 @@ impl StreamDecoder {
                         }
                     }
                     (Some(Partial::ToolUse { json, .. }), "input_json_delta") => {
-                        json.push_str(delta.get("partial_json").and_then(Value::as_str).unwrap_or(""));
+                        json.push_str(
+                            delta
+                                .get("partial_json")
+                                .and_then(Value::as_str)
+                                .unwrap_or(""),
+                        );
                     }
                     (Some(Partial::Thinking { thinking, .. }), "thinking_delta") => {
-                        thinking.push_str(delta.get("thinking").and_then(Value::as_str).unwrap_or(""));
+                        thinking
+                            .push_str(delta.get("thinking").and_then(Value::as_str).unwrap_or(""));
                     }
                     (Some(Partial::Thinking { signature, .. }), "signature_delta") => {
-                        signature.push_str(delta.get("signature").and_then(Value::as_str).unwrap_or(""));
+                        signature
+                            .push_str(delta.get("signature").and_then(Value::as_str).unwrap_or(""));
                     }
                     _ => {}
                 }
@@ -113,8 +127,14 @@ impl StreamDecoder {
                         };
                         out.push(StreamEvent::ToolUse { id, name, input });
                     }
-                    Some(Partial::Thinking { thinking, signature }) => {
-                        out.push(StreamEvent::Block(ContentBlock::Thinking { thinking, signature }));
+                    Some(Partial::Thinking {
+                        thinking,
+                        signature,
+                    }) => {
+                        out.push(StreamEvent::Block(ContentBlock::Thinking {
+                            thinking,
+                            signature,
+                        }));
                     }
                     Some(Partial::Other(block)) => {
                         let block = serde_json::from_value(block.clone())
@@ -135,13 +155,22 @@ impl StreamDecoder {
             "message_stop" => {
                 self.finished = true;
                 out.push(StreamEvent::Stop {
-                    reason: self.stop_reason.clone().unwrap_or_else(|| "end_turn".into()),
+                    reason: self
+                        .stop_reason
+                        .clone()
+                        .unwrap_or_else(|| "end_turn".into()),
                     usage: self.usage.clone(),
                 });
             }
             "error" => {
-                let etype = v.pointer("/error/type").and_then(Value::as_str).unwrap_or("");
-                let msg = v.pointer("/error/message").and_then(Value::as_str).unwrap_or("");
+                let etype = v
+                    .pointer("/error/type")
+                    .and_then(Value::as_str)
+                    .unwrap_or("");
+                let msg = v
+                    .pointer("/error/message")
+                    .and_then(Value::as_str)
+                    .unwrap_or("");
                 return Err(match etype {
                     "overloaded_error" | "api_error" => ClaudeError::Overloaded,
                     "rate_limit_error" => ClaudeError::RateLimited { retry_after: None },

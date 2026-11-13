@@ -46,7 +46,10 @@ async fn fish_create_session_passes_overrides() {
         .mount(&server)
         .await;
 
-    let tok = client(&server).create_session(&create_req()).await.expect("create");
+    let tok = client(&server)
+        .create_session(&create_req())
+        .await
+        .expect("create");
     assert_eq!(tok.session_id, "sess_abc");
     assert_eq!(tok.token, "tok-123");
     assert_eq!(tok.livekit_url, "wss://x.livekit.cloud");
@@ -62,7 +65,9 @@ async fn fish_create_session_passes_overrides() {
 async fn fish_create_session_sends_first_message_when_set() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
-        .and(body_partial_json(json!({"overrides": {"first_message": "Hi there."}})))
+        .and(body_partial_json(
+            json!({"overrides": {"first_message": "Hi there."}}),
+        ))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "session_id": "s", "expires_at": 1763035200, "livekit_url": "wss://l", "token": "t"
         })))
@@ -79,7 +84,9 @@ async fn fish_create_session_sends_first_message_when_set() {
 async fn fish_errors_carry_status() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
-        .respond_with(ResponseTemplate::new(409).set_body_json(json!({"message": "agent not published"})))
+        .respond_with(
+            ResponseTemplate::new(409).set_body_json(json!({"message": "agent not published"})),
+        )
         .mount(&server)
         .await;
     match client(&server).create_session(&create_req()).await {

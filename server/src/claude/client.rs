@@ -75,10 +75,7 @@ impl ClaudeClient {
     /// Every call goes through here, so the auth, version and workspace headers are never missed.
     fn post(&self, req: &MessagesRequest) -> RequestBuilder {
         let mut headers = HeaderMap::new();
-        headers.insert(
-            "anthropic-version",
-            HeaderValue::from_static(API_VERSION),
-        );
+        headers.insert("anthropic-version", HeaderValue::from_static(API_VERSION));
         if let Ok(v) = HeaderValue::from_str(&self.inner.api_key) {
             headers.insert("x-api-key", v);
         }
@@ -106,10 +103,9 @@ impl ClaudeClient {
             .await
             .map_err(network)?;
         let res = check_status(res).await?;
-        let body: MessagesResponse = res
-            .json()
-            .await
-            .map_err(|e| ClaudeError::Network(format!("reading response: {}", scrub(&e.to_string()))))?;
+        let body: MessagesResponse = res.json().await.map_err(|e| {
+            ClaudeError::Network(format!("reading response: {}", scrub(&e.to_string())))
+        })?;
         if body.stop_reason.as_deref() == Some("refusal") {
             return Err(ClaudeError::Refusal);
         }
@@ -137,7 +133,12 @@ impl ClaudeClient {
         req.stream = false;
         let client = self.clone();
         tokio::spawn(async move {
-            match client.post(&req).timeout(Duration::from_secs(60)).send().await {
+            match client
+                .post(&req)
+                .timeout(Duration::from_secs(60))
+                .send()
+                .await
+            {
                 Ok(res) if res.status().is_success() => {
                     tracing::debug!(model = %req.model, "prompt cache prewarmed");
                 }

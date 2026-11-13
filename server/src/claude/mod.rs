@@ -333,7 +333,10 @@ pub fn fallbacks_for(model: &str) -> Option<Value> {
 pub(crate) fn scrub(text: &str) -> String {
     text.split_inclusive(char::is_whitespace)
         .map(|word| {
-            if word.trim_start_matches(|c: char| !c.is_alphanumeric()).starts_with("sk-") {
+            if word
+                .trim_start_matches(|c: char| !c.is_alphanumeric())
+                .starts_with("sk-")
+            {
                 let trailing: String = word.chars().filter(|c| c.is_whitespace()).collect();
                 format!("[redacted]{trailing}")
             } else {

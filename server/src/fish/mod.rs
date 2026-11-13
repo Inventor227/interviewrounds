@@ -106,7 +106,11 @@ fn timestamp_ms(v: &Value) -> Option<i64> {
         Value::Number(n) => {
             let f = n.as_f64()?;
             // Anything below 1e11 is seconds (1e11 s is the year 5138).
-            Some(if f.abs() < 1e11 { (f * 1000.0).round() as i64 } else { f.round() as i64 })
+            Some(if f.abs() < 1e11 {
+                (f * 1000.0).round() as i64
+            } else {
+                f.round() as i64
+            })
         }
         _ => None,
     }

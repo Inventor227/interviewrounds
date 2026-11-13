@@ -89,15 +89,28 @@ async fn request_never_carries_sampling_params_and_adds_fallback_beta() {
     req.thinking = thinking_for(&req.model);
     req.output_config = Some(OutputConfig::effort("low"));
     let body = serde_json::to_value(&req).unwrap();
-    for banned in ["temperature", "top_p", "top_k", "thinking", "tools", "stream"] {
-        assert!(body.get(banned).is_none(), "{banned} must not be sent: {body}");
+    for banned in [
+        "temperature",
+        "top_p",
+        "top_k",
+        "thinking",
+        "tools",
+        "stream",
+    ] {
+        assert!(
+            body.get(banned).is_none(),
+            "{banned} must not be sent: {body}"
+        );
     }
     client(&server).create(&req).await.expect("create");
 }
 
 #[test]
 fn thinking_config_follows_the_model_family() {
-    assert_eq!(serde_json::to_value(thinking_for("claude-opus-5-5")).unwrap(), json!(null));
+    assert_eq!(
+        serde_json::to_value(thinking_for("claude-opus-5-5")).unwrap(),
+        json!(null)
+    );
     assert_eq!(
         serde_json::to_value(thinking_for("claude-sonnet-5-5")).unwrap(),
         json!({"type": "between_tools"})
@@ -113,17 +126,47 @@ fn thinking_config_follows_the_model_family() {
 #[tokio::test]
 async fn stream_yields_text_then_tool_use_then_stop() {
     let body = sse(&[
-        ("message_start", json!({"type": "message_start", "message": {"id": "msg_1", "type": "message", "role": "assistant", "model": "claude-haiku-5-5", "content": [], "usage": {"input_tokens": 42, "cache_read_input_tokens": 30, "output_tokens": 1}}})),
-        ("content_block_start", json!({"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}})),
+        (
+            "message_start",
+            json!({"type": "message_start", "message": {"id": "msg_1", "type": "message", "role": "assistant", "model": "claude-haiku-5-5", "content": [], "usage": {"input_tokens": 42, "cache_read_input_tokens": 30, "output_tokens": 1}}}),
+        ),
+        (
+            "content_block_start",
+            json!({"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}}),
+        ),
         ("ping", json!({"type": "ping"})),
-        ("content_block_delta", json!({"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "Okay. "}})),
-        ("content_block_delta", json!({"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "Next question."}})),
-        ("content_block_stop", json!({"type": "content_block_stop", "index": 0})),
-        ("content_block_start", json!({"type": "content_block_start", "index": 1, "content_block": {"type": "tool_use", "id": "toolu_1", "name": "show_question", "input": {}}})),
-        ("content_block_delta", json!({"type": "content_block_delta", "index": 1, "delta": {"type": "input_json_delta", "partial_json": "{\"question\": \"Des"}})),
-        ("content_block_delta", json!({"type": "content_block_delta", "index": 1, "delta": {"type": "input_json_delta", "partial_json": "ign a cache\", \"lines\": [\"1M users\"]}"}})),
-        ("content_block_stop", json!({"type": "content_block_stop", "index": 1})),
-        ("message_delta", json!({"type": "message_delta", "delta": {"stop_reason": "tool_use"}, "usage": {"output_tokens": 25}})),
+        (
+            "content_block_delta",
+            json!({"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "Okay. "}}),
+        ),
+        (
+            "content_block_delta",
+            json!({"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "Next question."}}),
+        ),
+        (
+            "content_block_stop",
+            json!({"type": "content_block_stop", "index": 0}),
+        ),
+        (
+            "content_block_start",
+            json!({"type": "content_block_start", "index": 1, "content_block": {"type": "tool_use", "id": "toolu_1", "name": "show_question", "input": {}}}),
+        ),
+        (
+            "content_block_delta",
+            json!({"type": "content_block_delta", "index": 1, "delta": {"type": "input_json_delta", "partial_json": "{\"question\": \"Des"}}),
+        ),
+        (
+            "content_block_delta",
+            json!({"type": "content_block_delta", "index": 1, "delta": {"type": "input_json_delta", "partial_json": "ign a cache\", \"lines\": [\"1M users\"]}"}}),
+        ),
+        (
+            "content_block_stop",
+            json!({"type": "content_block_stop", "index": 1}),
+        ),
+        (
+            "message_delta",
+            json!({"type": "message_delta", "delta": {"stop_reason": "tool_use"}, "usage": {"output_tokens": 25}}),
+        ),
         ("message_stop", json!({"type": "message_stop"})),
     ]);
     let server = MockServer::start().await;
@@ -175,14 +218,38 @@ async fn stream_yields_text_then_tool_use_then_stop() {
 #[tokio::test]
 async fn stream_keeps_thinking_blocks_for_replay() {
     let body = sse(&[
-        ("message_start", json!({"type": "message_start", "message": {"id": "m", "model": "claude-opus-5-5", "usage": {"input_tokens": 5}}})),
-        ("content_block_start", json!({"type": "content_block_start", "index": 0, "content_block": {"type": "thinking", "thinking": ""}})),
-        ("content_block_delta", json!({"type": "content_block_delta", "index": 0, "delta": {"type": "thinking_delta", "thinking": "hmm"}})),
-        ("content_block_delta", json!({"type": "content_block_delta", "index": 0, "delta": {"type": "signature_delta", "signature": "sig=="}})),
-        ("content_block_stop", json!({"type": "content_block_stop", "index": 0})),
-        ("content_block_start", json!({"type": "content_block_start", "index": 1, "content_block": {"type": "text", "text": "Hi."}})),
-        ("content_block_stop", json!({"type": "content_block_stop", "index": 1})),
-        ("message_delta", json!({"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 3}})),
+        (
+            "message_start",
+            json!({"type": "message_start", "message": {"id": "m", "model": "claude-opus-5-5", "usage": {"input_tokens": 5}}}),
+        ),
+        (
+            "content_block_start",
+            json!({"type": "content_block_start", "index": 0, "content_block": {"type": "thinking", "thinking": ""}}),
+        ),
+        (
+            "content_block_delta",
+            json!({"type": "content_block_delta", "index": 0, "delta": {"type": "thinking_delta", "thinking": "hmm"}}),
+        ),
+        (
+            "content_block_delta",
+            json!({"type": "content_block_delta", "index": 0, "delta": {"type": "signature_delta", "signature": "sig=="}}),
+        ),
+        (
+            "content_block_stop",
+            json!({"type": "content_block_stop", "index": 0}),
+        ),
+        (
+            "content_block_start",
+            json!({"type": "content_block_start", "index": 1, "content_block": {"type": "text", "text": "Hi."}}),
+        ),
+        (
+            "content_block_stop",
+            json!({"type": "content_block_stop", "index": 1}),
+        ),
+        (
+            "message_delta",
+            json!({"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 3}}),
+        ),
         ("message_stop", json!({"type": "message_stop"})),
     ]);
     let server = MockServer::start().await;
@@ -211,8 +278,14 @@ async fn stream_keeps_thinking_blocks_for_replay() {
 #[tokio::test]
 async fn stream_error_event_and_early_end_are_errors() {
     let body = sse(&[
-        ("message_start", json!({"type": "message_start", "message": {"id": "m", "usage": {"input_tokens": 5}}})),
-        ("error", json!({"type": "error", "error": {"type": "overloaded_error", "message": "Overloaded"}})),
+        (
+            "message_start",
+            json!({"type": "message_start", "message": {"id": "m", "usage": {"input_tokens": 5}}}),
+        ),
+        (
+            "error",
+            json!({"type": "error", "error": {"type": "overloaded_error", "message": "Overloaded"}}),
+        ),
     ]);
     let server = MockServer::start().await;
     Mock::given(method("POST"))
@@ -225,7 +298,10 @@ async fn stream_error_event_and_early_end_are_errors() {
         .unwrap()
         .collect()
         .await;
-    assert!(matches!(events.last(), Some(Err(ClaudeError::Overloaded))), "{events:?}");
+    assert!(
+        matches!(events.last(), Some(Err(ClaudeError::Overloaded))),
+        "{events:?}"
+    );
 
     let server = MockServer::start().await;
     let cut = sse(&[(
@@ -243,7 +319,10 @@ async fn stream_error_event_and_early_end_are_errors() {
         .collect()
         .await;
     assert!(matches!(&events[0], Ok(StreamEvent::TextDelta(t)) if t == "Hal"));
-    assert!(matches!(events.last(), Some(Err(ClaudeError::Network(_)))), "{events:?}");
+    assert!(
+        matches!(events.last(), Some(Err(ClaudeError::Network(_)))),
+        "{events:?}"
+    );
 }
 
 #[tokio::test]
@@ -339,13 +418,22 @@ async fn prewarm_sends_max_tokens_zero() {
     req.stream = true;
     client(&server).prewarm(&req);
     let deadline = Instant::now() + Duration::from_secs(5);
-    while server.received_requests().await.unwrap_or_default().is_empty() && Instant::now() < deadline {
+    while server
+        .received_requests()
+        .await
+        .unwrap_or_default()
+        .is_empty()
+        && Instant::now() < deadline
+    {
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
     let got = server.received_requests().await.unwrap();
     let body: serde_json::Value = serde_json::from_slice(&got[0].body).unwrap();
     assert_eq!(body["max_tokens"], 0);
-    assert!(body.get("stream").is_none(), "prewarm is not streamed: {body}");
+    assert!(
+        body.get("stream").is_none(),
+        "prewarm is not streamed: {body}"
+    );
 }
 
 #[test]
@@ -381,7 +469,8 @@ async fn live_smoke_three_models() {
         let res = c.create(&req).await;
         println!(
             "{model} create: {:?} in {} ms",
-            res.as_ref().map(|r| (r.model.clone(), r.stop_reason.clone(), r.text())),
+            res.as_ref()
+                .map(|r| (r.model.clone(), r.stop_reason.clone(), r.text())),
             t.elapsed().as_millis()
         );
         res.expect("create 200");
@@ -394,12 +483,17 @@ async fn live_smoke_three_models() {
         let mut stop = None;
         while let Some(ev) = s.next().await {
             match ev.expect("stream event") {
-                StreamEvent::TextDelta(_) if first.is_none() => first = Some(t.elapsed().as_millis()),
+                StreamEvent::TextDelta(_) if first.is_none() => {
+                    first = Some(t.elapsed().as_millis())
+                }
                 StreamEvent::Stop { reason, .. } => stop = Some(reason),
                 _ => {}
             }
         }
-        println!("{model} stream: first text {first:?} ms, stop {stop:?}, total {} ms", t.elapsed().as_millis());
+        println!(
+            "{model} stream: first text {first:?} ms, stop {stop:?}, total {} ms",
+            t.elapsed().as_millis()
+        );
         assert!(stop.is_some(), "{model} stream ended without stop");
     }
 }
