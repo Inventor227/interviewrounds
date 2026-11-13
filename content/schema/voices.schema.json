@@ -1,0 +1,161 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rounds.dijmo.com/schema/voices.schema.json",
+  "title": "Voices",
+  "description": "content/voices.json: one Fish library voice per voice_id, with two alternates each.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "provider",
+    "listed_at",
+    "how_chosen",
+    "sample_model",
+    "voices"
+  ],
+  "properties": {
+    "provider": {
+      "const": "fish"
+    },
+    "listed_at": {
+      "type": "string",
+      "minLength": 1
+    },
+    "how_chosen": {
+      "type": "string",
+      "minLength": 1
+    },
+    "sample_model": {
+      "type": "string",
+      "minLength": 1
+    },
+    "voices": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {
+        "type": "object",
+        "allOf": [
+          {
+            "$ref": "#/$defs/pick"
+          }
+        ],
+        "required": [
+          "persona_id",
+          "gender",
+          "sample_text",
+          "sample_file",
+          "alternates"
+        ],
+        "properties": {
+          "persona_id": {
+            "type": "string",
+            "pattern": "^persona\\.[a-z]+$"
+          },
+          "gender": {
+            "enum": [
+              "female",
+              "male"
+            ]
+          },
+          "sample_text": {
+            "type": "string",
+            "minLength": 1
+          },
+          "sample_file": {
+            "type": "string",
+            "minLength": 1
+          },
+          "alternates": {
+            "type": "array",
+            "minItems": 2,
+            "maxItems": 2,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "fish_id",
+                "fish_title",
+                "accent",
+                "task_count",
+                "tags",
+                "reason"
+              ],
+              "properties": {
+                "fish_id": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{32}$"
+                },
+                "fish_title": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "accent": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "task_count": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "tags": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "reason": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            }
+          }
+        },
+        "unevaluatedProperties": false
+      }
+    }
+  },
+  "$defs": {
+    "pick": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "fish_id",
+        "fish_title",
+        "accent",
+        "task_count",
+        "tags",
+        "reason"
+      ],
+      "properties": {
+        "fish_id": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{32}$"
+        },
+        "fish_title": {
+          "type": "string",
+          "minLength": 1
+        },
+        "accent": {
+          "type": "string",
+          "minLength": 1
+        },
+        "task_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    }
+  }
+}
