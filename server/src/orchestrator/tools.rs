@@ -108,11 +108,12 @@ pub fn apply(state: &mut SessionState, call: &ToolCall) -> Vec<ServerEvent> {
             vec![ServerEvent::RoundState(state.round_state(now))]
         }
         "next_phase" => {
-            // A call that names the phase it leaves is ignored once that phase is already over (a late or
-            // repeated call must not skip a phase).
+            // A call that names a phase already left is ignored (a late or repeated call must not skip a phase).
+            // A `from` that names no earlier phase (a title, a typo) does not block the move.
             let from = str_arg(input, "from").filter(|f| !f.is_empty());
+            let left = &state.round.phases[..state.phase_idx.min(state.round.phases.len())];
             if let Some(from) = from
-                && from != state.current_phase().id
+                && left.iter().any(|p| p.id == from)
             {
                 tracing::info!(session_id = %state.id, from, current = %state.current_phase().id, "stale next_phase ignored");
                 return Vec::new();
