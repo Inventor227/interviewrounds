@@ -285,6 +285,10 @@ pub struct SessionState {
     /// What each panelist last streamed to the voice (filtered), to detect interruptions.
     pub last_agent_text: HashMap<String, String>,
     pub status: SessionStatus,
+    /// Bumped on every move into or out of a user pause: the voice release only acts on the pause it saw.
+    pub pause_epoch: u64,
+    /// When the current user pause began (wall clock, kept in the snapshot so a restart keeps the release time).
+    pub paused_wall: Option<chrono::DateTime<chrono::Utc>>,
     pub brief: Option<Brief>,
     pub closing_line: Option<String>,
     pub live: LiveSettings,
@@ -488,6 +492,8 @@ impl SessionState {
             hint_max_level: 0,
             last_agent_text: HashMap::new(),
             status: SessionStatus::Live,
+            pause_epoch: 0,
+            paused_wall: None,
             brief: None,
             closing_line: None,
             live,
@@ -562,6 +568,23 @@ impl SessionState {
     }
 
     /// Round time so far, pauses excluded.
+    /// The user paused (the headset came off, the page was hidden, the pause button): the status moves and a new
+    /// pause epoch starts. The caller stops the clock.
+    pub fn enter_pause(&mut self) {
+        self.status = SessionStatus::Paused;
+        self.pause_epoch += 1;
+        self.paused_wall = Some(chrono::Utc::now());
+    }
+
+    /// Out of a user pause (`ui.event resume`, `POST /resume`, an end): the pause epoch ends with it.
+    pub fn leave_pause(&mut self) {
+        if self.status == SessionStatus::Paused {
+            self.status = SessionStatus::Live;
+        }
+        self.pause_epoch += 1;
+        self.paused_wall = None;
+    }
+
     pub fn elapsed_ms(&self, now: Instant) -> u64 {
         let total = now.saturating_duration_since(self.started_at).as_millis() as u64;
         let paused = self.paused_total_ms

@@ -292,20 +292,23 @@ pub async fn resumable(app: &AppState, identity: Uuid) -> Result<Option<Value>, 
                     None => continue,
                 }
             }
-            // Not loaded (the server restarted). Paused: the round time stood still since the pause, so the
-            // budget ends at start + round time + budget. Live: the last time a socket was seen.
-            _ if status == "paused" => match started_at {
-                Some(start) => {
-                    start
-                        + chrono::Duration::milliseconds(elapsed_ms.unwrap_or(0.0) as i64)
-                        + budget
+            // Not loaded (the server restarted). The round time stood still since the pause or the drop, so the
+            // pause budget ends at start + round time + budget. Paused: that. Live: the offline window after the
+            // last socket, or the budget's end when it comes first.
+            _ => {
+                let Some(start) = started_at else { continue };
+                let budget_end = start
+                    + chrono::Duration::milliseconds(elapsed_ms.unwrap_or(0.0) as i64)
+                    + budget;
+                if status == "paused" {
+                    budget_end
+                } else {
+                    match last_socket_at {
+                        Some(t) => (t + window).min(budget_end),
+                        None => continue,
+                    }
                 }
-                None => continue,
-            },
-            _ => match last_socket_at {
-                Some(t) => t + window,
-                None => continue,
-            },
+            }
         };
         if expires_at <= now {
             continue;

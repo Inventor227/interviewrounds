@@ -217,6 +217,9 @@ pub struct LiveSnapshot {
     pub elapsed_ms: u64,
     pub started: bool,
     pub user_paused: bool,
+    /// When the user pause began (for the voice release after a restart).
+    #[serde(default)]
+    pub paused_at: Option<DateTime<Utc>>,
     #[serde(default)]
     pub brief: Option<Brief>,
     #[serde(default)]
@@ -254,6 +257,11 @@ pub fn snapshot(st: &SessionState, now: Instant) -> LiveSnapshot {
         elapsed_ms: st.elapsed_ms(now),
         started: st.status != SessionStatus::Created,
         user_paused: st.status == SessionStatus::Paused,
+        paused_at: if st.status == SessionStatus::Paused {
+            st.paused_wall
+        } else {
+            None
+        },
         brief: st.brief.clone(),
         closing_line: st.closing_line.clone(),
         hints_given: st.hints_given,
@@ -288,6 +296,11 @@ pub fn restore(st: &mut SessionState, snap: LiveSnapshot, now: Instant) {
         SessionStatus::Paused
     } else {
         SessionStatus::Live
+    };
+    st.paused_wall = if st.status == SessionStatus::Paused {
+        Some(snap.paused_at.unwrap_or_else(Utc::now))
+    } else {
+        None
     };
     st.brief = snap.brief;
     st.closing_line = snap.closing_line;
@@ -376,6 +389,12 @@ pub async fn state_from_row(app: &AppState, row: &SessionRow) -> anyhow::Result<
             let snap: LiveSnapshot =
                 serde_json::from_value(v.clone()).context("reading the live state snapshot")?;
             restore(&mut st, snap, now);
+            // The status row is written at once on a pause, the snapshot on the next tick: a pause just before a
+            // restart is still a pause.
+            if row.status == "paused" && st.status == SessionStatus::Live {
+                st.status = SessionStatus::Paused;
+                st.paused_wall = Some(Utc::now());
+            }
         }
         None => {
             st.status = SessionStatus::Created;
@@ -689,55 +708,31 @@ pub async fn mark_fish_ended(
     Ok(())
 }
 
-/// Ends Fish sessions in the background; each one is marked ended once Fish confirms it (settlement ends what is
-/// left).
-/// A round paused long enough: every open Fish session of it is ended (they bill per minute while idle) and the
-/// voices handed out are forgotten, so `POST /resume` makes new ones. The ledger settles each ended session at
-/// Fish's own duration, so only the seconds it ran are billed.
-pub async fn release_voices(app: &AppState, id: Uuid) {
-    let Some(hub) = app.hubs.get(&id.to_string()) else {
-        return;
-    };
-    let _fish = hub.fish_lock.lock().await;
-    let row = match fetch_session(&app.db, id).await {
-        Ok(Some(row)) => row,
-        Ok(None) => return,
-        Err(err) => {
-            tracing::warn!(session_id = %id, error = %err, "could not read the session to release its voices");
-            return;
+/// Ends one Fish session and marks it ended once Fish confirms. False when it could not be ended (the caller, the
+/// janitor or settlement tries again).
+pub async fn end_and_mark(app: &AppState, id: Uuid, fish_session_id: &str) -> bool {
+    match end_fish(app, fish_session_id).await {
+        Ok(()) => {
+            if let Err(err) = mark_fish_ended(&app.db, id, fish_session_id, Utc::now()).await {
+                tracing::warn!(fish_session_id = %fish_session_id, error = %err, "could not mark Fish session ended");
+                return false;
+            }
+            true
         }
-    };
-    if row.voice != "fish" || !row.is_open() {
-        return;
+        Err(err) => {
+            tracing::warn!(fish_session_id = %fish_session_id, error = %err, "could not end Fish session; it is retried");
+            false
+        }
     }
-    let open: Vec<String> = row
-        .fish_entries()
-        .into_iter()
-        .filter(|e| e.ended_at.is_none())
-        .map(|e| e.fish_session_id)
-        .collect();
-    hub.voices.lock().unwrap_or_else(|e| e.into_inner()).clear();
-    if open.is_empty() {
-        return;
-    }
-    tracing::info!(session_id = %id, voices = open.len(), "paused round: voices released");
-    end_in_background(app, id, open);
 }
 
+/// Ends Fish sessions in the background; each one is marked ended once Fish confirms it (settlement ends what is
+/// left).
 pub fn end_in_background(app: &AppState, id: Uuid, fish_ids: Vec<String>) {
     for fid in fish_ids {
         let app = app.clone();
         tokio::spawn(async move {
-            match end_fish(&app, &fid).await {
-                Ok(()) => {
-                    if let Err(err) = mark_fish_ended(&app.db, id, &fid, Utc::now()).await {
-                        tracing::warn!(fish_session_id = %fid, error = %err, "could not mark Fish session ended");
-                    }
-                }
-                Err(err) => {
-                    tracing::warn!(fish_session_id = %fid, error = %err, "could not end Fish session; settlement retries");
-                }
-            }
+            end_and_mark(&app, id, &fid).await;
         });
     }
 }
@@ -901,11 +896,48 @@ pub fn spawn_janitor(app: AppState, every: Duration) {
     });
 }
 
-/// Both sweeps. Each item that fails is logged and skipped; the next run tries it again.
+/// The sweeps. Each item that fails is logged and skipped; the next run tries it again.
 pub async fn sweep(app: &AppState) -> anyhow::Result<()> {
     let stale = sweep_stale(app).await;
+    let voices = sweep_paused_voices(app).await;
     let settle = sweep_settle(app).await;
-    stale.and(settle)
+    stale.and(voices).and(settle)
+}
+
+/// Paused rounds nobody holds in memory (after a restart, with no page back yet) get the voice release their
+/// driver would have done: once paused for `voice_release`, every open Fish session is ended (nothing mints for a
+/// round that is not loaded). A failed end stays open and is tried again on the next run.
+pub async fn sweep_paused_voices(app: &AppState) -> anyhow::Result<()> {
+    let release_secs = app.timing.voice_release.as_secs_f64();
+    let rows: Vec<(Uuid, Value)> = sqlx::query_as(
+        "select id, fish_sessions from sessions \
+         where status = 'paused' and voice = 'fish' and not fish_usage_recorded \
+           and coalesce((live_state->>'paused_at')::timestamptz, live_state_at, now()) \
+               < now() - make_interval(secs => $1) \
+           and exists (select 1 from jsonb_array_elements(fish_sessions) e where e->>'ended_at' is null)",
+    )
+    .bind(release_secs)
+    .fetch_all(&app.db)
+    .await?;
+    for (id, fish) in rows {
+        // A loaded round has its driver (and a resume mints under it).
+        if app.registry.get(&id.to_string()).is_some() {
+            continue;
+        }
+        let entries: Vec<FishEntry> = serde_json::from_value(fish).unwrap_or_default();
+        let open: Vec<String> = entries
+            .into_iter()
+            .filter(|e| e.ended_at.is_none())
+            .map(|e| e.fish_session_id)
+            .collect();
+        for fid in &open {
+            end_and_mark(app, id, fid).await;
+        }
+        if !open.is_empty() {
+            tracing::info!(session_id = %id, voices = open.len(), "paused round not loaded: voices released");
+        }
+    }
+    Ok(())
 }
 
 /// Ends open sessions nobody holds in memory once they have been offline past the window (after a restart).

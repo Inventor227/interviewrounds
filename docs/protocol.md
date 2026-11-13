@@ -28,8 +28,8 @@ JSON; cookie `ir_id` identifies the device/user; all under same origin. A new gu
 - `POST /api/sessions/{id}/panelists/{pid}/join` `{opening_line?}` → `{voice}` (swap mode hand-over; `voice` as in `Panelist`).
   The server adds the opening line to the shared history as that panelist's turn, gives it to the new Fish session as
   `first_message`, moves the floor, and ends the previous panelist's Fish session. Joining a panelist that already has a
-  live voice returns that voice again (nothing new is minted or said). `409` in joined mode, and when the round ended
-  meanwhile.
+  live voice returns that voice again (nothing new is minted or said). `409` in joined mode, when the round ended
+  meanwhile, and while the round is paused with its voices released (resume it first).
 - `POST /api/sessions/{id}/resume` → `CreateSessionRes` (same `session_id`, new tokens). Allowed while the round is open
   and either a socket is still connected or the last one dropped less than 3 minutes ago, at most 3 times per session.
   Otherwise `409 {code}`: `session_ended` (also when the round ends while the new voice is being made), `resume_expired`
@@ -37,8 +37,11 @@ JSON; cookie `ir_id` identifies the device/user; all under same origin. A new gu
   keep working and the try does not count. Then earlier tokens stop working and their sockets close with `4401`; the
   interviewer's next turn knows the candidate is back (it welcomes them back briefly and restates where they were in
   one sentence). A **paused** round can be resumed whether or not its socket dropped, for as long as its pause budget
-  lasts, and such a resume does not use up one of the 3; this is how the browser gets new voices after they were
-  released (see Pause).
+  lasts (`resume_expired` with under 5 s of it left), and such a resume does not use up one of the 3; neither does
+  the first resume after a voice release (`round.state.voices_released`), even if the round went live meanwhile.
+  These uncounted resumes are capped at 10 per round (`resume_limit`). This is how the browser gets new voices after
+  they were released (see Pause). Every resume gives the page a fresh 3-minute window to connect, and a resume from a
+  pause keeps the round clock stopped until the user is back (see `round.state`).
 - `POST /api/sessions/{id}/end` `{reason:"completed"|"user_ended"|"time_limit"|"disconnected"|"headset_removed"}` → 202. Ends
   the round at once with this reason (also during the goodbye after `ui.event {kind: "end"}`).
 - `GET /api/sessions/{id}` → `{status:"created"|"live"|"paused"|"scoring"|"scored"|"failed"|"abandoned", report_ready}`
@@ -76,7 +79,8 @@ JSON; cookie `ir_id` identifies the device/user; all under same origin. A new gu
 - `GET /api/me` → `{identity:{kind:"guest"|"user", name?, email?}, sign_in_available, settings, onboarding_done,
   streak:{current, best, today_done}, daily:{round_id, title}|null, resumable:{session_id, round_title, expires_at}|null,
   limits, entitlements}`. `resumable` is a dropped live session the user can still resume (`POST /api/sessions/{id}/resume`)
-  until `expires_at` (3 minutes after the drop); `null` when there is none
+  until `expires_at` (3 minutes after the drop, or the end of the pause budget when that comes first; for a paused
+  round, the end of the pause budget); `null` when there is none
 - `GET /api/me/history?role=` → `[{session_id, round_id, title, started_at, headline}]` where `started_at` is a date-time
   and `headline: string` is the session report's `headline.summary`
 - `GET /api/me/skills?role=` → `{competencies:[{id, name, points:[{session_id, at, score}]}]}`
@@ -154,7 +158,7 @@ Sequencing and acks:
   Scribe suggestion), `board.focus {item_id}` (`item_id` a string or null: the item the user last touched or created,
   sent debounced; the latest wins and the Scribe uses it to resolve "that"), `ping`
 - Server → client: `round.state {status, phase_id, phase_index, phases:[{id, title?, minutes, uses_whiteboard}], elapsed_s,
-  remaining_s, phase_remaining_s, brief:{question, lines}, floor, time_check_due}`,
+  remaining_s, phase_remaining_s, brief:{question, lines}, floor, time_check_due, voices_released}`,
   `panel.hand_over {from, to, opening_line}`, `board.ack {op_id, rev}`, `board.ghosts {ghosts:[GhostOp]}`,
   `board.apply {op_id, rev, src, op, args}` (server-originated ops), `avatar.point_at {panelist_id, item_id}`,
   `round.ending {closing_line}`, `round.ended {reason}`,
@@ -165,8 +169,9 @@ Sequencing and acks:
   `hello`, one on every change (status, phase, floor, brief), and one every second while the round is `live` or `paused`.
   `elapsed_s` is round time without pauses; the clock also stops while no socket is connected and starts at the first
   `hello` (status `created` until then). After a drop (or a server restart) a reconnect alone does not restart it: the
-  next live turn (the resume flow's `[event: resume]`) or `ui.event {kind: "resume"}` does. Nothing is spoken on a
-  reconnect. `time_check_due: true` is sent once per phase boundary, on the snapshot when the
+  next live turn (the resume flow's `[event: resume]`) or `ui.event {kind: "resume"}` does. The same holds after
+  `POST /resume` from a pause: the clock waits for the user, and the report counts the pause until then. Nothing is
+  spoken on a reconnect. `time_check_due: true` is sent once per phase boundary, on the snapshot when the
   current phase runs out of time, and again on the snapshot after a `hello` while that time check is still owed (no
   `[event: time_check]` has reached the server since the boundary); it is `false` otherwise. On `true` the browser sends
   `[event: time_check]`. In an interview `brief` holds the question card's title and brief lines from the first snapshot,
@@ -186,15 +191,22 @@ Sequencing and acks:
   `hard_stop_minutes`, or with more than 10 minutes of pauses in total (user pauses and time offline), ends with
   `time_limit`.
 - Pause. `ui.event {kind: "pause", reason?}` pauses the round; `reason` is `user` (the Pause button), `hidden` (the page
-  went to the background), `blurred` (the headset left the session or focus) or `headset_removed`. While paused:
+  went to the background), `blurred` (the headset left the session or focus) or `headset_removed`. Any reason, or
+  none, pauses the same way; it is only logged. While paused:
   - **Hold.** A paused round whose socket drops is held: it does not end after the 3-minute offline window. It ends
     only when its pause budget (10 minutes of pauses in total) runs out, with `time_limit` (scored when the candidate
     spoke). A round that drops while live keeps the 3-minute rule. `GET /api/me` `resumable.expires_at` is that
     deadline: the end of the pause budget for a paused round, the end of the offline window for a live one.
-  - **Voice release.** After 45 s paused without a break the server ends every voice session of the round (they bill
-    per minute while idle); the browser sees its voice sessions end. To carry on it calls `POST /resume` (new voices,
-    not counted), then sends `[event: resume]` once the user is back in place. Under 45 s nothing changes: the browser
-    sends `ui.event {kind: "resume"}`, unmutes, and the same voices carry on.
+  - **Voice release.** After 45 s in one pause (a new pause starts the 45 s again) the server ends every voice
+    session of the round (they bill per minute while idle) and sets `round.state.voices_released: true`; the browser
+    also sees its voice sessions end. It survives a restart: a reloaded round keeps the time its pause began, and the
+    janitor ends the voices of a paused round nobody reloaded. A voice end that fails is tried again until Fish
+    confirms it.
+  - **Back.** If `voices_released` is true, the browser calls `POST /resume` (new voices, not counted) and, once the
+    user is back in place, sends `[event: resume]` (or `ui.event {kind: "resume"}`): the clock runs again from then.
+    Otherwise (under 45 s) it sends `ui.event {kind: "resume"}`, unmutes, keeps the same voices, and sends
+    `[event: resume]` so the interviewer welcomes them back. If the flag turns true after the round went live (a
+    resume at the 45 s mark), the browser recovers the same way, with an uncounted `POST /resume`.
 - After `round.ended` the socket stays open while the report is made: `report.progress`, then `report.ready` (or
   `error {code: "report_failed"}`), then close `4409`; with no report within 120 s it closes `4409` anyway. A round with
   nothing to score (`abandoned`) closes `4409` right after `round.ended`. Frames sent after the end are acked but not
