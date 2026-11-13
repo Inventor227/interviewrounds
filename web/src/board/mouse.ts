@@ -9,6 +9,7 @@ export class MouseAdapter implements PointerAdapter {
   private downs = new Set<Cb>();
   private moves = new Set<Cb>();
   private ups = new Set<Cb>();
+  private cancels = new Set<Cb>();
   private pressed: number | null = null;
   private readonly offs: (() => void)[] = [];
 
@@ -35,14 +36,15 @@ export class MouseAdapter implements PointerAdapter {
       if (events.length) for (const ce of events) this.fire(this.moves, ce);
       else this.fire(this.moves, e);
     });
-    const end = (e: PointerEvent) => {
+    const end = (set: Set<Cb>) => (e: PointerEvent) => {
       if (e.pointerId !== this.pressed) return;
       this.pressed = null;
       el.releasePointerCapture?.(e.pointerId);
-      this.fire(this.ups, e);
+      this.fire(set, e);
     };
-    on('pointerup', end);
-    on('pointercancel', end);
+    on('pointerup', end(this.ups));
+    // A cancel (the browser took the pointer) drops the gesture rather than releasing it.
+    on('pointercancel', end(this.cancels));
   }
 
   private fire(set: Set<Cb>, e: PointerEvent): void {
@@ -65,10 +67,16 @@ export class MouseAdapter implements PointerAdapter {
     return () => this.ups.delete(cb);
   }
 
+  onCancel(cb: Cb): () => void {
+    this.cancels.add(cb);
+    return () => this.cancels.delete(cb);
+  }
+
   destroy(): void {
     this.offs.forEach((off) => off());
     this.downs.clear();
     this.moves.clear();
     this.ups.clear();
+    this.cancels.clear();
   }
 }

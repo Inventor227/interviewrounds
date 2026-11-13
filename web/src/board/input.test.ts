@@ -113,16 +113,83 @@ describe('BoardInput', () => {
     expect(emitted).toHaveLength(1);
   });
 
-  it('an ink stroke dropped on the bin is erased; elsewhere it stays put', () => {
-    const { store, adapter, emitted } = setup();
+  it('an ink stroke held then dropped on the bin is erased; elsewhere it stays put', () => {
+    const { store, adapter, emitted, input } = setup();
     adapter.stroke(along([[5, 30], [8, 33], [11, 30], [14, 33]], 0.3));
     const inkId = (emitted[0]!.args as { id: string }).id;
-    adapter.stroke([[8, 33], [20, 33], [24, 33]]);
+    // Held still on the stroke first, then dragged: picked up; released on the sheet it stays put.
+    adapter.down(8, 33);
+    adapter.wait(350);
+    adapter.move(20, 33);
+    adapter.up(24, 33);
     expect(emitted).toHaveLength(1);
     const bin = HLD_KIT.bin;
-    adapter.stroke([[8, 33], [30, 35], [bin.x + 1, bin.y + 1]]);
+    adapter.down(8, 33);
+    adapter.wait(350);
+    adapter.move(30, 35);
+    expect(input.overlay).toMatchObject({ kind: 'drag', id: inkId, ink: true });
+    adapter.up(bin.x + 1, bin.y + 1);
     expect(emitted[1]).toMatchObject({ op: 'item.delete', args: { id: inkId } });
     expect(store.board.items.find((i) => i.id === inkId)).toBeUndefined();
+  });
+
+  it('a stroke that starts on existing ink draws new ink (no hold): redrawing a box over it works', () => {
+    const { adapter, emitted } = setup();
+    // A box that stayed ink (a zigzag), then a rough box drawn starting right on it.
+    adapter.stroke(along([[20, 22], [23, 25], [26, 22], [29, 25]], 0.3));
+    expect(emitted[0]).toMatchObject({ op: 'item.create', args: { kind: 'ink' } });
+    const box = roughBox(20, 22, 9, 6, 0.4, 3);
+    box.unshift([20.1, 22.1]);
+    adapter.stroke(box);
+    expect(emitted).toHaveLength(2);
+    expect(emitted[1]).toMatchObject({ op: 'item.create', args: { kind: 'component', type: 'service' } });
+  });
+
+  it('continuing a line from the end of an ink stroke draws more ink', () => {
+    const { adapter, emitted } = setup();
+    adapter.stroke(along([[5, 30], [8, 33], [11, 30]], 0.3));
+    adapter.stroke(along([[11, 30], [14, 33], [17, 30]], 0.3));
+    expect(emitted.map((o) => (o.args as { kind?: string }).kind)).toEqual(['ink', 'ink']);
+  });
+
+  it('tab and chip hit areas are hand sized: 2.0 cm around the tab, 2.2 cm around the chip', () => {
+    const { adapter, emitted } = setup();
+    // The n1 tab sits just outside its top-right corner (18.5, 9.5); start 1.8 cm away.
+    adapter.stroke([[18.5 + 1.8, 9.5], [24, 11], [30.5, 12]]);
+    expect(emitted).toHaveLength(1);
+    expect(emitted[0]).toMatchObject({ op: 'edge.create', args: { from: 'n1', to: 'n2' } });
+    // Chip at the midpoint between card centres (24, 12.5); tap 2 cm above it.
+    adapter.down(24, 10.5);
+    adapter.up(24, 10.5);
+    expect(emitted[1]).toMatchObject({ op: 'edge.set_dir', args: { dir: '<->' } });
+  });
+
+  it('a press that jumps past the threshold between samples is a drag, not a tap', () => {
+    const { adapter, emitted } = setup();
+    adapter.down(14, 12.5);
+    adapter.up(20, 12.5);
+    expect(emitted[0]).toMatchObject({ op: 'item.move', args: { id: 'n1', x: 16, y: 10 } });
+  });
+
+  it('a cancelled gesture makes no op, even over the bin', () => {
+    const { adapter, emitted } = setup();
+    const bin = HLD_KIT.bin;
+    adapter.down(14, 12.5);
+    adapter.move(30, 30);
+    adapter.move(bin.x + 1, bin.y + 1);
+    adapter.cancel(bin.x + 1, bin.y + 1);
+    adapter.up(bin.x + 1, bin.y + 1);
+    adapter.down(40, 30);
+    adapter.move(45, 32);
+    adapter.cancel(45, 32);
+    expect(emitted).toEqual([]);
+  });
+
+  it("a tap on a card's rim selects the card", () => {
+    const { store, adapter } = setup();
+    adapter.down(17.7, 13);
+    adapter.up(17.7, 13);
+    expect(store.board.focus).toBe('n1');
   });
 
   it('tapping empty sheet clears focus', () => {

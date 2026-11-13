@@ -98,10 +98,13 @@ export function hasTab(item: BoardItem): boolean {
   return item.kind === 'component' || item.kind === 'class' || item.kind === 'metric' || item.kind === 'sticky';
 }
 
-/** Centre of an item's pull tab: its top-right corner. */
+/** How far the pull tab sits outside the top-right corner, diagonally (cm on each axis). */
+export const TAB_OFFSET_CM = 0.5;
+
+/** Centre of an item's pull tab: just outside its top-right corner. */
 export function tabCenter(item: BoardItem): Pt {
   const r = itemRect(item);
-  return [r.x + r.w, r.y];
+  return [r.x + r.w + TAB_OFFSET_CM, r.y - TAB_OFFSET_CM];
 }
 
 /** Distance from a point to a polyline. */

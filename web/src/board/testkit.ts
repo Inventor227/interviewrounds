@@ -113,6 +113,19 @@ export class FakeAdapter implements PointerAdapter {
     const p = this.pt(x, y, hand);
     this.ups.forEach((c) => c(p));
   }
+  /** Lets time pass with the pointer held still (a pinch-hold). */
+  wait(ms: number): void {
+    this.t += ms;
+  }
+  cancel(x: number, y: number, hand: BoardPoint['hand'] = 'mouse'): void {
+    const p = this.pt(x, y, hand);
+    this.cancels.forEach((c) => c(p));
+  }
+  private cancels: ((p: BoardPoint) => void)[] = [];
+  onCancel(cb: (p: BoardPoint) => void): () => void {
+    this.cancels.push(cb);
+    return () => (this.cancels = this.cancels.filter((c) => c !== cb));
+  }
   /** down at the first point, move through the rest, up at the last. */
   stroke(points: Pt[], hand: BoardPoint['hand'] = 'mouse'): void {
     const [first, ...rest] = points;

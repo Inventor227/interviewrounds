@@ -40,18 +40,29 @@ export interface PointerAdapter {
   onDown(cb: (p: BoardPoint) => void): () => void;
   onMove(cb: (p: BoardPoint) => void): () => void;
   onUp(cb: (p: BoardPoint) => void): () => void;
+  /**
+   * The gesture was lost (pointer cancel, hand tracking lost past its grace time): drop it
+   * with no op. Optional; the point is the last good position.
+   */
+  onCancel?(cb: (p: BoardPoint) => void): () => void;
 }
 
 /** Movement before a press becomes a drag (research 06 §1.1). */
 export const DRAG_THRESHOLD_CM = 1.5;
 /** A connector snaps to a card within this distance. */
 export const MAGNET_CM = 4;
-/** Hit radius around a card's pull tab. */
-export const TAB_HIT_CM = 1.2;
-/** Hit radius around an edge's midpoint chip. */
-export const CHIP_HIT_CM = 1.1;
-/** Hit distance from an ink stroke. */
+/** Hit radius around a card's pull tab: hand sized (research 06 §2.3: a 2.4 cm tab, 2.0 cm hit). */
+export const TAB_HIT_CM = 2.0;
+/** Hit radius around an edge's midpoint chip (hand sized). */
+export const CHIP_HIT_CM = 2.2;
+/** Hit distance from an ink stroke, for picking it up. */
 export const INK_HIT_CM = 0.5;
+/**
+ * Ink is picked up only after a pinch-hold: still (within INK_HOLD_STILL_CM) for INK_HOLD_MS
+ * before moving. Otherwise a stroke that starts on or near ink draws new ink.
+ */
+export const INK_HOLD_MS = 300;
+export const INK_HOLD_STILL_CM = 0.8;
 /**
  * Outer band of a card where a stroke starts as ink instead of a drag, so a line drawn
  * from a card's edge to another card becomes a connection, as on paper.
@@ -64,16 +75,16 @@ const DIR_CYCLE: BoardEdge['dir'][] = ['->', '<->', '--'];
 export type Overlay =
   | { kind: 'none' }
   | { kind: 'ink'; hand: Hand; points: Pt[] }
-  | { kind: 'drag'; hand: Hand; id: string; dx: number; dy: number; overBin: boolean }
+  | { kind: 'drag'; hand: Hand; id: string; dx: number; dy: number; overBin: boolean; ink: boolean }
   | { kind: 'connect'; hand: Hand; from: string; x: number; y: number; target: string | null }
   | { kind: 'tray'; hand: Hand; type: ComponentType; x: number; y: number; onSheet: boolean; overBin: boolean };
 
 type Gesture =
   | { kind: 'press'; id: string; start: Pt; target: 'item' | 'edge' }
-  | { kind: 'drag'; id: string; start: Pt; target: 'item' | 'edge'; dx: number; dy: number; overBin: boolean }
+  | { kind: 'drag'; id: string; start: Pt; target: 'item' | 'edge'; dx: number; dy: number; overBin: boolean; ink?: boolean }
   | { kind: 'connect'; from: string; x: number; y: number; target: string | null }
   | { kind: 'tray'; type: ComponentType; x: number; y: number; onSheet: boolean; overBin: boolean }
-  | { kind: 'ink'; stroke: StrokeBuilder };
+  | { kind: 'ink'; stroke: StrokeBuilder; grab: { id: string; start: Pt; t0: number } | null };
 
 export interface BoardInputOptions {
   ids?: IdGen;
@@ -102,6 +113,7 @@ export class BoardInput {
     this.ids = opts.ids ?? new IdGen();
     this.now = opts.now ?? (() => (typeof performance !== 'undefined' ? performance.now() : Date.now()));
     this.offs = [adapter.onDown((p) => this.down(p)), adapter.onMove((p) => this.move(p)), adapter.onUp((p) => this.up(p))];
+    if (adapter.onCancel) this.offs.push(adapter.onCancel((p) => this.cancel(p)));
   }
 
   destroy(): void {
@@ -174,9 +186,15 @@ export class BoardInput {
       break;
     }
 
+    return null;
+  }
+
+  /** The topmost ink stroke under a point, a candidate for a pinch-hold pick-up. */
+  private inkAt(x: number, y: number): string | null {
+    const b = this.board;
     for (let i = b.items.length - 1; i >= 0; i--) {
       const it = b.items[i]!;
-      if (it.kind === 'ink' && distToPolyline(it.points, x, y) <= INK_HIT_CM) return { kind: 'press', id: it.id, start: [x, y], target: 'item' };
+      if (it.kind === 'ink' && distToPolyline(it.points, x, y) <= INK_HIT_CM) return it.id;
     }
     return null;
   }
@@ -189,7 +207,8 @@ export class BoardInput {
     if (!g && onSheet(this.board, x, y)) {
       const stroke = new StrokeBuilder(p.hand, { filter: this.opts.filterHands && p.hand !== 'mouse' });
       stroke.add(x, y, p.t_ms);
-      g = { kind: 'ink', stroke };
+      const ink = this.inkAt(x, y);
+      g = { kind: 'ink', stroke, grab: ink ? { id: ink, start: [x, y], t0: p.t_ms } : null };
     }
     if (!g) return;
     this.gestures.set(p.hand, g);
@@ -226,11 +245,26 @@ export class BoardInput {
         g.onSheet = onSheet(this.board, x, y);
         g.overBin = inRect(this.kit.bin, x, y);
         break;
-      case 'ink':
+      case 'ink': {
+        const grab = g.grab;
+        if (grab && Math.hypot(x - grab.start[0], y - grab.start[1]) > INK_HOLD_STILL_CM) {
+          if (p.t_ms - grab.t0 >= INK_HOLD_MS) {
+            // Held still on the stroke first: pick it up (to the bin).
+            const [sx, sy] = grab.start;
+            this.gestures.set(p.hand, { kind: 'drag', id: grab.id, start: grab.start, target: 'item', dx: x - sx, dy: y - sy, overBin: inRect(this.kit.bin, x, y), ink: true });
+            break;
+          }
+          g.grab = null;
+        }
         g.stroke.add(x, y, p.t_ms);
         break;
+      }
     }
     this.changed();
+  }
+
+  private cancel(p: BoardPoint): void {
+    if (this.gestures.delete(p.hand)) this.changed();
   }
 
   private hoverAt(x: number, y: number): void {
@@ -249,8 +283,8 @@ export class BoardInput {
   private up(p: BoardPoint): void {
     const g = this.gestures.get(p.hand);
     if (!g) return;
-    // Finish with the release position.
-    if (g.kind !== 'press') this.move(p);
+    // Finish with the release position (a press that jumped past the threshold is a drag).
+    this.move(p);
     const fin = this.gestures.get(p.hand)!;
     this.gestures.delete(p.hand);
     switch (fin.kind) {
@@ -316,8 +350,14 @@ export class BoardInput {
     const pts = stroke.points();
     const r = recognize(pts, this.board);
     if (!r) {
-      // Too short to keep: a tap on empty sheet clears focus.
-      this.focus(null);
+      // Too short to keep: a tap. On a card's rim it selects the card; on empty sheet it clears focus.
+      const [sx, sy] = stroke.live()[0] ?? [NaN, NaN];
+      let card: string | null = null;
+      for (let i = this.board.items.length - 1; i >= 0 && !card; i--) {
+        const it = this.board.items[i]!;
+        if (isCard(it) && inRect(itemRect(it), sx, sy)) card = it.id;
+      }
+      this.focus(card);
       return;
     }
     switch (r.kind) {
@@ -346,7 +386,7 @@ function toOverlay(hand: Hand, g: Gesture): Overlay {
     case 'press':
       return { kind: 'none' };
     case 'drag':
-      return g.target === 'item' ? { kind: 'drag', hand, id: g.id, dx: g.dx, dy: g.dy, overBin: g.overBin } : { kind: 'none' };
+      return g.target === 'item' ? { kind: 'drag', hand, id: g.id, dx: g.dx, dy: g.dy, overBin: g.overBin, ink: g.ink === true } : { kind: 'none' };
     case 'connect':
       return { kind: 'connect', hand, from: g.from, x: g.x, y: g.y, target: g.target };
     case 'tray':
