@@ -26,11 +26,14 @@ JSON; cookie `ir_id` identifies the device/user; all under same origin. A new gu
 - `POST /api/sessions/{id}/panelists/{pid}/join` `{opening_line?}` → `{voice}` (swap mode hand-over; `voice` as in `Panelist`).
   The server adds the opening line to the shared history as that panelist's turn, gives it to the new Fish session as
   `first_message`, moves the floor, and ends the previous panelist's Fish session. Joining a panelist that already has a
-  live voice returns that voice again (nothing new is minted or said). `409` in joined mode.
+  live voice returns that voice again (nothing new is minted or said). `409` in joined mode, and when the round ended
+  meanwhile.
 - `POST /api/sessions/{id}/resume` → `CreateSessionRes` (same `session_id`, new tokens). Allowed while the round is open
   and either a socket is still connected or the last one dropped less than 3 minutes ago, at most 3 times per session.
-  Otherwise `409 {code}`: `session_ended`, `resume_expired` (past the 3 minutes) or `resume_limit`. Earlier tokens stop
-  working and their sockets close with `4401`; the interviewer's next turn knows the candidate is back.
+  Otherwise `409 {code}`: `session_ended` (also when the round ends while the new voice is being made), `resume_expired`
+  (past the 3 minutes) or `resume_limit`. The new voices are made first: if that fails (`503`) the old token and voices
+  keep working and the try does not count. Then earlier tokens stop working and their sockets close with `4401`; the
+  interviewer's next turn knows the candidate is back.
 - `POST /api/sessions/{id}/end` `{reason:"completed"|"user_ended"|"time_limit"|"disconnected"|"headset_removed"}` → 202. Ends
   the round at once with this reason (also during the goodbye after `ui.event {kind: "end"}`).
 - `GET /api/sessions/{id}` → `{status:"created"|"live"|"paused"|"scoring"|"scored"|"failed"|"abandoned", report_ready}`
@@ -77,9 +80,10 @@ Sequencing and acks:
 - `head.samples`, `voice.state`, `voice.spoken` and `board.focus` are telemetry: sent only while the socket is open, never queued or
   replayed. They still take the next `seq`, so `seq` only grows in send order.
 - The server acks only frames it has saved. When a frame cannot be saved it answers `error {code: "server_error"}`,
-  processes nothing after it, and closes with `1011`; the client reconnects and replays it. A socket that sends nothing
-  (not even a ping) for 45 s is closed with `1001`, one that sends more than 60 frames a second with `1008`; messages are
-  at most 256 KB.
+  processes nothing after it, and closes with `1011`; the client reconnects and replays it. A client that sends nothing
+  (not even a ping) for 45 s is closed with `1001` (frames the server sends do not count). Beyond a burst of 1,000 frames
+  (the replay after `hello`), more than 60 frames a second close the socket with `1008`; replayed frames the server
+  already processed do not count. Messages are at most 256 KB.
 - Close codes. A server close with `1000` or `4001`-`4999` is final and the client does not reconnect: `4401` the
   `client_token` is unknown or expired, `4404` no such session, `4409` the session has ended (sent once the report is
   done, see below). Any other close (`1001`, `1006`, `1011`, `1012`, ...) is transient: the client reconnects with backoff
@@ -117,7 +121,9 @@ Sequencing and acks:
   A round with no socket for 3 minutes ends with `round.ended {reason: "disconnected"}`; one past its `hard_stop_minutes`,
   or with more than 10 minutes of pauses in total (user pauses and time offline), ends with `time_limit`.
 - After `round.ended` the socket stays open while the report is made: `report.progress`, then `report.ready` (or
-  `error {code: "report_failed"}`), then close `4409`; with no report within 120 s it closes `4409` anyway. A reconnect
+  `error {code: "report_failed"}`), then close `4409`; with no report within 120 s it closes `4409` anyway. A round with
+  nothing to score (`abandoned`) closes `4409` right after `round.ended`. Frames sent after the end are acked but not
+  stored. A reconnect
   in that time is let in and replayed. On a server restart sockets close with `1012`.
 - Marker texts the browser sends into the voice session as a typed user turn: `[event: start]`, `[event: time_check]`,
   `[event: handover]`, `[event: resume]`, `[event: silence_check]`, `[event: ending]`, `[event: long_answer]` (sent when
