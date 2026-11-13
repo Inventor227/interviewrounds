@@ -29,6 +29,7 @@ pub fn routes(state: &AppState) -> Router<AppState> {
         .route("/api/me/skills", get(me::skills_route))
         .route("/api/me/settings", put(me::put_settings))
         .route("/api/me/onboarding-done", post(me::onboarding_done))
+        .merge(report::routes())
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             identity::require,
