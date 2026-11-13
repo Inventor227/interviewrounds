@@ -253,21 +253,26 @@ async function collectFish() {
 }
 
 async function saveRecording() {
-  const done = await page(async (extra) => {
+  // The tooling returns at most 1 MB per command: the timeline stays in the page and comes over in pieces, like the
+  // audio.
+  const meta = await page(async (extra) => {
     const r = globalThis.__recorder;
     if (!r) return null;
     const store = globalThis.__round?.room?.debug?.store;
     const board = store ? { rev: store.board.rev, items: store.board.items, edges: store.board.edges, log: store.log.map((e) => ({ ...e })) } : null;
     const said = globalThis.__speech?.said ?? [];
     const { timeline, audio } = await r.finish({ ...extra, board, candidate_speech: said });
-    globalThis.__recDone = { timeline, audio };
-    return { timeline, files: audio.map((a) => a.file) };
+    globalThis.__recJSON = JSON.stringify(timeline, null, 2);
+    return { chars: globalThis.__recJSON.length, audio };
   }, { room: R.room, view: VIEW, speech: SPEECH, emulator: true, candidate_lines: lines }, 60_000);
-  if (!done) return null;
-  writeFileSync(path.join(SHOTS, 'timeline.json'), JSON.stringify(done.timeline, null, 2));
-  // In pieces: the tooling returns at most 1 MB per command.
+  if (!meta) return null;
+  const PIECE_CHARS = 700_000;
+  let json = '';
+  for (let at = 0; at < meta.chars; at += PIECE_CHARS) json += await page(([s, n]) => globalThis.__recJSON.slice(s, s + n), [at, PIECE_CHARS], 60_000);
+  writeFileSync(path.join(SHOTS, 'timeline.json'), json);
+  // Audio in pieces too.
   const PIECE = 600_000;
-  for (const a of done.timeline.audio) {
+  for (const a of meta.audio) {
     const parts = [];
     for (let at = 0; at < (a.bytes ?? 0); at += PIECE) {
       const b64 = await page(([name, s, n]) => globalThis.__recorder.audioBase64(name, s, n), [a.file, at, PIECE], 60_000).catch((e) => (out.notes.push(`audio ${a.file}@${at}: ${String(e).slice(0, 200)}`), null));
@@ -278,7 +283,7 @@ async function saveRecording() {
     if (buf.length) writeFileSync(path.join(SHOTS, a.file), buf);
     if (buf.length !== a.bytes) out.notes.push(`audio ${a.file}: ${buf.length} of ${a.bytes} bytes`);
   }
-  return done.files;
+  return meta.audio.map((x) => x.file);
 }
 
 // ---------- the run ----------
@@ -380,6 +385,8 @@ try {
   out.notes.push(`after the round: ${String(e.message ?? e).slice(0, 300)}`);
 }
 await collectFish();
+// The markers the round sent (small, so they survive whatever happens to the big files).
+out.markers = await page(() => (globalThis.__recorder?.events ?? []).filter((e) => e.kind === 'voice.sent' && e.type === 'marker').map((e) => ({ t: Math.round(e.t), text: e.text }))).catch(() => null);
 out.recordingFiles = await saveRecording().catch((e) => (out.notes.push(`recording: ${String(e).slice(0, 300)}`), null));
 out.timings = await page(() => globalThis.__round?.timings?.() ?? null).catch(() => null);
 const sid = await page(() => globalThis.__round?.session?.session_id ?? null).catch(() => null);
