@@ -47,7 +47,9 @@ pub fn definitions() -> Vec<ToolDef> {
         tool(
             "next_phase",
             "Moves the round to the next phase. Call it right after your spoken transition line.",
-            json!({}),
+            json!({
+                "from": {"type": "string", "description": "Id of the phase being left (the Phase line of the latest app note)."}
+            }),
             &[],
         ),
         tool(
@@ -106,6 +108,15 @@ pub fn apply(state: &mut SessionState, call: &ToolCall) -> Vec<ServerEvent> {
             vec![ServerEvent::RoundState(state.round_state(now))]
         }
         "next_phase" => {
+            // A call that names the phase it leaves is ignored once that phase is already over (a late or
+            // repeated call must not skip a phase).
+            let from = str_arg(input, "from").filter(|f| !f.is_empty());
+            if let Some(from) = from
+                && from != state.current_phase().id
+            {
+                tracing::info!(session_id = %state.id, from, current = %state.current_phase().id, "stale next_phase ignored");
+                return Vec::new();
+            }
             if state.phase_idx + 1 < state.round.phases.len() {
                 state.phase_idx += 1;
                 vec![ServerEvent::RoundState(state.round_state(now))]
@@ -145,7 +156,14 @@ pub fn apply(state: &mut SessionState, call: &ToolCall) -> Vec<ServerEvent> {
                 .clamp(1, 5) as u8;
             state.hints_given = state.hints_given.saturating_add(1);
             state.hint_max_level = state.hint_max_level.max(level);
-            Vec::new()
+            vec![
+                ServerEvent::Hint {
+                    panelist_id: call.panelist_id.clone(),
+                    level,
+                    at_ms: state.elapsed_ms(now),
+                },
+                ServerEvent::RoundState(state.round_state(now)),
+            ]
         }
         "end_round" => {
             let line = str_arg(input, "closing_line")

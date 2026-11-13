@@ -25,7 +25,7 @@ use super::director;
 use super::markers::{EventKind, UserInput, parse_user_turn};
 use super::prompt::{TurnDraft, draft_turn, request_for_draft};
 use super::speech_filter::SpeechFilter;
-use super::state::{Provisional, SessionState, ToolsMode, TurnCommit, VoiceKind};
+use super::state::{DirectorJob, Provisional, SessionState, ToolsMode, TurnCommit, VoiceKind};
 use super::tools::ToolCall;
 use crate::app::AppState;
 use crate::claude::{
@@ -366,6 +366,7 @@ impl Drop for TurnGuard {
             spoken: self.spoken.trim().to_string(),
             tool_calls: Vec::new(),
             parked_at: Instant::now(),
+            director: None,
         };
         tracing::info!(session_id = %self.session_id, panelist_id = %self.panelist, spoken_chars = provisional.spoken.len(), "turn cut off after speech; parked");
         handle.spawn(async move {
@@ -401,7 +402,7 @@ fn turn_stream(
             tracing::warn!(session_id = %session_id, "previous turn still running; holding");
             // The candidate hears the hold line, so the turn is kept (parked until the next request confirms it).
             // The candidate's words are recorded now, like every turn.
-            {
+            let jobs = {
                 let mut st = session.lock().await;
                 let panelist_id = st.resolve_panelist(panelist_req.as_deref());
                 let now = Instant::now();
@@ -423,8 +424,11 @@ fn turn_stream(
                     spoken: opts.hold_line.clone(),
                     tool_calls: Vec::new(),
                     parked_at: now,
+                    director: None,
                 });
-            }
+                st.take_director_jobs()
+            };
+            spawn_directors(&app, &session, &session_id, jobs);
             yield Ok(chunks.content(&opts.hold_line));
             yield Ok(chunks.finish(&Usage::default()));
             yield Ok(Chunks::done());
@@ -446,7 +450,7 @@ fn turn_stream(
         }
 
         // The panelist first: only its own parked replies are settled against its own Fish transcript.
-        let (panelist, handover_line, input, draft, live) = {
+        let (panelist, handover_line, input, draft, live, jobs) = {
             let mut st = session.lock().await;
             let panelist = st.resolve_panelist(panelist_req.as_deref());
             st.resolve_provisional(&panelist, fish_last.as_deref());
@@ -459,8 +463,10 @@ fn turn_stream(
             // recorded instead of adding it twice.
             st.sync_unanswered(&panelist, fish_last.as_deref());
             let draft = draft_turn(&st, &panelist, &input, Instant::now());
-            (panelist, handover_line, input.clone(), draft, st.live.clone())
+            let jobs = st.take_director_jobs();
+            (panelist, handover_line, input.clone(), draft, st.live.clone(), jobs)
         };
+        spawn_directors(&app, &session, &session_id, jobs);
         let mut guard = TurnGuard {
             session: session.clone(),
             turn: Some(turn),
@@ -693,8 +699,11 @@ fn turn_stream(
         // that answers speech may be a speculative draft the voice platform never plays, so it is parked until the
         // platform confirms it; a typed app event is final and is committed now. The director request is built from
         // the same state (history before this turn) and runs on its own.
+        // A parked reply carries its director request: the director runs once the reply is confirmed as played
+        // (the browser reports playback as the first words play, so this costs no time for played lines and saves
+        // the call for drafts the voice platform throws away).
         let speech = input.speech().is_some();
-        let (turn_id, director_req) = {
+        let jobs = {
             let mut st = session.lock().await;
             let id = st.new_turn_id();
             let director_req = (live.tools == ToolsMode::Director && !silent_failure)
@@ -710,6 +719,7 @@ fn turn_stream(
                     spoken: spoken.clone(),
                     tool_calls,
                     parked_at: Instant::now(),
+                    director: director_req,
                 });
             } else {
                 st.commit_now(
@@ -724,14 +734,15 @@ fn turn_stream(
                     },
                     Instant::now(),
                 );
+                if let Some(req) = director_req {
+                    st.director_jobs.push(DirectorJob { turn_id: id, panelist_id: panelist.clone(), req });
+                }
             }
-            (id, director_req)
+            st.take_director_jobs()
         };
         guard.done = true;
         drop(guard);
-        if let Some(dreq) = director_req {
-            tokio::spawn(run_director(app.clone(), session.clone(), session_id.clone(), panelist.clone(), turn_id, dreq));
-        }
+        spawn_directors(&app, &session, &session_id, jobs);
         tracing::info!(
             session_id = %session_id,
             panelist_id = %panelist,
@@ -749,6 +760,34 @@ fn turn_stream(
         );
         yield Ok(chunks.finish(&usage));
         yield Ok(Chunks::done());
+    }
+}
+
+/// Sends the director calls of committed replies (`SessionState::take_director_jobs`), each in its own task. Their
+/// model usage is charged to the session.
+pub fn spawn_directors(
+    app: &AppState,
+    session: &Arc<Mutex<SessionState>>,
+    session_id: &str,
+    jobs: Vec<DirectorJob>,
+) {
+    for job in jobs {
+        let fut = run_director(
+            app.clone(),
+            session.clone(),
+            session_id.to_string(),
+            job.panelist_id,
+            job.turn_id,
+            job.req,
+        );
+        match uuid::Uuid::parse_str(session_id) {
+            Ok(id) => {
+                tokio::spawn(crate::usage::LLM_SESSION.scope(id, fut));
+            }
+            Err(_) => {
+                tokio::spawn(fut);
+            }
+        }
     }
 }
 
@@ -790,7 +829,7 @@ async fn run_director(
         })
         .collect();
     let names: Vec<&str> = calls.iter().map(|c| c.name.as_str()).collect();
-    // Drafts that are never played run the director too; the count shows what that costs per session.
+    // Only played lines reach the director; the count shows what it costs per session.
     let director_calls = {
         let mut st = session.lock().await;
         st.director_calls += 1;

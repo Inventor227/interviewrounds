@@ -13,7 +13,7 @@ use super::markers::{EventKind, UserInput};
 use super::prompt::{self, TurnDraft};
 use super::tools::{self, ToolCall};
 use super::{Brief, PhasePublic, RoundStateMsg, ServerEvent};
-use crate::claude::{ContentBlock, Message, Role, SystemBlock};
+use crate::claude::{ContentBlock, Message, MessagesRequest, Role, SystemBlock};
 use crate::config::Config;
 use crate::content::{Catalog, Persona, Phase, RoundConfig};
 
@@ -238,6 +238,17 @@ pub struct Provisional {
     pub tool_calls: Vec<ToolCall>,
     /// When the reply was spoken (the turn log time, whenever it is committed).
     pub parked_at: Instant,
+    /// The director request for this line. It is sent only once the reply is confirmed as played (a draft the
+    /// voice platform throws away never costs a director call); see `SessionState::take_director_jobs`.
+    pub director: Option<MessagesRequest>,
+}
+
+/// A director call to run now: its reply was committed (`SessionState::take_director_jobs`).
+#[derive(Clone, Debug)]
+pub struct DirectorJob {
+    pub turn_id: u64,
+    pub panelist_id: String,
+    pub req: MessagesRequest,
 }
 
 /// Everything a finished turn adds.
@@ -314,6 +325,11 @@ pub struct SessionState {
     pub director_calls: u32,
     /// Dev voice spike only: this many next replies are sent empty (to observe the voice platform).
     pub dev_empty_replies: u8,
+    /// Director calls of committed replies, waiting for the caller to send them.
+    pub director_jobs: Vec<DirectorJob>,
+    /// Replies to the candidate's speech committed so far: each one closes a candidate utterance (the board
+    /// Scribe runs after it).
+    pub speech_commits: u64,
 }
 
 impl SessionState {
@@ -425,6 +441,8 @@ impl SessionState {
             unanswered: HashMap::new(),
             director_calls: 0,
             dev_empty_replies: 0,
+            director_jobs: Vec::new(),
+            speech_commits: 0,
         })
     }
 
@@ -742,7 +760,20 @@ impl SessionState {
         Vec::new()
     }
 
+    /// Director calls whose replies were committed since the last call; the caller sends them
+    /// (`oai::spawn_directors`).
+    pub fn take_director_jobs(&mut self) -> Vec<DirectorJob> {
+        std::mem::take(&mut self.director_jobs)
+    }
+
     fn commit_parked(&mut self, p: Provisional, heard: Option<&str>) -> Vec<ServerEvent> {
+        if let Some(req) = p.director.clone() {
+            self.director_jobs.push(DirectorJob {
+                turn_id: p.id,
+                panelist_id: p.panelist_id.clone(),
+                req,
+            });
+        }
         let draft = match p.draft {
             Some(d) => d,
             None => {
@@ -911,6 +942,9 @@ impl SessionState {
         } = commit;
         let panelist = draft.panelist_id.clone();
         let at_ms = self.elapsed_ms(now);
+        if draft.input.speech().is_some() {
+            self.speech_commits += 1;
+        }
         let mut draft = draft;
         if !draft.user_committed {
             // A whole turn committed at once (hand-over line, tests): its words are a new utterance.

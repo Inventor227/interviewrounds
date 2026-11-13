@@ -17,9 +17,9 @@ use futures::stream::BoxStream;
 use serde::{Deserialize, Serialize};
 
 pub use state::{
-    Level, LiveSettings, MeetingState, Mode, NewSession, PanelSeat, Panelist, Provisional,
-    Registry, SessionSettings, SessionState, SessionStatus, Style, ToolsMode, Turn, TurnCommit,
-    VoiceKind,
+    DirectorJob, Level, LiveSettings, MeetingState, Mode, NewSession, PanelSeat, Panelist,
+    Provisional, Registry, SessionSettings, SessionState, SessionStatus, Style, ToolsMode, Turn,
+    TurnCommit, VoiceKind,
 };
 
 use crate::claude::{ClaudeClient, ClaudeError, MessagesRequest, MessagesResponse, StreamEvent};
@@ -158,6 +158,36 @@ pub enum ServerEvent {
     },
     #[serde(rename = "round.ending")]
     RoundEnding { closing_line: String },
+    /// The interviewer gave a hint (`give_hint`). Kept on the server (a `hint` session event for the report);
+    /// the browser is not sent this event.
+    #[serde(rename = "hint.given")]
+    Hint {
+        panelist_id: String,
+        level: u8,
+        /// Round time of the hint.
+        at_ms: u64,
+    },
+}
+
+/// The brief card the round starts with: the question card's title and its brief lines, so the opener can say
+/// "it's on your card" before the interviewer's own show_question arrives. `None` without a question card.
+pub fn initial_brief(question: &serde_json::Value) -> Option<Brief> {
+    let title = question.get("title").and_then(serde_json::Value::as_str)?;
+    let lines = question
+        .get("brief_lines")
+        .and_then(serde_json::Value::as_array)
+        .map(|ls| {
+            ls.iter()
+                .filter_map(serde_json::Value::as_str)
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect()
+        })
+        .unwrap_or_default();
+    Some(Brief {
+        question: title.trim().to_string(),
+        lines,
+    })
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]

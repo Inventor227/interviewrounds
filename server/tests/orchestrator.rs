@@ -1803,6 +1803,7 @@ async fn playback_reported_while_the_reply_streams_commits_it_when_done() {
         spoken: "Okay. Let's move on.".into(),
         tool_calls: Vec::new(),
         parked_at: Instant::now(),
+        director: None,
     });
     assert!(st.provisional.is_empty());
     assert_eq!(user_texts(&st.history), vec!["That covers it."]);
@@ -2188,6 +2189,7 @@ fn an_early_report_survives_parking_another_reply() {
         spoken: "Sorry, give me a second.".into(),
         tool_calls: Vec::new(),
         parked_at: Instant::now(),
+        director: None,
     });
     assert_eq!(st.provisional.len(), 1, "the hold line waits");
     assert!(

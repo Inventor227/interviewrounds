@@ -25,7 +25,7 @@ In the conversation, assistant turns are the speaker's earlier spoken lines, use
 
 Actions:
 - show_question: the line states the problem, or gives the candidate a fact from the question card. Send the question in one short line and the full list of brief card lines from the round script, plus every fact given so far.
-- next_phase: the line moves the round on to the next phase, for example a transition such as \"Let's move on to the design.\"
+- next_phase: the line moves the round on to the next phase, for example a transition such as \"Let's move on to the design.\" Pass the id of the phase being left, from the Phase line of the app note.
 - point_at: the line asks about one specific board item. Use its id from the latest board summary.
 - give_hint: the line nudges a stuck candidate toward an idea, even when it is phrased as a question. Pass the hint ladder level.
 - hand_over: the line passes the floor to a colleague. Pass their panelist id and the exact first line the colleague will say, written as the speaker's panel rules describe.
