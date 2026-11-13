@@ -381,7 +381,7 @@ export async function createXRApp(root: HTMLElement, opts: XRAppOptions): Promis
         buttons.update(c.hand, null, now);
       }
       haptics.trigger(c.hand, c.pressed, now);
-      controllerViews[c.hand].set(c.tracked, !!world.input.xr.visualAdapters.controller[c.hand].visual);
+      controllerViews[c.hand].set(c.tracked, !!world.input.xr.visualAdapters.controller[c.hand].visual, now);
     }
     // Hands or controllers: whichever the session lists now. Nothing is said about it; both do everything.
     input.update({ hands: listedHands, controllers: controllers ? 1 : 0 });
@@ -786,7 +786,7 @@ export async function createXRApp(root: HTMLElement, opts: XRAppOptions): Promis
     right.tracked = false;
     for (const c of controllerStates) {
       c.tracked = c.pressed = c.busy = false;
-      controllerViews[c.hand].set(false, false);
+      controllerViews[c.hand].set(false, false, 0);
     }
     pads.left = pads.right = null;
     lifecycle.sessionEnded();

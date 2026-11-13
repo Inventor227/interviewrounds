@@ -26,6 +26,8 @@ export function hostControllerModels(base = '/'): void {
 }
 
 export const TIP_DOT_R = 0.003;
+/** The stand-in body waits this long for the platform's model before it shows (the model loads in a moment). */
+export const STANDIN_AFTER_MS = 1500;
 
 /**
  * One side's tip dot and stand-in body, in the controller's aim-ray space (the tip at the origin, the ray along
@@ -35,6 +37,7 @@ export class ControllerView {
   readonly group = new Group();
   readonly tip: Mesh;
   readonly body: Mesh;
+  private since: number | null = null;
 
   constructor(hand: 'left' | 'right') {
     this.group.name = `controller-view-${hand}`;
@@ -53,9 +56,11 @@ export class ControllerView {
   }
 
   /** shown: a controller is this side's input and tracked; hasModel: the platform's model is on screen. */
-  set(shown: boolean, hasModel: boolean): void {
+  set(shown: boolean, hasModel: boolean, nowMs: number): void {
     this.group.visible = shown;
-    this.body.visible = shown && !hasModel;
+    if (!shown) this.since = null;
+    else this.since ??= nowMs;
+    this.body.visible = shown && !hasModel && nowMs - (this.since ?? nowMs) >= STANDIN_AFTER_MS;
   }
 
   attach(raySpace: Object3D): void {

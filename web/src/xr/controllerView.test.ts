@@ -1,7 +1,7 @@
 import { existsSync, statSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { ControllerView, HOSTED_MODEL_DIR, HOSTED_PROFILES, hostedModelUrls, TIP_DOT_R } from './controllerView';
+import { ControllerView, HOSTED_MODEL_DIR, HOSTED_PROFILES, hostedModelUrls, STANDIN_AFTER_MS, TIP_DOT_R } from './controllerView';
 
 describe('controller visuals', () => {
   it('the_controller_model_is_served_from_this_origin_for_every_meta_controller', () => {
@@ -25,17 +25,25 @@ describe('controller visuals', () => {
     const v = new ControllerView('right');
     expect(v.group.visible).toBe(false);
     // A controller with the platform's model on screen: the tip dot only.
-    v.set(true, true);
+    v.set(true, true, 1000);
     expect(v.group.visible).toBe(true);
     expect(v.tip.visible).toBe(true);
     expect(v.body.visible).toBe(false);
-    // No model came up: the plain stand-in body is drawn.
-    v.set(true, false);
-    expect(v.body.visible).toBe(true);
     // Hands take over: everything of the controller goes.
-    v.set(false, false);
+    v.set(false, false, 2000);
     expect(v.group.visible).toBe(false);
     expect(v.body.visible).toBe(false);
+    // A controller whose model is still loading shows the tip dot only; no model after a moment: the stand-in.
+    v.set(true, false, 3000);
+    expect(v.group.visible).toBe(true);
+    expect(v.body.visible).toBe(false);
+    v.set(true, false, 3000 + STANDIN_AFTER_MS);
+    expect(v.body.visible).toBe(true);
+    // The model arrives late: the stand-in goes.
+    v.set(true, true, 6000);
+    expect(v.body.visible).toBe(false);
+    v.set(false, false, 7000);
+    expect(v.group.visible).toBe(false);
     // The tip dot is small and sits at the aim ray's origin (the controller's front).
     expect(TIP_DOT_R).toBeLessThanOrEqual(0.004);
     expect(v.tip.position.length()).toBe(0);
