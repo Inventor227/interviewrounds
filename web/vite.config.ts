@@ -33,6 +33,9 @@ export default defineConfig({
     host: '0.0.0.0',
     port: 8081,
     open: false,
+    // Headless emulator runs (the IWSDK CLI sets IWSDK_DEV_AI_MODE=agent) share a host whose
+    // inotify instances can run out; polling avoids that and HMR speed does not matter there.
+    watch: process.env.IWSDK_DEV_AI_MODE === 'agent' ? { usePolling: true, interval: 1000 } : undefined,
     proxy: {
       ...Object.fromEntries(proxied.map((p) => [p, { target: apiOrigin, changeOrigin: true }])),
       '/ws': { target: apiOrigin, ws: true, changeOrigin: true },
