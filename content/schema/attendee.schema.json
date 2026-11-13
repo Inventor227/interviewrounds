@@ -2,23 +2,33 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://rounds.dijmo.com/schema/attendee.schema.json",
   "title": "Attendee",
-  "description": "A meeting attendee, from a template or the user's setup form.",
+  "description": "A meeting attendee, from a template or the user's setup form. The root is closed; $defs/base is the open shape that meeting-plan extends with a hidden block.",
   "type": "object",
-  "additionalProperties": false,
-  "required": ["name", "role", "cares_about", "personality", "likely_objections"],
-  "properties": {
-    "name": { "type": "string", "minLength": 1, "maxLength": 24 },
-    "role": { "type": "string", "minLength": 1, "maxLength": 48 },
-    "cares_about": { "type": "array", "maxItems": 5, "items": { "type": "string", "minLength": 1 } },
-    "personality": { "enum": ["supportive", "neutral", "skeptical", "hostile"] },
-    "likely_objections": {
-      "type": "array",
-      "maxItems": 5,
-      "items": { "type": "string", "minLength": 1 },
-      "description": "Empty = generated before the session from role, cares_about and the goal."
-    },
-    "decision_power": { "enum": ["approver", "influencer", "observer"], "default": "influencer" },
-    "knows": { "type": "string", "description": "What this person has already seen." },
-    "voice_base": { "type": "string", "pattern": "^persona\\.[a-z]+$", "description": "Persona whose voice and avatar this attendee borrows." }
+  "$ref": "#/$defs/base",
+  "unevaluatedProperties": false,
+  "$defs": {
+    "base": {
+      "type": "object",
+      "required": ["name", "role", "cares_about", "personality"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1, "maxLength": 24 },
+        "role": { "type": "string", "minLength": 1, "maxLength": 48 },
+        "cares_about": { "type": "array", "maxItems": 5, "items": { "type": "string", "minLength": 1 } },
+        "personality": {
+          "enum": ["supportive", "neutral", "skeptical", "hostile"],
+          "description": "Map other words to this enum: impatient, defensive -> skeptical; friendly but firm -> neutral (see docs/protocol.md, Content mapping)."
+        },
+        "likely_objections": {
+          "type": "array",
+          "maxItems": 5,
+          "default": [],
+          "items": { "type": "string", "minLength": 1 },
+          "description": "Absent or empty = generated before the session from role, cares_about and the goal."
+        },
+        "decision_power": { "enum": ["approver", "influencer", "observer"], "default": "influencer" },
+        "knows": { "type": "string", "description": "What this person has already seen." },
+        "voice_base": { "type": "string", "pattern": "^persona\\.[a-z]+$", "description": "Persona whose voice and avatar this attendee borrows." }
+      }
+    }
   }
 }
