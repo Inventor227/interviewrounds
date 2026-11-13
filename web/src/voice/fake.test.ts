@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { VoiceMode } from '../shared/types';
-import { FakeTransport, readSse, type Speaker } from './fake';
+import { BrowserSpeaker, FakeTransport, readSse, type Speaker } from './fake';
 import { panelist } from './testkit';
 import type { AgentText, UserTranscript, VoiceError } from './transport';
 
@@ -52,12 +52,37 @@ function setup(responses: Response[]) {
   return { t, fetchFn, speaker, modes, users, texts, errors };
 }
 
+describe('BrowserSpeaker', () => {
+  it('cancel_leaves_other_speakers_alone', () => {
+    const cancel = vi.fn();
+    vi.stubGlobal('speechSynthesis', { cancel });
+    try {
+      new BrowserSpeaker().cancel();
+      expect(cancel).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});
+
 describe('readSse', () => {
   it('joins data lines split across chunks', async () => {
     const res = sse(['data: {"a"', ':1}\n\nda', 'ta: [DONE]\n\n']);
     const out: string[] = [];
     for await (const d of readSse(res.body!)) out.push(d);
     expect(out).toEqual(['{"a":1}', '[DONE]']);
+  });
+
+  it('cancels_the_body_when_left_early', async () => {
+    const cancel = vi.fn();
+    const body = new ReadableStream<Uint8Array>({
+      start(c) {
+        c.enqueue(enc.encode('data: [DONE]\n\n'));
+      },
+      cancel,
+    });
+    for await (const d of readSse(body)) if (d === '[DONE]') break;
+    expect(cancel).toHaveBeenCalled();
   });
 });
 
@@ -106,8 +131,19 @@ describe('FakeTransport', () => {
     await s.t.start();
     s.t.sendText('hello');
     await vi.waitFor(() => expect(s.errors).toHaveLength(1));
-    expect(s.errors[0]!.code).toBe('llm_failed');
+    expect(s.errors[0]!.code).toBe('session_expired');
     expect(s.modes.at(-1)).toBe('listening');
+  });
+
+  it('reports_server_errors_and_sse_error_chunks', async () => {
+    const s = setup([new Response('oops', { status: 502 }), sse([chunk('Hel'), 'data: {"error":{"message":"model down"}}\n\n'])]);
+    await s.t.start();
+    s.t.sendText('one');
+    await vi.waitFor(() => expect(s.errors).toHaveLength(1));
+    expect(s.errors[0]!.code).toBe('llm_failed');
+    s.t.sendText('two');
+    await vi.waitFor(() => expect(s.errors).toHaveLength(2));
+    expect(s.errors[1]!.message).toBe('model down');
   });
 
   it('speaks_the_opening_line_on_start', async () => {

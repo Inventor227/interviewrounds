@@ -66,6 +66,8 @@ export async function* readSse(body: ReadableStream<Uint8Array>): AsyncGenerator
     if (buf.startsWith('data:')) data.push(buf.slice(5).replace(/^ /, ''));
     if (data.length) yield data.join('\n');
   } finally {
+    // Stops the download when the reader leaves early ([DONE], abort).
+    await reader.cancel().catch(() => undefined);
     reader.releaseLock();
   }
 }
@@ -120,6 +122,9 @@ export class BrowserSpeaker implements Speaker {
   }
 
   cancel(): void {
+    // speechSynthesis is one queue for the page: only cancel when this speaker owns something in
+    // it, so stopping one panelist never silences another.
+    if (this.pending.size === 0) return;
     globalThis.speechSynthesis?.cancel();
     for (const done of [...this.pending]) done();
   }
@@ -233,16 +238,23 @@ export class FakeTransport implements VoiceTransport {
       }),
       signal: turn.abort.signal,
     });
+    if (res.status === 401 || res.status === 403) {
+      throw new VoiceError('session_expired', `The voice endpoint refused the session (${res.status})`);
+    }
     if (!res.ok || !res.body) {
       throw new VoiceError('llm_failed', `The voice endpoint answered ${res.status}`);
     }
     for await (const data of readSse(res.body)) {
       if (data === '[DONE]') return;
-      let chunk: { choices?: { delta?: { content?: string | null } }[] };
+      let chunk: { choices?: { delta?: { content?: string | null } }[]; error?: { message?: string } | string };
       try {
         chunk = JSON.parse(data);
       } catch {
         continue;
+      }
+      if (chunk.error) {
+        const msg = typeof chunk.error === 'string' ? chunk.error : (chunk.error.message ?? 'stream error');
+        throw new VoiceError('llm_failed', msg);
       }
       const delta = chunk.choices?.[0]?.delta?.content;
       if (delta) yield delta;
