@@ -8,6 +8,10 @@ import path from 'node:path';
 import { call, enterXR, iwsdk, screenshot, sleep, waitReady } from './emu-lib.mjs';
 
 const SHOTS = process.env.EMU_SHOTS ?? '.';
+// Which parts to run (the emulator page tires after a few reloads, so runs take two at a time):
+// KITS=lld,pm,meeting,coding,xr in an --env-file.
+const ONLY = (process.env.KITS ?? 'lld,pm,meeting,coding,xr').split(',').map((k) => k.trim());
+const want = (k) => ONLY.includes(k);
 const DIR = path.join(process.env.EMU_APP_DIR, '.emu');
 const results = {};
 let n = 0;
@@ -83,8 +87,10 @@ export default async function ({ page, frame }) {
 await waitReady();
 await sleep(2000);
 
+let r;
 // ---------- Object design ----------
-let r = await step(
+if (want('lld')) {
+r = await step(
   'lld',
   `await nav('lld');
   await pull('Class', [14, 13]);
@@ -125,8 +131,10 @@ let r = await step(
   return { classes: b.items.map((i) => [i.kind, i.class_kind, i.label, i.fields?.length, i.methods?.length]), edges: b.edges.map((x) => [x.from, x.to, x.rel]) };`,
 );
 if (r?.edges?.[0]?.[2] !== 'has_a' || r?.edges?.[1]?.[2] !== 'uses' || r?.classes?.[0]?.[2] !== 'ParkingLot') fail('lld kit', r);
+}
 
 // ---------- Product: lanes and the ladder ----------
+if (want('pm')) {
 r = await step(
   'pm',
   `await nav('pm');
@@ -158,8 +166,10 @@ r = await step(
 );
 const ranked = (r?.lanes ?? []).filter((s) => s[2] != null).map((s) => [s[2], s[1]]);
 if (ranked.length !== 2 || !ranked.some((x) => x[0] === 1 && x[1] === 'Book a spot ahead')) fail('pm kit', r);
+}
 
 // ---------- Meeting ----------
+if (want('meeting')) {
 r = await step(
   'meeting',
   `await nav('meeting');
@@ -174,6 +184,7 @@ r = await step(
   return { agenda: b.meeting.agenda.map((a) => [a.id, a.done]), shown: b.meeting.shown, parked: b.meeting.parked.length };`,
 );
 if (!r?.agenda?.[0]?.[1] || !r?.agenda?.[1]?.[1] || r?.shown?.[0]?.ref !== 'k3') fail('meeting kit', r);
+}
 
 // ---------- Coding ----------
 const CODE = [
@@ -185,6 +196,7 @@ const CODE = [
   ['l5', 3, 'return [seen[target - x], i]'],
   ['l7', 1, 'return []'],
 ];
+if (want('coding')) {
 await step(
   'coding-seed',
   `await nav('coding');
@@ -216,8 +228,10 @@ r = await step(
 );
 const order = (r?.lines ?? []).map((l) => l[0]).join(',');
 if (order !== 'l1,l2,l3,l4,l5,l6,l7' || r?.lines?.[5]?.[1] !== 2 || r?.complexity?.time !== 'O(n)' || (r?.trace ?? []).length < 3) fail('coding kit', r);
+}
 
 // ---------- Coding panel in XR ----------
+if (want('xr')) {
 await step(
   'coding-xr-nav',
   `await frame.goto(new URL('/dev/sheet?kit=coding', frame.url()).href, { waitUntil: 'load' });
@@ -250,6 +264,7 @@ await call('xr', 'set-transform', { device: 'hand-left', position: { x: -0.4, y:
 await call('xr', 'set-transform', { device: 'hand-right', position: { x: 0.45, y: 0.82, z: -1.45 }, orientation: 'auto' });
 await sleep(2000);
 await screenshot('coding-xr');
+}
 
-writeFileSync(path.join(SHOTS, 'kits.json'), JSON.stringify(results, null, 2));
+writeFileSync(path.join(SHOTS, `kits-${ONLY.join('-')}.json`), JSON.stringify(results, null, 2));
 console.log('kits ok');
