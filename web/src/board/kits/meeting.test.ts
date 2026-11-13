@@ -4,7 +4,7 @@ import { BoardInput } from '../input';
 import { emptyBoard } from '../model';
 import { BoardStore } from '../ops';
 import { FakeAdapter } from '../testkit';
-import { agendaRowRect, MEETING_KIT, numberCardRect, SCREEN } from './meeting';
+import { agendaRowRect, MAX_NUMBER_CARDS, MEETING_KIT, NUMBERS, numberCardRect, SCREEN } from './meeting';
 
 function meetingBoard(): Board {
   return {
@@ -24,8 +24,8 @@ function meetingBoard(): Board {
   };
 }
 
-function setup() {
-  const store = new BoardStore(meetingBoard());
+function setup(board = meetingBoard()) {
+  const store = new BoardStore(board);
   const adapter = new FakeAdapter();
   const emitted: BoardOp[] = [];
   let t = 95;
@@ -66,5 +66,28 @@ describe('meeting kit', () => {
 
   it('has no tray and draws nothing outside the board data', () => {
     expect(MEETING_KIT.tray).toEqual([]);
+  });
+
+  it('all the key facts the setup allows fit in the numbers box, and only shown cards take a pinch', () => {
+    // The setup allows 8 key facts.
+    expect(MAX_NUMBER_CARDS).toBeGreaterThanOrEqual(8);
+    for (let i = 0; i < MAX_NUMBER_CARDS; i++) {
+      const r = numberCardRect(i);
+      expect(r.x).toBeGreaterThanOrEqual(NUMBERS.x);
+      expect(r.y).toBeGreaterThanOrEqual(NUMBERS.y);
+      expect(r.x + r.w).toBeLessThanOrEqual(NUMBERS.x + NUMBERS.w + 1e-9);
+      expect(r.y + r.h).toBeLessThanOrEqual(NUMBERS.y + NUMBERS.h);
+      expect(r.y + r.h).toBeLessThanOrEqual(SCREEN.y);
+    }
+    // A card past the cap is neither drawn nor pinchable: a drag from where it would be shows nothing.
+    const extra = Array.from({ length: MAX_NUMBER_CARDS + 1 }, (_, i) => ({ id: `k${i + 1}`, label: `N${i + 1}`, value: String(i) }));
+    const b = meetingBoard();
+    const { adapter, emitted } = setup({ ...b, meeting: { ...b.meeting!, numbers: extra } });
+    const hidden = numberCardRect(MAX_NUMBER_CARDS);
+    adapter.stroke([[hidden.x + 2, hidden.y + 2], [40, 28], [SCREEN.x + 5, SCREEN.y + 5]]);
+    expect(emitted.filter((o) => o.op === 'present.show')).toEqual([]);
+    const last = numberCardRect(MAX_NUMBER_CARDS - 1);
+    adapter.stroke([[last.x + 2, last.y + 2], [40, 28], [SCREEN.x + 5, SCREEN.y + 5]]);
+    expect(emitted.filter((o) => o.op === 'present.show')).toEqual([expect.objectContaining({ args: expect.objectContaining({ ref: `k${MAX_NUMBER_CARDS}` }) })]);
   });
 });

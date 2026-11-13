@@ -12,10 +12,12 @@ export const AGENDA: Rect = { x: 2, y: 2, w: 28, h: 24 };
 const AGENDA_HEADER = 3;
 /** Hand sized rows (research 06: targets at least 2.2 cm). */
 const AGENDA_ROW = 2.4;
-export const NUMBERS: Rect = { x: 34, y: 2, w: 28, h: 18 };
+export const NUMBERS: Rect = { x: 34, y: 2, w: 28, h: 20 };
 const NUM_W = 8.8;
-const NUM_H = 5;
+const NUM_H = 4.4;
 const NUM_GAP = 0.8;
+/** Number cards that fit in the box (3 rows of 3; the setup allows 8 key facts). */
+export const MAX_NUMBER_CARDS = 9;
 export const SCREEN: Rect = { x: 34, y: 23, w: 28, h: 15 };
 export const PARKING: Rect = { x: 2, y: 28, w: 28, h: 10 };
 
@@ -23,6 +25,7 @@ export function agendaRowRect(i: number): Rect {
   return { x: AGENDA.x + 0.4, y: AGENDA.y + AGENDA_HEADER + i * AGENDA_ROW, w: AGENDA.w - 0.8, h: AGENDA_ROW };
 }
 
+/** The i-th number card's place; only the first MAX_NUMBER_CARDS are shown (and pinchable). */
 export function numberCardRect(i: number): Rect {
   const col = i % 3;
   const row = Math.floor(i / 3);
@@ -39,7 +42,7 @@ const handler: KitHandler = {
     if (!m) return null;
     const a = m.agenda.findIndex((_, i) => inRect(agendaRowRect(i), x, y));
     if (a >= 0) return { kind: 'agenda', id: m.agenda[a]!.id } satisfies MeetingPress;
-    const n = (m.numbers ?? []).findIndex((_, i) => inRect(numberCardRect(i), x, y));
+    const n = (m.numbers ?? []).slice(0, MAX_NUMBER_CARDS).findIndex((_, i) => inRect(numberCardRect(i), x, y));
     if (n >= 0) return { kind: 'number', id: m.numbers![n]!.id } satisfies MeetingPress;
     return null;
   },
@@ -102,7 +105,7 @@ function numberCard(ctx: CanvasRenderingContext2D, r: Rect, label: string, value
   ctx.fillText(ellipsize(ctx, label.toUpperCase(), (r.w - 1) * k), (r.x + 0.5) * k, (r.y + 1.3) * k);
   ctx.fillStyle = '#1C1B1A';
   ctx.font = font(1.25 * k, 750);
-  ctx.fillText(ellipsize(ctx, value, (r.w - 1) * k), (r.x + 0.5) * k, (r.y + 3.6) * k);
+  ctx.fillText(ellipsize(ctx, value, (r.w - 1) * k), (r.x + 0.5) * k, (r.y + 3.4) * k);
   ctx.restore();
 }
 
@@ -162,10 +165,7 @@ function renderSheet(ctx: CanvasRenderingContext2D, board: Board, k: number): vo
   ctx.fillStyle = withAlpha(ACCENT, 0.85);
   ctx.font = font(0.8 * k, 700);
   ctx.fillText('Key numbers', (NUMBERS.x + 0.2) * k, (NUMBERS.y + 1.7) * k);
-  (m.numbers ?? []).forEach((n, i) => {
-    const r = numberCardRect(i);
-    if (r.y + r.h <= NUMBERS.y + NUMBERS.h) numberCard(ctx, r, n.label, n.value, k);
-  });
+  (m.numbers ?? []).slice(0, MAX_NUMBER_CARDS).forEach((n, i) => numberCard(ctx, numberCardRect(i), n.label, n.value, k));
   // The screen pad: what is shown now.
   roundRect(ctx, SCREEN.x * k, SCREEN.y * k, SCREEN.w * k, SCREEN.h * k, 0.8 * k);
   ctx.fillStyle = '#23272E';
@@ -197,9 +197,12 @@ function renderSheet(ctx: CanvasRenderingContext2D, board: Board, k: number): vo
   panel(ctx, PARKING, 'Parking lot', k);
   ctx.font = font(0.65 * k, 500);
   ctx.fillStyle = m.parked.length ? '#1C1B1A' : '#6B6760';
-  const lines = m.parked.length ? m.parked.slice(-5) : ['Questions to come back to land here.'];
+  // The latest questions, and how many earlier ones the interviewer also has.
+  const earlier = Math.max(0, m.parked.length - 4);
+  const lines = m.parked.length ? [...(earlier ? [`+${earlier} earlier`] : []), ...m.parked.slice(-(earlier ? 4 : 5)).map((p) => `• ${p}`)] : ['Questions to come back to land here.'];
   lines.forEach((p, i) => {
-    ctx.fillText(ellipsize(ctx, m.parked.length ? `• ${p}` : p, (PARKING.w - 1.6) * k), (PARKING.x + 0.8) * k, (PARKING.y + 3.2 + i * 1.3) * k);
+    ctx.fillStyle = earlier && i === 0 ? '#6B6760' : m.parked.length ? '#1C1B1A' : '#6B6760';
+    ctx.fillText(ellipsize(ctx, p, (PARKING.w - 1.6) * k), (PARKING.x + 0.8) * k, (PARKING.y + 3.2 + i * 1.3) * k);
   });
   ctx.restore();
 }
