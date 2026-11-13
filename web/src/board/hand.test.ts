@@ -253,6 +253,51 @@ describe('HandAdapter', () => {
     expect(emitted[0]).toMatchObject({ op: 'item.move', args: { id: 'n1', x: 20 } });
   });
 
+  describe('a hover outline clears when the hand stops hovering', () => {
+    function hovering() {
+      const port = new FakePort();
+      const proj = new SheetProjector(port.sheetAnchor);
+      const hands = new HandAdapter(port, (q) => proj.project(q), { zone: HLD_KIT.view });
+      const store = new BoardStore(emptyBoard());
+      store.apply({ op_id: 's1', src: 'hand', op: 'item.create', args: { id: 'n1', kind: 'component', type: 'db', label: null, x: 10, y: 10, w: 8, h: 5 } });
+      const input = new BoardInput(store, hands, HLD_KIT, () => {});
+      const at = (x: number, y: number, h: number, frames = 20) => {
+        for (let i = 0; i < frames; i++) {
+          port.handAt('right', x, y, h);
+          port.frame();
+        }
+      };
+      at(14, 12.5, 2);
+      expect(input.hovers()).toEqual(['n1']);
+      return { port, input, at };
+    }
+
+    it('when the hand rises above 4 cm', () => {
+      const { input, at } = hovering();
+      at(14, 12.5, 7);
+      expect(input.hovers()).toEqual([]);
+    });
+
+    it('when the hand leaves the sheet', () => {
+      const { input, at } = hovering();
+      at(140, 12.5, 2);
+      expect(input.hovers()).toEqual([]);
+    });
+
+    it('when tracking is lost', () => {
+      const { port, input } = hovering();
+      port.setHand('right', null);
+      port.frame();
+      expect(input.hovers()).toEqual([]);
+    });
+
+    it('when the session ends', () => {
+      const { port, input } = hovering();
+      port.endSession();
+      expect(input.hovers()).toEqual([]);
+    });
+  });
+
   it('hovers only within 4 cm of the sheet, one card per hand', () => {
     const { port, store, hands } = dragSetup();
     store.apply({ op_id: 's2', src: 'hand', op: 'item.create', args: { id: 'n2', kind: 'component', type: 'db', label: null, x: 34, y: 10, w: 8, h: 5 } });

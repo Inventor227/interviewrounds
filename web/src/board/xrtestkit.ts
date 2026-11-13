@@ -11,6 +11,17 @@ export class FakePort implements BoardXRPort {
   private frames = new Set<(dt: number, now: number) => void>();
   private selects = new Set<(hand: 'left' | 'right', phase: SelectPhase, now: number) => void>();
   private handMap = new Map<'left' | 'right', XRHandSample>();
+  private ends = new Set<() => void>();
+
+  onSessionEnd(cb: () => void): () => void {
+    this.ends.add(cb);
+    return () => this.ends.delete(cb);
+  }
+
+  /** The XR session ends: tooling and the app stop sending frames. */
+  endSession(): void {
+    for (const cb of [...this.ends]) cb();
+  }
 
   constructor(readonly deskPose: DeskPose = { origin: { x: 0, y: 0.75, z: -0.2 }, yaw: 0, deskY: 0.75 }) {
     this.scene.add(this.sheetAnchor);

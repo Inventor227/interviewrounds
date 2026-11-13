@@ -57,6 +57,8 @@ export interface BoardXRPort {
   headPose(): HeadPose;
   /** The placed desk, null until placement finishes. */
   desk(): DeskPose | null;
+  /** The XR session ended (frames stop): hands stop hovering and gestures are lost. Optional. */
+  onSessionEnd?(cb: () => void): () => void;
   /** Shows the board on the wall whiteboard (Room.wallboardTexture); null clears it. */
   wallboardTexture?(tex: Texture | null): void;
 }

@@ -48,6 +48,8 @@ export interface PointerAdapter {
    *   the bin or off the sheet; ink, connectors and taps are dropped with no op.
    */
   onCancel?(cb: (p: BoardPoint, reason?: CancelReason) => void): () => void;
+  /** An idle pointer stopped hovering (a hand rose, left the sheet or was lost). Optional. */
+  onLeave?(cb: (hand: Hand) => void): () => void;
 }
 
 export type CancelReason = 'lost';
@@ -125,6 +127,7 @@ export class BoardInput {
     this.now = opts.now ?? (() => (typeof performance !== 'undefined' ? performance.now() : Date.now()));
     this.offs = [adapter.onDown((p) => this.down(p)), adapter.onMove((p) => this.move(p)), adapter.onUp((p) => this.up(p))];
     if (adapter.onCancel) this.offs.push(adapter.onCancel((p, reason) => this.cancel(p, reason)));
+    if (adapter.onLeave) this.offs.push(adapter.onLeave((hand) => this.leave(hand)));
   }
 
   destroy(): void {
@@ -305,6 +308,10 @@ export class BoardInput {
       else if (g.kind === 'tray' && safe) this.createCard(g.type, p.x_cm - this.kit.card.w / 2, p.y_cm - this.kit.card.h / 2, this.kit.card.w, this.kit.card.h);
     }
     this.changed();
+  }
+
+  private leave(hand: Hand): void {
+    if (this.hoverBy.delete(hand)) this.changed();
   }
 
   private hoverAt(hand: Hand, x: number, y: number): void {

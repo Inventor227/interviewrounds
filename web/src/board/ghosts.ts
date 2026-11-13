@@ -120,6 +120,7 @@ interface Press {
 
 export class GhostLayer implements PointerAdapter {
   private readonly subs = { down: new Set<Cb>(), move: new Set<Cb>(), up: new Set<Cb>(), cancel: new Set<Cb>() };
+  private readonly leaves = new Set<(hand: Hand) => void>();
   private readonly presses = new Map<Hand, Press>();
   /** Hands whose gesture went through to the board, so their moves are not hovers. */
   private readonly passing = new Set<Hand>();
@@ -146,6 +147,7 @@ export class GhostLayer implements PointerAdapter {
       store.onChange(() => this.seen()),
     ];
     if (source.onCancel) this.offs.push(source.onCancel((p, reason) => this.cancel(p, reason)));
+    if (source.onLeave) this.offs.push(source.onLeave((hand) => [...this.leaves].forEach((cb) => cb(hand))));
     this.seen();
   }
 
@@ -164,6 +166,10 @@ export class GhostLayer implements PointerAdapter {
   onUp(cb: Cb): () => void {
     this.subs.up.add(cb);
     return () => this.subs.up.delete(cb);
+  }
+  onLeave(cb: (hand: Hand) => void): () => void {
+    this.leaves.add(cb);
+    return () => this.leaves.delete(cb);
   }
   onCancel(cb: Cb): () => void {
     this.subs.cancel.add(cb);

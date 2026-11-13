@@ -51,6 +51,7 @@ export async function createDevSheet(root: HTMLElement): Promise<DevSheetHandle>
   });
 
   const frames = new Set<FrameCb>();
+  const ends = new Set<() => void>();
   const selects = new Set<SelectCb>();
   let hands: XRHandSample[] = [];
   let desk: DeskPose | null = null;
@@ -103,6 +104,10 @@ export async function createDevSheet(root: HTMLElement): Promise<DevSheetHandle>
     hands: () => hands,
     headPose,
     desk: () => desk,
+    onSessionEnd(cb) {
+      ends.add(cb);
+      return () => ends.delete(cb);
+    },
     wallboardTexture(tex: Texture | null) {
       const m = wall.material;
       if (tex) tex.colorSpace = SRGBColorSpace;
@@ -160,6 +165,10 @@ export async function createDevSheet(root: HTMLElement): Promise<DevSheetHandle>
     s.addEventListener('selectend', ((e: XRInputSourceEvent) => fire(e, selected.has(e.inputSource) ? 'end' : 'cancel')) as EventListener);
   };
   world.renderer.xr.addEventListener('sessionstart', onSessionStart);
+  const onSessionEnd = () => {
+    for (const cb of [...ends]) cb();
+  };
+  world.renderer.xr.addEventListener('sessionend', onSessionEnd);
 
   const store = new BoardStore(emptyBoard({ id: 'dev-xr', question: 'Design a URL shortener' }));
   const sent: BoardOp[] = [];
@@ -200,6 +209,7 @@ export async function createDevSheet(root: HTMLElement): Promise<DevSheetHandle>
     destroy() {
       xr.destroy();
       world.renderer.xr.removeEventListener('sessionstart', onSessionStart);
+      world.renderer.xr.removeEventListener('sessionend', onSessionEnd);
       world.destroy();
     },
   };

@@ -53,6 +53,8 @@ interface HandTrack {
   /** This frame's raw pinch point (world), where a pinch starts. */
   raw: Vec3 | null;
   visible: boolean;
+  /** Idle and within the hover band last frame (a leave is sent when that ends). */
+  hovering: boolean;
   active: boolean;
   lostAt: number | null;
   /** The gesture: when and where it started, the closing drift taken off, the points sent. */
@@ -64,10 +66,11 @@ interface HandTrack {
   sent: { t: number; p: Projected }[];
 }
 
-const track = (): HandTrack => ({ fx: new OneEuroFilter(), fy: new OneEuroFilter(), fz: new OneEuroFilter(), last: null, raw: null, visible: false, active: false, lostAt: null, downAt: 0, downPoint: null, drift: null, dragSince: null, sent: [] });
+const track = (): HandTrack => ({ fx: new OneEuroFilter(), fy: new OneEuroFilter(), fz: new OneEuroFilter(), last: null, raw: null, visible: false, hovering: false, active: false, lostAt: null, downAt: 0, downPoint: null, drift: null, dragSince: null, sent: [] });
 
 export class HandAdapter implements PointerAdapter {
   private readonly subs = { down: new Set<Cb>(), move: new Set<Cb>(), up: new Set<Cb>(), cancel: new Set<Cb>() };
+  private readonly leaves = new Set<(hand: Side) => void>();
   private readonly hands: Record<Side, HandTrack> = { left: track(), right: track() };
   private readonly zone: Rect;
   private readonly graceMs: number;
@@ -81,6 +84,7 @@ export class HandAdapter implements PointerAdapter {
     this.zone = opts.zone ?? { x: 0, y: 0, w: SHEET.w, h: SHEET.h };
     this.graceMs = opts.graceMs ?? TRACKING_GRACE_MS;
     this.offs = [port.onFrame((_dt, now) => this.frame(now)), port.onSelect((hand, phase, now) => this.select(hand, phase, now))];
+    if (port.onSessionEnd) this.offs.push(port.onSessionEnd(() => this.sessionEnd()));
   }
 
   destroy(): void {
@@ -100,6 +104,10 @@ export class HandAdapter implements PointerAdapter {
     this.subs.up.add(cb);
     return () => this.subs.up.delete(cb);
   }
+  onLeave(cb: (hand: Side) => void): () => void {
+    this.leaves.add(cb);
+    return () => this.leaves.delete(cb);
+  }
   onCancel(cb: (p: BoardPoint, reason?: CancelReason) => void): () => void {
     this.subs.cancel.add(cb);
     return () => this.subs.cancel.delete(cb);
@@ -118,6 +126,25 @@ export class HandAdapter implements PointerAdapter {
   private emit(set: Set<Cb>, hand: Side, p: Projected, now: number, reason?: CancelReason): void {
     const bp: BoardPoint = { x_cm: p.x_cm, y_cm: p.y_cm, t_ms: now, hand };
     for (const cb of [...set]) cb(bp, reason);
+  }
+
+  /** An idle hand stopped hovering: the board clears its hover outline. */
+  private leave(t: HandTrack, hand: Side): void {
+    if (!t.hovering) return;
+    t.hovering = false;
+    for (const cb of [...this.leaves]) cb(hand);
+  }
+
+  /** The session ended: frames stop, so nothing is hovering and any gesture is lost. */
+  private sessionEnd(): void {
+    const now = typeof performance !== 'undefined' ? performance.now() : 0;
+    for (const hand of ['left', 'right'] as const) {
+      const t = this.hands[hand];
+      if (t.active) this.lose(t, hand, now);
+      this.leave(t, hand);
+      t.visible = false;
+      t.raw = null;
+    }
   }
 
   /** End a gesture that was lost: tracking gone past the grace, or the pinch cancelled. */
@@ -155,12 +182,16 @@ export class HandAdapter implements PointerAdapter {
         t.visible = true;
         t.lostAt = null;
         if (t.active) this.emit(this.subs.move, hand, this.gesturePoint(t, t.last, now), now);
-        else if (this.inZone(t.last) && t.last.h_cm < HOVER_MAX_CM) this.emit(this.subs.move, hand, t.last, now);
+        else if (this.inZone(t.last) && t.last.h_cm < HOVER_MAX_CM) {
+          t.hovering = true;
+          this.emit(this.subs.move, hand, t.last, now);
+        } else this.leave(t, hand);
         continue;
       }
       // No joints this frame: hold the gesture at the last good point for the grace time.
       t.visible = false;
       t.raw = null;
+      this.leave(t, hand);
       t.fx.reset();
       t.fy.reset();
       t.fz.reset();
@@ -187,6 +218,7 @@ export class HandAdapter implements PointerAdapter {
       t.fz.filter(t.raw.z, now);
       t.last = p;
       t.active = true;
+      t.hovering = false;
       t.downAt = now;
       t.downPoint = p;
       t.drift = null;
