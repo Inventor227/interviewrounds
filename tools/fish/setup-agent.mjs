@@ -191,7 +191,13 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
     await call("PATCH", `/v1/agent/agents/${agentId}`, apiKey, settings);
     await call("POST", `/v1/agent/agents/${agentId}/publish`, apiKey, { version_title: "setup-agent" });
   }
-  log(`published; set FISH_AGENT_ID=${agentId}`);
+  // Read the published config back: our endpoint must be the only model.
+  const live = await call("GET", `/v1/agent/agents/${agentId}/config`, apiKey);
+  const fallbackMode = live?.llm?.fallback?.mode;
+  if (fallbackMode !== "off") {
+    throw new Error(`published agent ${agentId} has llm.fallback.mode=${fallbackMode}, expected off`);
+  }
+  log(`published (fallback off, asr ${live?.asr?.model}, tts ${live?.voice?.tts_model}); set FISH_AGENT_ID=${agentId}`);
   process.stdout.write(`${agentId}\n`);
   return agentId;
 }
