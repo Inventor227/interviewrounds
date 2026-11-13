@@ -20,6 +20,12 @@ await waitReady();
 await go('/session/emu?view=preview');
 await until('the preview room', () => !!globalThis.__xrApp, null, 90000);
 await sleep(4000);
+// The status card with progress, as the controller shows it while the scorecard is written (in live runs the
+// scorecard of a short typed round is done before a capture can catch this card).
+await page(() => globalThis.__xrApp.ui.showStatusText('Writing your scorecard', 0.4));
+await page(() => document.querySelector('.xr-stage')?.scrollIntoView({ block: 'start' }));
+await sleep(2000);
+await screenshot('status-progress');
 await page((c) => globalThis.__xrApp.ui.showQuickCard(c), CARD);
 await page(() => document.querySelector('.xr-stage')?.scrollIntoView({ block: 'start' }));
 await sleep(2500);
