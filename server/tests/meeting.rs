@@ -20,7 +20,7 @@ use ir_server::claude::{
     ClaudeError, ContentBlock, Message, MessagesRequest, MessagesResponse, Role, StreamEvent, Usage,
 };
 use ir_server::content::Catalog;
-use ir_server::meeting::live::{DECISION_LINE, turn_parts};
+use ir_server::meeting::live::DECISION_LINE;
 use ir_server::meeting::prepare::{ModelPlan, build_plan, build_request};
 use ir_server::meeting::state::{ModelUpdate, UpdateContext, apply_update, decide, update};
 use ir_server::meeting::{

@@ -12,11 +12,11 @@ use std::time::Instant;
 use anyhow::anyhow;
 use tokio::sync::Mutex;
 
+use super::ConcernStatus;
 use super::state::{
     AttendeeState, MeetingState, UpdateContext, apply_update, build_update_request, fetch_update,
     speakers, stance_words,
 };
-use super::ConcernStatus;
 use crate::content::{Catalog, Persona, RoundConfig};
 use crate::orchestrator::prompt::fill;
 use crate::orchestrator::{LlmApi, SessionState, Turn};

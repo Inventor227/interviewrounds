@@ -720,16 +720,16 @@ pub fn apply_update(
         // Concerns: known ids change status only; texts and ids stay as they were.
         let mut newly_resolved = false;
         for c in &mut a.concerns {
-            if let Some(rc) = r.concerns.iter().find(|rc| rc.id.trim() == c.id) {
-                if let Some(status) = rc.status {
-                    if status == ConcernStatus::Resolved && c.status != ConcernStatus::Resolved {
-                        newly_resolved = true;
-                    }
-                    if status != c.status {
-                        c.evidence_quote = plain(&rc.evidence_quote);
-                    }
-                    c.status = status;
+            if let Some(rc) = r.concerns.iter().find(|rc| rc.id.trim() == c.id)
+                && let Some(status) = rc.status
+            {
+                if status == ConcernStatus::Resolved && c.status != ConcernStatus::Resolved {
+                    newly_resolved = true;
                 }
+                if status != c.status {
+                    c.evidence_quote = plain(&rc.evidence_quote);
+                }
+                c.status = status;
             }
         }
         // At most one new concern per turn, raised by the user, open.

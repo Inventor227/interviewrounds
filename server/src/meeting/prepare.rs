@@ -643,10 +643,10 @@ pub fn assign_personas(
     let mut genders: Vec<String> = Vec::new();
     let mut out: Vec<Option<(String, String, String)>> = vec![None; attendees.len()];
 
-    let mut take = |id: &str,
-                    used_personas: &mut HashSet<String>,
-                    used_avatars: &mut HashSet<String>,
-                    used_voices: &mut HashSet<String>|
+    let take = |id: &str,
+                used_personas: &mut HashSet<String>,
+                used_avatars: &mut HashSet<String>,
+                used_voices: &mut HashSet<String>|
      -> Option<(String, String, String, String)> {
         let p = catalog.persona(id)?;
         if used_personas.contains(&p.id)

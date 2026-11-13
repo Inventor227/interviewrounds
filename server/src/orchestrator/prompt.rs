@@ -192,10 +192,10 @@ pub fn turn_note(
     };
 
     let mut notes: Vec<String> = Vec::new();
-    if let Some(kind) = input.event() {
-        if let Some(note) = event_note(state, panelist_id, kind, time_line.is_empty()) {
-            notes.push(note);
-        }
+    if let Some(kind) = input.event()
+        && let Some(note) = event_note(state, panelist_id, kind, time_line.is_empty())
+    {
+        notes.push(note);
     }
     if let Some(heard) = state.heard_note.get(panelist_id) {
         notes.push(heard.clone());
