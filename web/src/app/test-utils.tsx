@@ -19,6 +19,9 @@ export interface TestRuntime {
   log: string[];
   xrEnter: Mock<() => Promise<void>>;
   xrPreload: Mock<() => Promise<void>>;
+  xrDispose: Mock<() => void>;
+  /** The server closes the room socket for good (e.g. 4409 session ended). */
+  closeSocket(code: number): void;
 }
 export let testRuntime: TestRuntime;
 
@@ -28,9 +31,18 @@ function installTestRuntime(): void {
     log,
     xrEnter: vi.fn(async (): Promise<void> => void log.push('xr.enter')),
     xrPreload: vi.fn(async (): Promise<void> => void log.push('xr.preload')),
+    xrDispose: vi.fn((): void => void log.push('xr.dispose')),
+    closeSocket: (code) => terminal.forEach((cb) => cb({ code, reason: '' })),
   };
   testRuntime = rt;
-  const socket: SocketPort = { connect: async () => {}, send: () => {}, on: () => () => {}, close: () => {} };
+  const terminal = new Set<(i: { code: number; reason: string }) => void>();
+  const socket: SocketPort = {
+    connect: async () => {},
+    send: () => {},
+    on: () => () => {},
+    onTerminal: (cb) => (terminal.add(cb), () => terminal.delete(cb)),
+    close: () => {},
+  };
   registerRuntime(() => ({
     api,
     makeSocket: () => socket,
@@ -40,6 +52,7 @@ function installTestRuntime(): void {
     xr: {
       preload: rt.xrPreload,
       enter: rt.xrEnter,
+      dispose: rt.xrDispose,
       place: () => new Promise<void>(() => {}),
       ui: { setRoundState() {}, showSummary() {}, setStatus() {}, onAction: () => () => {} },
       room: { seatPoses: () => [] },

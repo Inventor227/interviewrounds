@@ -191,6 +191,32 @@ describe('Start', () => {
     expect(server.calls.filter((c) => c.path === '/api/sessions')).toHaveLength(2);
   });
 
+  it('try_again_after_a_room_load_failure_reuses_the_session', async () => {
+    const server = useFakeServer({ scenario: '1' });
+    micThat('grant');
+    withHeadset(true);
+    testRuntime.xrPreload.mockRejectedValueOnce(new Error('gl'));
+    const root = await renderApp('/round/sde.system_design.short');
+    await click($(root, 'mic-allow'));
+    await settled(root);
+    expect(launchOf(root)).toBe('failed');
+    await click($(root, 'mic-allow'));
+    await waitFor(() => launchOf(root) === 'ready');
+    expect(creates(server)).toHaveLength(1);
+  });
+
+  it('home_and_start_agree_on_preview_without_a_headset', async () => {
+    const server = useFakeServer({ scenario: '1' });
+    micThat('grant');
+    withHeadset(false);
+    const root = await renderApp('/');
+    await click($(root, 'try-quick'));
+    await settled(root);
+    expect(launchOf(root)).toBe('ready');
+    expect(($(root, 'start-preview') as HTMLButtonElement).disabled).toBe(false);
+    expect(creates(server)).toHaveLength(1);
+  });
+
   it('start_retry_posts_retry_in_phase_a', async () => {
     const server = useFakeServer({ scenario: '1' });
     micThat('grant');

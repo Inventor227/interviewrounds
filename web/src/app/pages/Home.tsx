@@ -8,7 +8,7 @@ import type { Catalog, Me } from '../../shared/types';
 import { CapNotice } from '../components/CapNotice';
 import { capFromMe, findRound, loadCatalog, loadMe, persona, useAsync } from '../components/data';
 import { clock } from '../components/format';
-import { askMic, holdMic, useHeadset } from '../components/Ready';
+import { askMic, checkHeadset, holdMic, useHeadset } from '../components/Ready';
 import { Streak } from '../components/Streak';
 import { Monogram } from '../components/Ui';
 import { isFake } from '../fake/mode';
@@ -120,7 +120,8 @@ export function Home() {
       return;
     }
     if (out.stream) {
-      const preview = xr === 'none';
+      // The same cached check the Start page uses, so both agree on preview.
+      const preview = (await checkHeadset()) === 'none';
       const input: PrepareInput = {
         kind: 'new',
         req: {

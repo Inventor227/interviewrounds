@@ -9,7 +9,7 @@ import type { ComponentChildren } from 'preact';
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { useLocation } from 'preact-iso';
 import type { Me } from '../../shared/types';
-import { discardLaunch, enterLaunch, launchKey, launchState, prepareLaunch, useLaunch, type PrepareInput } from '../launch';
+import { discardLaunch, enterLaunch, launchKey, launchPendingKey, launchState, prepareLaunch, useLaunch, type PrepareInput } from '../launch';
 import { CapNotice } from './CapNotice';
 import { capFromError } from './data';
 import { getAudioContext } from '../../voice/audio';
@@ -281,16 +281,39 @@ function StepMark(props: { ok: boolean; bad: boolean; n: number }) {
 
 export type XrState = 'checking' | 'ready' | 'none';
 
+// One headset check per page load (per navigator.xr), shared by every page, so Home and Start
+// always agree on whether this is a preview.
+let headsetCache: { xr: object; result: XrState | null; p: Promise<XrState> } | null = null;
+
+export function checkHeadset(): Promise<XrState> {
+  const xr = typeof navigator === 'undefined' ? undefined : navigator.xr;
+  if (!xr) return Promise.resolve('none');
+  if (headsetCache && headsetCache.xr === xr) return headsetCache.p;
+  const c: { xr: object; result: XrState | null; p: Promise<XrState> } = {
+    xr,
+    result: null,
+    p: xr.isSessionSupported('immersive-ar').then(
+      (ok): XrState => (ok ? 'ready' : 'none'),
+      (): XrState => 'none',
+    ),
+  };
+  void c.p.then((r) => (c.result = r));
+  headsetCache = c;
+  return c.p;
+}
+
+function cachedHeadset(): XrState | null {
+  const xr = typeof navigator === 'undefined' ? undefined : navigator.xr;
+  if (!xr) return 'none';
+  return headsetCache && headsetCache.xr === xr ? headsetCache.result : null;
+}
+
 export function useHeadset(forcePreview = false): XrState {
-  const [state, setState] = useState<XrState>(() => (forcePreview || typeof navigator === 'undefined' || !navigator.xr ? 'none' : 'checking'));
+  const [state, setState] = useState<XrState>(() => (forcePreview ? 'none' : (cachedHeadset() ?? 'checking')));
   useEffect(() => {
     if (forcePreview) return setState('none');
-    const xr = navigator.xr;
-    if (!xr) return setState('none');
     let live = true;
-    xr.isSessionSupported('immersive-ar')
-      .then((ok) => live && setState(ok ? 'ready' : 'none'))
-      .catch(() => live && setState('none'));
+    void checkHeadset().then((r) => live && setState(r));
     return () => {
       live = false;
     };
@@ -366,7 +389,7 @@ export function ReadyPanel(props: {
   const preview = xr === 'none';
   const blocked = micBlocked(mic.state);
   const launch = useLaunch();
-  const key = input ? launchKey(input, preview) : null;
+  const key = input ? launchKey(input) : null;
   const mine = launch.status !== 'idle' && launch.key === key ? launch : null;
 
   // A prepared round for other inputs (Adjust changed, plan changed) is stale: drop it. Leaving
@@ -379,7 +402,10 @@ export function ReadyPanel(props: {
   useEffect(
     () => () => {
       const now = launchState();
-      if (now.status !== 'idle' && now.key === keyRef.current) discardLaunch();
+      // Also a prepare that is still loading its code (state idle until it builds the controller).
+      if ((now.status !== 'idle' && now.key === keyRef.current) || (keyRef.current && launchPendingKey() === keyRef.current)) {
+        discardLaunch();
+      }
     },
     [],
   );
@@ -418,7 +444,7 @@ export function ReadyPanel(props: {
   return (
     <div class="ready" data-test="ready" data-launch={mine?.status ?? 'none'}>
       <ol class="steps">
-        <MicStep mic={mic} action={phaseAButton} handedOver={!!mine} />
+        <MicStep mic={mic} action={phaseAButton} handedOver={!!mine && mine.status !== 'failed'} />
         <HeadsetStep xr={xr} questUrl={props.questUrl} questNote={props.questNote} />
       </ol>
       {props.error}
