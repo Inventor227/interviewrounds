@@ -1,0 +1,221 @@
+{
+  "id": "bank.behavioral",
+  "round_type": "behavioral",
+  "title": "Behavioral questions",
+  "cards": [
+    {
+      "id": "behavioral.disagreed_direction",
+      "round_type": "behavioral",
+      "title": "Disagreeing on direction",
+      "levels": [
+        "junior",
+        "mid",
+        "senior",
+        "staff"
+      ],
+      "lengths": [
+        "short",
+        "full"
+      ],
+      "targets": [
+        "collaboration",
+        "communication"
+      ],
+      "prompt": "Tell me about a time you disagreed with a technical direction your team or a senior person wanted to take.",
+      "follow_ups": [
+        "What did the other person believe, and why?",
+        "What did you do to test who was right?",
+        "What changed someone's mind, yours or theirs?",
+        "How was your working relationship afterwards?",
+        "Looking back, were you right?"
+      ],
+      "strong_answer_covers": [
+        "States the other view fairly, at its strongest",
+        "Uses data, a prototype or a written proposal rather than volume",
+        "A clear outcome, including the case where they lost and committed anyway",
+        "The relationship after the disagreement",
+        "Describes a real disagreement and reaches the other person directly, not around them"
+      ],
+      "red_flags": [
+        "Story details change when probed, showing the experience was invented"
+      ]
+    },
+    {
+      "id": "behavioral.shipped_wrong",
+      "round_type": "behavioral",
+      "title": "Something that went wrong",
+      "levels": [
+        "junior",
+        "mid",
+        "senior",
+        "staff"
+      ],
+      "lengths": [
+        "short",
+        "full"
+      ],
+      "targets": [
+        "ownership",
+        "communication"
+      ],
+      "prompt": "Tell me about something you shipped that didn't go to plan.",
+      "follow_ups": [
+        "When did you first know something was wrong?",
+        "What part of it was yours?",
+        "What did you do in the first hour?",
+        "What changed in how you or the team work afterwards?",
+        "How did you tell the people affected?"
+      ],
+      "strong_answer_covers": [
+        "Notices early or explains why they didn't",
+        "Owns their part without hiding behind the team",
+        "Concrete fix plus a process change that stuck",
+        "Clear impact, ideally with a number",
+        "Does not shift blame to another team or a tool"
+      ],
+      "red_flags": [
+        "Story details change when probed, showing the experience was invented"
+      ]
+    },
+    {
+      "id": "behavioral.improved_team",
+      "round_type": "behavioral",
+      "title": "Improving how the team works",
+      "levels": [
+        "junior",
+        "mid",
+        "senior",
+        "staff"
+      ],
+      "lengths": [
+        "short",
+        "full"
+      ],
+      "targets": [
+        "ownership",
+        "scope"
+      ],
+      "prompt": "Describe a time you improved how your team works without anyone asking you to.",
+      "follow_ups": [
+        "Why you, and why then?",
+        "Who resisted, and why?",
+        "How did you get people to actually adopt it?",
+        "How did you measure whether it helped?",
+        "Is it still in use?"
+      ],
+      "strong_answer_covers": [
+        "A real problem they noticed themselves",
+        "Scope that matches the level",
+        "Brought others along rather than imposing it",
+        "Adoption or impact numbers"
+      ],
+      "red_flags": [
+        "Story details change when probed, showing the experience was invented"
+      ]
+    },
+    {
+      "id": "behavioral.hard_feedback",
+      "round_type": "behavioral",
+      "title": "Hard feedback",
+      "levels": [
+        "junior",
+        "mid",
+        "senior",
+        "staff"
+      ],
+      "lengths": [
+        "short",
+        "full"
+      ],
+      "targets": [
+        "communication",
+        "collaboration"
+      ],
+      "prompt": "What's the hardest feedback you've received, and what did you do with it?",
+      "follow_ups": [
+        "How did you react in the moment?",
+        "What did you do differently the next week?",
+        "How did you know the change worked?",
+        "Have you given similar feedback to someone else since?"
+      ],
+      "strong_answer_covers": [
+        "Specific feedback, not a disguised strength",
+        "No defensiveness in the retelling",
+        "A visible change in behaviour, with an example",
+        "Picks feedback that stung, not a disguised strength, and does not relitigate it"
+      ],
+      "red_flags": [
+        "Story details change when probed, showing the experience was invented"
+      ]
+    },
+    {
+      "id": "behavioral.unclear_requirements",
+      "round_type": "behavioral",
+      "title": "Working through ambiguity",
+      "levels": [
+        "junior",
+        "mid",
+        "senior",
+        "staff"
+      ],
+      "lengths": [
+        "short",
+        "full"
+      ],
+      "targets": [
+        "ownership",
+        "scope"
+      ],
+      "prompt": "Tell me about a time you had to deliver something when the requirements were unclear or kept changing.",
+      "follow_ups": [
+        "What did you do first to reduce the uncertainty?",
+        "Who did you go to, and what did you ask?",
+        "What did you decide without waiting for an answer?",
+        "What would you do differently?"
+      ],
+      "strong_answer_covers": [
+        "Takes action to reduce ambiguity: questions, a prototype, a written proposal",
+        "Makes reasonable decisions and records the assumptions",
+        "Delivers something useful and adjusts",
+        "Does not wait to be told or blame whoever wrote the requirements"
+      ],
+      "red_flags": [
+        "Story details change when probed, showing the experience was invented"
+      ]
+    },
+    {
+      "id": "behavioral.helped_grow",
+      "round_type": "behavioral",
+      "title": "Helping someone grow",
+      "levels": [
+        "junior",
+        "mid",
+        "senior",
+        "staff"
+      ],
+      "lengths": [
+        "short",
+        "full"
+      ],
+      "targets": [
+        "collaboration",
+        "scope"
+      ],
+      "prompt": "Tell me about a time you helped a teammate get unblocked or grow in their role.",
+      "follow_ups": [
+        "What was getting in their way?",
+        "What did you do, and what did you deliberately not do?",
+        "How did you know it worked?",
+        "What did you learn about helping people?"
+      ],
+      "strong_answer_covers": [
+        "Diagnoses the real blocker",
+        "Coaches rather than doing the work for them",
+        "A visible outcome for the other person"
+      ],
+      "red_flags": [
+        "Story details change when probed, showing the experience was invented"
+      ]
+    }
+  ]
+}

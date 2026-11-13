@@ -1,0 +1,98 @@
+{
+  "id": "rubric.behavioral",
+  "round_types": [
+    "behavioral"
+  ],
+  "title": "Behavioral",
+  "scale": {
+    "1": {
+      "label": "below",
+      "name": "Below the bar",
+      "meaning": "Concerning for this level; this alone would likely block an offer."
+    },
+    "2": {
+      "label": "developing",
+      "name": "Developing",
+      "meaning": "Some signal, but clear gaps for this level."
+    },
+    "3": {
+      "label": "meets_bar",
+      "name": "Meets the bar",
+      "meaning": "What a solid candidate at the chosen level shows."
+    },
+    "4": {
+      "label": "above_bar",
+      "name": "Above the bar",
+      "meaning": "Would read as the next level up."
+    }
+  },
+  "level_bar": {
+    "junior": "Stories about their own work or their immediate team, with clear personal actions and an honest lesson.",
+    "mid": "Stories about a feature or piece of work with a few people, owning decisions within it.",
+    "senior": "Stories about a project of three or more people that they led or shaped, with measurable outcomes and handled conflict.",
+    "staff": "Stories spanning two or more teams or the org, changing direction or practice, with lasting results."
+  },
+  "competencies": [
+    {
+      "id": "ownership",
+      "name": "Ownership and impact",
+      "weight": 1,
+      "looks_for": "Personal actions, stakes, a measurable result, and what changed because of them.",
+      "descriptors": {
+        "1": "Says 'we' throughout with no personal action, or the result is vague, or takes credit for others' work when probed.",
+        "2": "Some personal action; a result with no number or concrete outcome.",
+        "3": "Clear personal actions and a measurable or concrete result.",
+        "4": "Result at or above the level's scope; knows what changed afterwards and would make the call again or knows why not."
+      }
+    },
+    {
+      "id": "scope",
+      "name": "Scope for level",
+      "weight": 1,
+      "looks_for": "Whether the stories match the scope expected at the chosen level.",
+      "descriptors": {
+        "1": "Clearly below the level, for example task level stories for a senior role.",
+        "2": "One level below what the role expects.",
+        "3": "Matches the level: own work at junior, a feature with a few people at mid, a project of three or more people at senior, two or more teams at staff.",
+        "4": "Above the level's scope, with the candidate clearly leading it."
+      }
+    },
+    {
+      "id": "collaboration",
+      "name": "Collaboration and conflict",
+      "weight": 1,
+      "looks_for": "How they work with others, handle disagreement, and describe the other side.",
+      "descriptors": {
+        "1": "Blames others or avoids every conflict.",
+        "2": "Resolves conflict only by escalating or by giving in.",
+        "3": "Understands the other side fairly and resolves with data and empathy.",
+        "4": "Turns disagreement into a better outcome and repairs the relationship."
+      }
+    },
+    {
+      "id": "communication",
+      "name": "Communication and self-awareness",
+      "weight": 1,
+      "looks_for": "Clear structure, direct answers to probes, honest lessons.",
+      "descriptors": {
+        "1": "Rambling with no structure, or defensive under probing.",
+        "2": "Weak structure; lessons are thin or generic.",
+        "3": "Clear situation, action and result; handles probes directly; an honest lesson.",
+        "4": "Concise, adapts depth to the question, and shows a real change in behaviour since."
+      }
+    }
+  ],
+  "scoring_notes": [
+    "Most down levelling comes from scope: score Scope for level strictly against the chosen level.",
+    "Polished delivery is not evidence. Specific actions, numbers and fair descriptions of others are.",
+    "Reading from a story card is not penalised by itself.",
+    "Red flags are only the items in red_flags. Weak, wrong or incomplete answers lower the matching competency score and are never red flags."
+  ],
+  "red_flags": [
+    "Makes up facts and keeps defending them after being questioned",
+    "Story details change when probed, showing the experience was invented",
+    "Hostile, insulting or disrespectful toward the interviewer",
+    "Refuses to engage with the questions",
+    "Integrity issue, such as reading answers from another source or getting outside help during the round"
+  ]
+}

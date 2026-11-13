@@ -1,0 +1,80 @@
+{
+  "id": "pm.product_sense.full",
+  "title": "Product sense",
+  "summary": "Design a product end to end: users, problems, solutions, a first version and how you would measure it.",
+  "role": "pm",
+  "round_type": "pm_product_sense",
+  "length": "full",
+  "target_minutes": 30,
+  "hard_stop_minutes": 33,
+  "silence_wait_seconds": 40,
+  "interrupt_after_seconds": 120,
+  "panel": {
+    "lead": "persona.priya",
+    "second": null,
+    "second_enters_phase": null
+  },
+  "phases": [
+    {
+      "id": "intro",
+      "title": "Intro",
+      "minutes": 1,
+      "goal": "Introduce yourself and the format in under twenty seconds."
+    },
+    {
+      "id": "clarify",
+      "title": "Goal",
+      "minutes": 3,
+      "goal": "Give the prompt and call show_question. Answer questions about the goal and constraints briefly. Do not prompt for questions."
+    },
+    {
+      "id": "users",
+      "title": "Users",
+      "minutes": 5,
+      "goal": "They list segments and pick one. Ask why that one first. If vague, ask 'Who exactly?'",
+      "uses_whiteboard": true,
+      "must_cover": [
+        "segment_choice"
+      ]
+    },
+    {
+      "id": "problems",
+      "title": "Problems",
+      "minutes": 6,
+      "goal": "They list pain points for that segment and prioritise. Ask how they know each is real and why the top one matters most.",
+      "uses_whiteboard": true
+    },
+    {
+      "id": "solutions",
+      "title": "Solutions",
+      "minutes": 8,
+      "goal": "Ask for two or three ideas, then a pick with a reason, then the smallest first version. Ask what they would not build.",
+      "uses_whiteboard": true,
+      "must_cover": [
+        "mvp"
+      ]
+    },
+    {
+      "id": "metrics",
+      "title": "Metrics",
+      "minutes": 4,
+      "goal": "Ask for the success metric tied to the problem, a guardrail, and the biggest risk with a mitigation.",
+      "must_cover": [
+        "success_metric",
+        "guardrail",
+        "risk"
+      ]
+    },
+    {
+      "id": "wrap",
+      "title": "Wrap up",
+      "minutes": 3,
+      "goal": "Ask what version two looks like, or take one question. Close and call end_round."
+    }
+  ],
+  "rubric_id": "rubric.pm_product_sense",
+  "question_pool": "bank.pm_product_sense",
+  "hands": "stickies",
+  "board_kit": "pm",
+  "short_version": "pm.product_sense.short"
+}

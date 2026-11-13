@@ -1,0 +1,97 @@
+{
+  "id": "rubric.system_design",
+  "round_types": [
+    "system_design"
+  ],
+  "title": "System design",
+  "scale": {
+    "1": {
+      "label": "below",
+      "name": "Below the bar",
+      "meaning": "Concerning for this level; this alone would likely block an offer."
+    },
+    "2": {
+      "label": "developing",
+      "name": "Developing",
+      "meaning": "Some signal, but clear gaps for this level."
+    },
+    "3": {
+      "label": "meets_bar",
+      "name": "Meets the bar",
+      "meaning": "What a solid candidate at the chosen level shows."
+    },
+    "4": {
+      "label": "above_bar",
+      "name": "Above the bar",
+      "meaning": "Would read as the next level up."
+    }
+  },
+  "level_bar": {
+    "junior": "Not usually asked at junior level; if so, a plausible design with a working request path and basic awareness of scale.",
+    "mid": "Clear requirements with some numbers, an end to end design that works, at least one real trade-off, and sensible answers on one failure mode when asked.",
+    "senior": "Drives the whole session. Quantified non functional requirements that change the design, components justified by requirements, leads a deep dive, raises failure modes before being asked.",
+    "staff": "All of senior, plus depth over breadth where it matters, argues for the simpler design and its limits, and covers cost, migration from the current system, and team boundaries."
+  },
+  "competencies": [
+    {
+      "id": "requirements",
+      "name": "Requirements and scope",
+      "weight": 1,
+      "looks_for": "Functional and non functional requirements, numbers that drive choices, explicit scope cuts.",
+      "descriptors": {
+        "1": "Jumps to boxes; no non functional requirements.",
+        "2": "Functional requirements only, or numbers that change nothing in the design.",
+        "3": "Key functional requirements plus two or three quantified non functional ones that visibly drive the design.",
+        "4": "Scopes out explicitly and names the hardest requirement early, then designs around it."
+      }
+    },
+    {
+      "id": "architecture",
+      "name": "Architecture",
+      "weight": 1,
+      "looks_for": "A design with a clear read and write path, each component there for a reason, matching what is on the board.",
+      "descriptors": {
+        "1": "Incoherent design or no data flow; the board and the words disagree.",
+        "2": "Plausible boxes, but the request path is unclear or a key store or link is missing.",
+        "3": "A request walks end to end; each component is justified by a requirement.",
+        "4": "Clean, minimal design; explains why the simpler option beats a fancier one here."
+      }
+    },
+    {
+      "id": "tradeoffs",
+      "name": "Depth and trade-offs",
+      "weight": 1,
+      "looks_for": "Choices compared with the rejected alternative, tied to a requirement; one solid deep dive.",
+      "descriptors": {
+        "1": "Buzzwords with no reasons.",
+        "2": "Trade-offs named but not tied to a requirement, or no rejected alternative.",
+        "3": "At least two real trade-offs with the rejected alternative, and one solid deep dive.",
+        "4": "Leads the deep dives, quantifies them, and anticipates the next probe."
+      }
+    },
+    {
+      "id": "reliability",
+      "name": "Reliability and operations",
+      "weight": 1,
+      "looks_for": "Failure handling, hot spots, monitoring, rollout; at staff level cost and team boundaries.",
+      "descriptors": {
+        "1": "Ignores failure.",
+        "2": "Mentions replicas or retries generically, without saying what fails and what the user sees.",
+        "3": "Handles one or two named failure modes and one hot spot with concrete mechanisms.",
+        "4": "Covers failure, detection, rollout or migration, and at staff level cost and ownership."
+      }
+    }
+  ],
+  "scoring_notes": [
+    "Judge the design from the words and the final board together. Items the Scribe placed count only if the candidate accepted them.",
+    "Numbers that never change a decision earn no credit under Requirements.",
+    "The second panelist's questions count the same as the lead's.",
+    "Red flags are only the items in red_flags. Weak, wrong or incomplete answers lower the matching competency score and are never red flags."
+  ],
+  "red_flags": [
+    "Makes up facts and keeps defending them after being questioned",
+    "Hostile, insulting or disrespectful toward the interviewer",
+    "Refuses to engage with the questions",
+    "Integrity issue, such as reading answers from another source or getting outside help during the round"
+  ]
+}
