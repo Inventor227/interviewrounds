@@ -384,6 +384,15 @@ fn turn_stream(
         let turn_deadline = tokio::time::Instant::now() + opts.turn_deadline;
         let mut chunks = Chunks::new(model_name);
 
+        // After the goodbye (the app's own closing line, or the one end_round came with), an app event such as the
+        // browser's `[event: ending]` gets an empty reply: no second goodbye, no model call, nothing recorded.
+        if matches!(input, UserInput::Event(_)) && session.lock().await.closing_line.is_some() {
+            tracing::info!(session_id = %session_id, "app event after the goodbye; empty reply");
+            yield Ok(chunks.finish(&Usage::default()));
+            yield Ok(Chunks::done());
+            return;
+        }
+
         let turn_lock = session.lock().await.turn_lock.clone();
         let wait = opts.turn_wait.min(opts.turn_deadline);
         let Ok(turn) = tokio::time::timeout(wait, turn_lock.lock_owned()).await else {
@@ -422,14 +431,22 @@ fn turn_stream(
             return;
         };
 
-        let empty_reply = {
+        let (empty_reply, after_goodbye) = {
             let mut st = session.lock().await;
-            let empty = st.dev_empty_replies > 0;
-            st.dev_empty_replies = st.dev_empty_replies.saturating_sub(1);
-            empty
+            // The goodbye may have been said while this turn waited for the previous one.
+            let after_goodbye = matches!(input, UserInput::Event(_)) && st.closing_line.is_some();
+            let empty = !after_goodbye && st.dev_empty_replies > 0;
+            if empty {
+                st.dev_empty_replies -= 1;
+            }
+            (empty, after_goodbye)
         };
-        if empty_reply {
-            tracing::info!(session_id = %session_id, "dev: empty reply sent");
+        if empty_reply || after_goodbye {
+            if after_goodbye {
+                tracing::info!(session_id = %session_id, "app event after the goodbye; empty reply");
+            } else {
+                tracing::info!(session_id = %session_id, "dev: empty reply sent");
+            }
             drop(turn);
             yield Ok(chunks.finish(&Usage::default()));
             yield Ok(Chunks::done());

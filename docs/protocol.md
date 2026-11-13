@@ -175,6 +175,9 @@ Sequencing and acks:
 - Ending. `ui.event {kind: "end", reason?}` starts the goodbye: the browser sends `[event: ending]`, and the round ends
   3 s after the interviewer's closing line, or 20 s after the request, whichever comes first, with that `reason` (default
   `user_ended`); `POST /end` ends it at once. The interviewer's `end_round` (`round.ending`) ends it the same way.
+  Once a closing line has been said (`end_round`'s, or a retry's own line), any later app event, such as the
+  `[event: ending]` the browser sends on `round.ending`, gets an empty reply: no second goodbye, no model call,
+  nothing recorded.
   A round with no socket for 3 minutes ends with `round.ended {reason: "disconnected"}`; one past its `hard_stop_minutes`,
   or with more than 10 minutes of pauses in total (user pauses and time offline), ends with `time_limit`.
 - After `round.ended` the socket stays open while the report is made: `report.progress`, then `report.ready` (or

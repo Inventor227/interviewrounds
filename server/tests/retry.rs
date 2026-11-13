@@ -13,6 +13,7 @@ use common::live::{
     self, Options, eventually, fixture_catalog, frame_of, full_req, go_live, hello, short_req,
 };
 use common::scored::{LEAD_ASKS, SECOND_ASKS, example_report, scored, turn_text};
+use ir_server::orchestrator::tools::ToolCall;
 use ir_server::scoring::{ReportSchema, ScoringDeps, score_session};
 use ir_server::ws::SessionTiming;
 use serde_json::{Value, json};
@@ -443,55 +444,78 @@ async fn retry_score_appends_to_parent_report() {
     );
 }
 
-#[tokio::test]
-async fn retry_says_goodbye_at_120_s_with_no_model() {
-    let app = live::test_app(Options {
-        timing: SessionTiming {
-            tick: Duration::from_millis(100),
-            closing_grace: Duration::from_millis(300),
-            ..SessionTiming::default()
-        },
-        ..Options::default()
-    })
-    .await;
-    let base = app.serve().await;
+fn goodbye_timing() -> SessionTiming {
+    SessionTiming {
+        tick: Duration::from_millis(100),
+        // Long enough to send one more app event between round.ending and round.ended.
+        closing_grace: Duration::from_millis(1500),
+        ..SessionTiming::default()
+    }
+}
+
+/// A retry of a fresh scored round, live on a socket, past its opener and one answer. From then on the model never
+/// answers and the director never calls a tool. Returns the retry id, its client token and the socket.
+async fn live_retry(app: &live::TestApp, base: &str) -> (String, String, live::Ws) {
     let me = app.guest().await;
-    let parent = scored(&app, &me, short_req("fake"), &LEAD_ASKS, example_report).await;
-    let res = retry(&app, &me, &parent).await;
+    let parent = scored(app, &me, short_req("fake"), &LEAD_ASKS, example_report).await;
+    let res = retry(app, &me, &parent).await;
     assert_eq!(res.status, StatusCode::OK, "{}", res.body);
     let child = res.body["session_id"].as_str().unwrap().to_string();
     let token = res.body["client_token"].as_str().unwrap().to_string();
-    let mut ws = hello(&base, &child, &token, 0).await;
+    let mut ws = hello(base, &child, &token, 0).await;
     let first = frame_of(&mut ws, "round.state", Duration::from_secs(3))
         .await
         .unwrap();
     assert_eq!(first["d"]["status"], "live");
-    turn_text(&app, &token, &child, "[event: start]").await;
+    turn_text(app, &token, &child, "[event: start]").await;
     turn_text(
-        &app,
+        app,
         &token,
         &child,
         "I'd shard the store by key and watch p99 per shard.",
     )
     .await;
-    // From here the model never answers and the director never calls a tool.
     app.llm.hang.store(true, Ordering::SeqCst);
+    (child, token, ws)
+}
+
+/// Moves a live round's clock on.
+async fn jump(app: &live::TestApp, session_id: &str, secs: u64) {
+    let handle = app.state.registry.get(session_id).expect("in memory");
+    handle.lock().await.started_at -= Duration::from_secs(secs);
+}
+
+async fn turns(app: &live::TestApp, session_id: &str) -> usize {
+    let handle = app.state.registry.get(session_id).expect("in memory");
+    handle.lock().await.turns.len()
+}
+
+async fn ended_as(app: &live::TestApp, session_id: &str) -> (String, Option<String>) {
+    sqlx::query_as("select status, ended_reason from sessions where id = $1::uuid")
+        .bind(session_id)
+        .fetch_one(&app.state.db)
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn retry_says_goodbye_at_120_s_with_no_model() {
+    let app = live::test_app(Options {
+        timing: goodbye_timing(),
+        ..Options::default()
+    })
+    .await;
+    let base = app.serve().await;
+    let (child, token, mut ws) = live_retry(&app, &base).await;
     let streamed = app.llm.requests.lock().unwrap().len();
 
-    let jump = |secs: u64| {
-        let handle = app.state.registry.get(&child).expect("in memory");
-        async move {
-            let mut st = handle.lock().await;
-            st.started_at -= Duration::from_secs(secs);
-        }
-    };
     // 90 s: the answer phase is over. Nobody moves the phase (no next_phase).
-    jump(91).await;
+    jump(&app, &child, 91).await;
     let at_90 = time_check(&mut ws).await;
     assert_eq!(at_90["d"]["phase_id"], "retry");
 
     // 120 s: the app asks for its goodbye.
-    jump(30).await;
+    jump(&app, &child, 30).await;
     let at_120 = time_check(&mut ws).await;
     assert_eq!(at_120["d"]["phase_id"], "close");
     let (status, said) = turn_text(&app, &token, &child, "[event: time_check]").await;
@@ -501,6 +525,14 @@ async fn retry_says_goodbye_at_120_s_with_no_model() {
         .await
         .expect("round.ending");
     assert_eq!(ending["d"]["closing_line"], ir_server::retry::CLOSING_LINE);
+
+    // The browser answers round.ending with [event: ending]: no second goodbye, nothing recorded.
+    let before = turns(&app, &child).await;
+    let (status, said) = turn_text(&app, &token, &child, "[event: ending]").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(said, "", "no second goodbye");
+    assert_eq!(turns(&app, &child).await, before, "nothing recorded");
+
     let ended = frame_of(&mut ws, "round.ended", Duration::from_secs(3))
         .await
         .expect("round.ended");
@@ -508,18 +540,64 @@ async fn retry_says_goodbye_at_120_s_with_no_model() {
     assert_eq!(
         app.llm.requests.lock().unwrap().len(),
         streamed,
-        "no model call for the goodbye"
+        "no model call for the goodbye or after it"
     );
-    let (status, reason): (String, Option<String>) =
-        sqlx::query_as("select status, ended_reason from sessions where id = $1::uuid")
-            .bind(&child)
-            .fetch_one(&app.state.db)
-            .await
-            .unwrap();
+    let (status, reason) = ended_as(&app, &child).await;
     assert_eq!(
         (status.as_str(), reason.as_deref()),
         ("scoring", Some("completed"))
     );
+}
+
+/// Any round: once end_round came with the closing line, the browser's [event: ending] gets nothing.
+#[tokio::test]
+async fn app_event_after_end_round_gets_no_second_goodbye() {
+    let app = live::test_app(Options {
+        timing: goodbye_timing(),
+        ..Options::default()
+    })
+    .await;
+    let base = app.serve().await;
+    let me = app.guest().await;
+    let res = app.create(&me, short_req("fake")).await;
+    assert_eq!(res.status, StatusCode::OK, "{}", res.body);
+    let id = res.body["session_id"].as_str().unwrap().to_string();
+    let token = res.body["client_token"].as_str().unwrap().to_string();
+    let mut ws = hello(&base, &id, &token, 0).await;
+    frame_of(&mut ws, "round.state", Duration::from_secs(3))
+        .await
+        .unwrap();
+    turn_text(&app, &token, &id, "[event: start]").await;
+    turn_text(&app, &token, &id, "I'd start with the read path.").await;
+    // The interviewer's end_round, as the director applies it after the closing line played.
+    {
+        let handle = app.state.registry.get(&id).expect("in memory");
+        let mut st = handle.lock().await;
+        st.apply_tool_calls(&[ToolCall {
+            id: "t1".into(),
+            name: "end_round".into(),
+            input: json!({"closing_line": "That's our time. Your scorecard is coming up next."}),
+            panelist_id: "p1".into(),
+        }]);
+    }
+    frame_of(&mut ws, "round.ending", Duration::from_secs(3))
+        .await
+        .expect("round.ending");
+    let streamed = app.llm.requests.lock().unwrap().len();
+    let before = turns(&app, &id).await;
+    let (status, said) = turn_text(&app, &token, &id, "[event: ending]").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(said, "", "no second goodbye");
+    assert_eq!(
+        app.llm.requests.lock().unwrap().len(),
+        streamed,
+        "no model call"
+    );
+    assert_eq!(turns(&app, &id).await, before, "nothing recorded");
+    let ended = frame_of(&mut ws, "round.ended", Duration::from_secs(4))
+        .await
+        .expect("round.ended");
+    assert_eq!(ended["d"]["reason"], "completed");
 }
 
 #[tokio::test]
