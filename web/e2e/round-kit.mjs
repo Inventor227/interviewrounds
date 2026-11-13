@@ -37,6 +37,10 @@ stage('in xr', { kit: await page(() => globalThis.__round.session.round.board_ki
 
 const desk = await placeDesk(S);
 stage('desk placed', desk);
+stage('brief card', await page(() => {
+  const g = globalThis.__xrApp.ui.brief.group;
+  return { pos: g.position.toArray().map((v) => Math.round(v * 1000) / 1000), tiltDeg: Math.round((g.rotation.x * 180) / Math.PI), visible: g.visible };
+}));
 await waitState(['live'], 120000);
 await look(S, -14);
 await sleep(1200);
