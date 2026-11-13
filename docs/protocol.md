@@ -17,8 +17,12 @@ JSON; cookie `ir_id` identifies the device/user; all under same origin.
 - `POST /api/sessions/{id}/resume` → `CreateSessionRes` (same `session_id`, new tokens)
 - `POST /api/sessions/{id}/end` `{reason:"completed"|"user_ended"|"time_limit"|"disconnected"|"headset_removed"}` → 202
 - `GET /api/sessions/{id}` → `{status:"created"|"live"|"paused"|"scoring"|"scored"|"failed"|"abandoned", report_ready}`
-- `GET /api/sessions/{id}/report` → `Report` (404 until ready)
-- `POST /api/sessions/{id}/board-image` (body `image/png`, ≤ 2 MB) → 204
+- `GET /api/sessions/{id}/report` → `Report` (404 until ready, and for a session that is not the caller's)
+- `POST /api/sessions/{id}/report` → 202 `{status:"scoring"}`: score a `failed` session again ("Try again"). Scoring
+  makes at most 2 attempts per session; this gives 2 fresh ones. At most 2 per session per day (429
+  `rescore_limit`); 409 when the session is scored or has not ended; 202 no-op when already `scoring`.
+- `POST /api/sessions/{id}/board-image` (body `image/png`, ≤ 2 MB, ≤ 4096 px a side) → 204. One image per session:
+  a new one replaces the old. Only while the session is `live`, `paused` or `scoring` (409 after).
 - `POST /api/sessions/{id}/retry` → `CreateSessionRes` (2-minute re-ask of the weakest moment)
 - `GET /api/me` → `{identity:{kind:"guest"|"user", name?, email?}, sign_in_available, settings, onboarding_done,
   streak:{current, best, today_done}, daily:{round_id, title}, limits, entitlements}`
@@ -73,8 +77,16 @@ Sequencing and acks:
 - Server → client: `round.state {status, phase_id, phase_index, phases, elapsed_s, remaining_s, phase_remaining_s, brief:{question, lines}, floor}`,
   `panel.hand_over {from, to, opening_line}`, `board.ack {op_id, rev}`, `board.ghosts {ghosts:[GhostOp]}`,
   `board.apply {op_id, rev, src, op, args}` (server-originated ops), `avatar.point_at {panelist_id, item_id}`,
-  `round.ending {closing_line}`, `round.ended {reason}`, `report.progress {stage:"metrics"|"scoring"|"done", pct}`,
-  `report.ready {session_id}`, `error {code, message, op_id?}` (`op_id` set for `op_rejected`), `pong`
+  `round.ending {closing_line}`, `round.ended {reason}`,
+  `report.progress {stage:"metrics"|"scoring"|"card"|"done", pct, card?:HeadsetCard}`, `report.ready {session_id}`,
+  `error {code, message, op_id?}` (`op_id` set for `op_rejected`; `code: "report_failed"` when scoring gave up, then
+  `POST /api/sessions/{id}/report` tries again), `pong`
+- `HeadsetCard` (sent once, with `stage: "card"`, a few seconds after the round ends and before `report.ready`):
+  `{one_line, top_strength: CardPick|null, top_fix: CardPick|null}` where `CardPick {title, evidence_id, quote,
+  t_start_sec}`. `one_line` ≤ 140 characters, `title` ≤ 60; `evidence_id` (`c1` for the strength, `c2` for the fix)
+  is an item of the final report's `evidence`, and `quote` is the candidate's own words at `t_start_sec`.
+- Report times (`t_start_sec`, `t_sec`) are round time: seconds since the round started on the server clock, pauses
+  left out (the same clock as the board op log).
 - Marker texts the browser sends into the voice session as a typed user turn: `[event: start]`, `[event: time_check]`,
   `[event: handover]`, `[event: resume]`, `[event: silence_check]`, `[event: ending]`, `[event: long_answer]` (sent when
   one candidate turn runs past the round's `interrupt_after_seconds`).
