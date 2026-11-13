@@ -96,10 +96,9 @@ function Session(props: { id?: string }) {
   const stage = useRef<HTMLDivElement>(null);
   const [handle, setHandle] = useState<ImmersiveHandle | null>(null);
   const [note, setNote] = useState('');
-  const supported = typeof navigator !== 'undefined' && 'xr' in navigator;
 
   useEffect(() => {
-    if (!supported || !stage.current) return;
+    if (!stage.current) return;
     let live = true;
     let h: ImmersiveHandle | null = null;
     import('../xr/entry')
@@ -114,19 +113,24 @@ function Session(props: { id?: string }) {
       live = false;
       h?.destroy();
     };
-  }, [supported]);
+  }, []);
 
   return (
     <Page test="session" title="Live round" lede="Put on your headset and enter the room.">
       <p class="meta">
         Session <code>{props.id}</code>
       </p>
-      <div class="row">
-        <button class="btn btn-primary" data-test="enter-room" disabled={!handle} onClick={() => handle?.enter()}>
-          Enter the room
-        </button>
-      </div>
-      {!supported && <p class="meta">This browser has no WebXR. A 2D preview comes later.</p>}
+      {handle?.mode !== 'preview' && (
+        <div class="row">
+          <button class="btn btn-primary" data-test="enter-room" disabled={!handle} onClick={() => {
+              setNote('');
+              handle?.enter().catch((e: Error) => setNote(e.message));
+            }}>
+            Enter the room
+          </button>
+        </div>
+      )}
+      {handle?.mode === 'preview' && <p class="meta" data-test="preview-note">No headset here, so this is a preview of the room.</p>}
       {note && <p class="meta bad">{note}</p>}
       <div class="xr-stage" ref={stage} />
     </Page>
