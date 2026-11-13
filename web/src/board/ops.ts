@@ -399,6 +399,7 @@ export class BoardStore {
   focusAt = 0;
   /** Accepted ops whose effect fell away in the last rebuild (undo or rollback). */
   private dropped = new Set<string>();
+  private localGhosts = new Set<string>();
   private listeners = new Set<(b: Board) => void>();
 
   constructor(start: Board) {
@@ -484,10 +485,27 @@ export class BoardStore {
     this.set(dropGhost(this.board, opId));
   }
 
-  /** Replaces the pending ghost list (board.ghosts), minus any already committed. */
+  /** Replaces the server's pending ghost list (board.ghosts), minus any already committed; local suggestions stay. */
   setGhosts(ghosts: GhostOp[]): void {
     const committed = new Set(this.board.op_ids);
-    this.set({ ...this.board, ghosts: ghosts.filter((g) => !committed.has(g.op_id)) });
+    const local = this.board.ghosts.filter((g) => this.localGhosts.has(g.op_id) && !ghosts.some((x) => x.op_id === g.op_id));
+    this.set({ ...this.board, ghosts: [...ghosts, ...local].filter((g) => !committed.has(g.op_id)) });
+  }
+
+  /**
+   * Adds a suggestion made on this client (a voice statement like "that's the URL store").
+   * It shows and is accepted or dismissed like a Scribe ghost, but the server never saw it:
+   * accept it as a voice_grammar op, and dismiss it without board.ghost_reject.
+   */
+  suggest(ghost: GhostOp): void {
+    if (this.board.op_ids.includes(ghost.op_id) || this.board.ghosts.some((g) => g.op_id === ghost.op_id)) return;
+    this.localGhosts.add(ghost.op_id);
+    this.set({ ...this.board, ghosts: [...this.board.ghosts, ghost] });
+  }
+
+  /** True for a suggestion made here (see suggest). */
+  isLocalGhost(opId: string): boolean {
+    return this.localGhosts.has(opId);
   }
 
   setFocus(id: string | null, nowMs = typeof performance !== 'undefined' ? performance.now() : 0): void {

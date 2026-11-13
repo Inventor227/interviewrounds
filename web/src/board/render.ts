@@ -4,6 +4,7 @@
 // is the headset's board texture, so BoardView redraws only when something changed.
 import type { Board, BoardEdge, BoardItem, ComponentType, GhostOp } from '../shared/types';
 import type { Overlay } from './input';
+import type { GhostRing } from './ghosts';
 import type { Kit } from './kits';
 import { center, COMPONENT_NAMES, edgeMid, findItem, hasTab, itemRect, tabCenter, type Pt, type Rect } from './model';
 
@@ -1095,7 +1096,33 @@ export interface BoardViewOptions {
 export interface DrawState {
   highlight?: string | null;
   overlays?: Overlay[];
+  /** Ghost settle rings (GhostLayer.rings), drawn live. */
+  rings?: GhostRing[];
+  /** false: overlays only decide what is lifted out of the board layer; the caller draws them elsewhere. */
+  drawLive?: boolean;
 }
+
+/** A small ring at a ghost that fills over its 4 s settle. */
+export function renderGhostRing(ctx: Ctx, ring: GhostRing, pxPerCm: number): void {
+  const k = pxPerCm;
+  const r = 0.75;
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(ring.x * k, ring.y * k, r * k, 0, Math.PI * 2);
+  ctx.fillStyle = PAPER;
+  ctx.fill();
+  ctx.strokeStyle = withAlpha(ACCENT, 0.25);
+  ctx.lineWidth = Math.max(1.5, 0.18 * k);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.arc(ring.x * k, ring.y * k, r * k, -Math.PI / 2, -Math.PI / 2 + ring.progress * Math.PI * 2);
+  ctx.strokeStyle = ACCENT;
+  ctx.stroke();
+  ctx.restore();
+}
+
+/** Ring progress in 5% steps, so a settle redraws 20 times, not every frame. */
+const ringKey = (rs: readonly GhostRing[]) => rs.map((r) => `${r.op_id}:${Math.floor(r.progress * 20)}`).join(',');
 
 function defaultLayer(w: number, h: number): Layer | null {
   if (typeof OffscreenCanvas !== 'undefined') return new OffscreenCanvas(w, h);
@@ -1216,7 +1243,9 @@ export class BoardView {
   draw(board: Board, state: DrawState = {}): boolean {
     const overlays = state.overlays ?? [];
     const highlight = state.highlight ?? null;
-    const key = `${highlight ?? ''}|${overlays.map(overlayKey).join('|')}`;
+    const rings = state.rings ?? [];
+    const drawLive = state.drawLive !== false;
+    const key = `${highlight ?? ''}|${drawLive ? overlays.map(overlayKey).join('|') : overlays.flatMap((o) => (o.kind === 'drag' ? [o.id] : [])).sort().join('|')}|${drawLive ? ringKey(rings) : ''}`;
     if (board === this.lastBoard && key === this.lastKey) return false;
     this.lastBoard = board;
     this.lastKey = key;
@@ -1267,11 +1296,19 @@ export class BoardView {
     ctx.save();
     ctx.translate(-originCm.x * k, -originCm.y * k);
     if (kit && binHot) renderBin(ctx, kit, k, true);
-    for (const o of overlays) renderOverlay(ctx, board, o, kit, k, targets);
+    if (drawLive) {
+      for (const o of overlays) renderOverlay(ctx, board, o, kit, k, targets);
+      for (const r of rings) renderGhostRing(ctx, r, k);
+    }
     ctx.restore();
 
     // Dirty rect in canvas pixels: the live bounds now and last time, or everything.
-    const live = overlays.map((o) => overlayBounds(board, o, kit)).filter((r): r is Rect => r !== null);
+    const live = drawLive
+      ? [
+          ...overlays.map((o) => overlayBounds(board, o, kit)),
+          ...rings.map((r) => ({ x: r.x - 1.2, y: r.y - 1.2, w: 2.4, h: 2.4 })),
+        ].filter((r): r is Rect => r !== null)
+      : [];
     const liveNow = live.length
       ? live.reduce((a, r) => {
           const x0 = Math.min(a.x, r.x);

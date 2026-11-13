@@ -122,6 +122,19 @@ describe('BoardStore undo', () => {
     expect(store.board.focus).toBe('n1');
   });
 
+  it('keeps local suggestions when the server ghost list is replaced', () => {
+    const store = new BoardStore(emptyBoard());
+    store.suggest({ op_id: 'v1', src: 'scribe', op: 'park.add', args: { text: 'mine' } });
+    store.setGhosts([{ op_id: 'g1', src: 'scribe', op: 'park.add', args: { text: 'server' } }]);
+    expect(store.board.ghosts.map((g) => g.op_id)).toEqual(['g1', 'v1']);
+    expect(store.isLocalGhost('v1')).toBe(true);
+    expect(store.isLocalGhost('g1')).toBe(false);
+    store.setGhosts([]);
+    expect(store.board.ghosts.map((g) => g.op_id)).toEqual(['v1']);
+    store.rejectGhost('v1');
+    expect(store.board.ghosts).toEqual([]);
+  });
+
   it('dismissing a ghost logs it as rejected and drops it', () => {
     const start = emptyBoard();
     const store = new BoardStore(start);
