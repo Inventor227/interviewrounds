@@ -2,7 +2,7 @@
 // resting fingertip, then the sheet unrolling from the touch point.
 
 import { CanvasTexture, Euler, Group, Mesh, MeshBasicMaterial, PlaneGeometry, SRGBColorSpace, type Object3D, type Texture } from 'three';
-import { fallbackDesk, type DeskPose, type HeadPose, type PlacementStatus } from './placement';
+import { fallbackDesk, FINGER_PAD, type DeskPose, type HeadPose, type PlacementStatus } from './placement';
 import { SHEET_D, SHEET_TILT, SHEET_W, sheetPoint } from './seats';
 import { holdRing } from './ui/style';
 
@@ -14,6 +14,9 @@ export class PlacementView {
   private readonly ring = holdRing(0.022, '#F4F2EE');
   private unrollStart: number | null = null;
   private target: Object3D | null = null;
+  // Reused every frame while placing.
+  private readonly touchDesk: DeskPose = { origin: { x: 0, y: 0, z: 0 }, yaw: 0, deskY: 0, source: 'touch' };
+  private readonly euler = new Euler(0, 0, 0, 'YXZ');
 
   constructor() {
     this.group.name = 'placement';
@@ -26,8 +29,17 @@ export class PlacementView {
 
   /** Each frame while placing: the ghost hovers at the default spot, or under the resting fingertip. */
   update(head: HeadPose, st: PlacementStatus, nowMs: number): void {
-    const desk: DeskPose =
-      st.tip && st.progress > 0 ? { origin: { x: st.tip.x, y: st.tip.y - 0.008, z: st.tip.z }, yaw: head.yaw, deskY: st.tip.y - 0.008, source: 'touch' } : fallbackDesk(head);
+    let desk: DeskPose;
+    if (st.tip && st.progress > 0) {
+      desk = this.touchDesk;
+      desk.origin.x = st.tip.x;
+      desk.origin.y = st.tip.y - FINGER_PAD;
+      desk.origin.z = st.tip.z;
+      desk.deskY = desk.origin.y;
+      desk.yaw = head.yaw;
+    } else {
+      desk = fallbackDesk(head);
+    }
     this.poseGhost(desk);
     this.ghost.material.opacity = 0.7 + 0.2 * Math.sin(nowMs / 400) + 0.1 * st.progress;
     if (st.tip && st.progress > 0) {
@@ -70,7 +82,7 @@ export class PlacementView {
   private poseGhost(desk: DeskPose): void {
     const p = sheetPoint(desk, 0, 0, 0);
     this.ghost.position.set(p.x, p.y, p.z);
-    this.ghost.rotation.copy(new Euler(SHEET_TILT, desk.yaw, 0, 'YXZ'));
+    this.ghost.rotation.copy(this.euler.set(SHEET_TILT, desk.yaw, 0, 'YXZ'));
   }
 }
 

@@ -2,16 +2,24 @@
 //
 // An index fingertip that rests still on the desk for 0.6 s sets the desk: its height (minus the finger pad) is the
 // desk top, the tip is the near edge centre of the sheet, and the head's yaw at that moment is the facing. With no
-// touch within 6 s we fall back to a typical seated desk height below the head. Pure logic here; the world wires it
-// to hand joints, draws the ring and anchors the result.
+// touch within 6 s (wall clock) we fall back to a typical seated desk height below the head; only a rest that is at
+// least half done when the clock runs out may finish, and never past a hard cap. A desk candidate must sit in a
+// plausible band below the eyes, so a hand resting in the lap is not a desk. Pure logic here; the world wires it to
+// hand joints, draws the ring and anchors the result.
 
 import { addScaled, forwardOf, type Vec3 } from './math';
 
-/** Rest window and limits (research/06 §2.2). */
+/** Rest window and limits: a short, deliberate touch, so tracking jitter and passing hands do not count. */
 export const DWELL_MS = 600;
 export const DWELL_MAX_SPEED = 0.02; // m/s
-/** A tip must be this far below the head to count (keeps gestures near the face out). */
+/** A tip must be at least this far below the head (keeps gestures near the face out)... */
 export const DWELL_BELOW_HEAD = 0.25;
+/** ...and at most this far (a hand resting on the lap or a knee is not a desk). */
+export const DWELL_MAX_BELOW_HEAD = 0.75;
+/** A rest at least this far along when the fallback clock runs out may still finish... */
+export const HOLD_OFF_PROGRESS = 0.5;
+/** ...but the wait never runs longer than this past the fallback time. */
+export const FALLBACK_CAP_MS = 1500;
 /** The finger pad: the tip joint sits this far above the surface it rests on. */
 export const FINGER_PAD = 0.008;
 export const FALLBACK_MS = 6000;
@@ -21,7 +29,7 @@ export const FALLBACK_DESK_BELOW_HEAD = 0.45;
 export const FALLBACK_SHEET_AHEAD = 0.2;
 
 /** Jitter allowance: a resting tip may wander this far from the window centroid. */
-const DWELL_MAX_SPREAD = 0.012;
+const DWELL_MAX_SPREAD = 0.008;
 /** Another fingertip of the same hand lower than the index tip by more than this disqualifies it. */
 const LOWEST_TOLERANCE = 0.005;
 
@@ -39,7 +47,7 @@ export interface DeskDwell {
 }
 
 function sampleOk(s: DwellSample): boolean {
-  if (!(s.tip.y < s.headY - DWELL_BELOW_HEAD)) return false;
+  if (!(s.tip.y < s.headY - DWELL_BELOW_HEAD) || !(s.tip.y > s.headY - DWELL_MAX_BELOW_HEAD)) return false;
   if (s.tips) for (const o of s.tips) if (o.y < s.tip.y - LOWEST_TOLERANCE) return false;
   return true;
 }
@@ -114,8 +122,8 @@ export function restingMs(samples: readonly DwellSample[]): { ms: number; at: Ve
 }
 
 /** The resting touch, once the newest samples have rested for 0.6 s; else null. */
-export function detectDeskDwell(samples: readonly DwellSample[]): DeskDwell | null {
-  const r = restingMs(samples);
+export function detectDeskDwell(samples: readonly DwellSample[], rest = restingMs(samples)): DeskDwell | null {
+  const r = rest;
   if (r.ms < DWELL_MS || !r.at) return null;
   // Use the lowest point of the rest as the contact height (the pad presses down a little over time).
   let minY = Infinity;
@@ -174,8 +182,8 @@ export function fallbackDesk(head: HeadPose): DeskPose {
 }
 
 /**
- * Feeds hand and head poses each frame; finishes on a 0.6 s rest of either index tip, or falls back at 6 s
- * unless a rest is under way.
+ * Feeds hand and head poses each frame; finishes on a 0.6 s rest of either index tip, or falls back at 6 s unless
+ * a rest is at least half done (and never later than 6 s plus the cap).
  */
 export class DeskPlacement {
   private readonly hist: Record<'left' | 'right', DwellSample[]> = { left: [], right: [] };
@@ -195,20 +203,22 @@ export class DeskPlacement {
     let bestProgress = 0;
     let bestTip: Vec3 | null = null;
     let bestHand: 'left' | 'right' | null = null;
-    const seen = new Set<string>();
+    let seenLeft = false;
+    let seenRight = false;
     for (const h of hands) {
       if (!h.tracked) continue;
-      seen.add(h.hand);
+      if (h.hand === 'left') seenLeft = true;
+      else seenRight = true;
       const hist = this.hist[h.hand];
       hist.push({ t_ms, tip: { ...h.indexTip }, headY: head.pos.y, tips: h.tips.length ? h.tips.map((p) => ({ ...p })) : undefined });
-      // Keep a little more than the window.
-      while (hist.length > 2 && hist[0]!.t_ms < t_ms - DWELL_MS * 2) hist.shift();
-      const dwell = detectDeskDwell(hist);
+      // Keep the dwell window plus a little (the walk-back is quadratic in the samples kept).
+      while (hist.length > 2 && hist[0]!.t_ms < t_ms - DWELL_MS - 150) hist.shift();
+      const rest = restingMs(hist);
+      const dwell = detectDeskDwell(hist, rest);
       if (dwell) {
         this.result = { origin: dwell.at, yaw: head.yaw, deskY: dwell.deskY, source: 'touch', head: { ...head.pos }, hand: h.hand };
         return { state: 'done', progress: 1, tip: dwell.at, hand: h.hand, result: this.result };
       }
-      const rest = restingMs(hist);
       const p = Math.min(1, rest.ms / DWELL_MS);
       if (rest.at && (p > bestProgress || !bestTip)) {
         bestProgress = p;
@@ -216,10 +226,14 @@ export class DeskPlacement {
         bestHand = h.hand;
       }
     }
-    for (const k of ['left', 'right'] as const) if (!seen.has(k)) this.hist[k].length = 0;
+    if (!seenLeft) this.hist.left.length = 0;
+    if (!seenRight) this.hist.right.length = 0;
 
     const dwelling = bestProgress > 0;
-    if (!dwelling && t_ms - this.startMs >= this.fallbackMs) {
+    // The clock runs regardless of hand motion; only a rest at least half done may hold it, up to the cap.
+    const elapsed = t_ms - this.startMs;
+    const holding = bestProgress >= HOLD_OFF_PROGRESS && elapsed < this.fallbackMs + FALLBACK_CAP_MS;
+    if (elapsed >= this.fallbackMs && !holding) {
       this.result = fallbackDesk(head);
       return { state: 'done', progress: 1, tip: null, hand: null, result: this.result };
     }
