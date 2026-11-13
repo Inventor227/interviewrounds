@@ -37,6 +37,8 @@ pub struct AppState {
     pub orchestrator: OrchestratorOptions,
     /// Rounds, personas, prompts (`content/`).
     pub catalog: Arc<Catalog>,
+    /// Wraps background tasks of a session (meeting state updates), e.g. in the usage ledger's session scope.
+    pub task_scope: Option<crate::meeting::live::TaskScope>,
 }
 
 impl AppState {
@@ -47,6 +49,7 @@ impl AppState {
         });
         AppState {
             catalog: Arc::new(catalog),
+            task_scope: None,
             db,
             llm: Arc::new(ClaudeClient::new(&config)),
             fish: FishClient::new(&config),
@@ -55,6 +58,11 @@ impl AppState {
             orchestrator: OrchestratorOptions::default(),
             config: Arc::new(config),
         }
+    }
+
+    pub fn with_task_scope(mut self, scope: crate::meeting::live::TaskScope) -> Self {
+        self.task_scope = Some(scope);
+        self
     }
 
     pub fn with_catalog(mut self, catalog: Catalog) -> Self {

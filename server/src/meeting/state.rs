@@ -16,7 +16,7 @@ use serde_json::{Value, json};
 
 use super::{
     ConcernStatus, DecisionPower, Difficulty, MeetingPlan, MeetingSetup, Personality, TemplateId,
-    id_stem, plain,
+    WalkAway, data_block, data_rule, id_stem, plain,
 };
 use crate::claude::{
     Message, MessagesRequest, OutputConfig, SystemBlock, fallbacks_for, thinking_for,
@@ -178,6 +178,7 @@ impl MeetingState {
     /// The starting state from a prepared plan. Panelist ids are `p1`, `p2`, ... in the plan's attendee order (the
     /// session may reassign them with `set_panelists`).
     pub fn from_parts(setup: &MeetingSetup, plan: &MeetingPlan) -> MeetingState {
+        let walk = WalkAway::new(setup.walk_away.as_deref());
         let attendees: Vec<AttendeeState> = plan
             .attendees
             .iter()
@@ -219,8 +220,18 @@ impl MeetingState {
             user_role: setup.user_role.trim().to_string(),
             ask: setup.ask.clone().filter(|s| !s.trim().is_empty()),
             walk_away: setup.walk_away.clone().filter(|s| !s.trim().is_empty()),
-            key_facts: setup.key_facts.clone(),
-            notes: setup.notes.clone().filter(|s| !s.trim().is_empty()),
+            // Attendees and the state model see these; the walk away point is taken out of them.
+            key_facts: setup
+                .key_facts
+                .iter()
+                .filter(|f| !walk.hits(f))
+                .cloned()
+                .collect(),
+            notes: setup
+                .notes
+                .as_deref()
+                .map(|n| walk.drop_sentences(n))
+                .filter(|s| !s.trim().is_empty()),
             difficulty: setup.difficulty,
             user_chairs: plan.user_chairs,
             chair: if plan.user_chairs {
@@ -416,6 +427,13 @@ fn decision(
     }
 }
 
+/// The decision as it would be if the user's newest (not yet judged) words were a clear ask.
+pub fn decision_if_asked(state: &MeetingState, decision_phase_started: bool) -> Decision {
+    let mut asked = state.clone();
+    asked.ask_made = true;
+    decision(&asked, None, decision_phase_started)
+}
+
 /// What the state model returns (structured output).
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(default)]
@@ -597,19 +615,22 @@ pub fn build_update_request(
     let key_facts = if state.key_facts.is_empty() {
         "none".to_string()
     } else {
-        format!("\n{}", state.key_facts.join("\n"))
+        data_block("key_facts", &state.key_facts.join("\n"))
     };
     let vars = HashMap::from([
-        ("meeting_goal", state.goal.clone()),
-        ("user_role", state.user_role.clone()),
+        ("meeting_goal", data_block("user_text", &state.goal)),
+        ("user_role", data_block("user_text", &state.user_role)),
         (
             "ask",
-            state.ask.clone().unwrap_or_else(|| "not given".into()),
+            state
+                .ask
+                .as_deref()
+                .map(|a| data_block("user_text", a))
+                .unwrap_or_else(|| "not given".into()),
         ),
-        (
-            "walk_away",
-            state.walk_away.clone().unwrap_or_else(|| "none".into()),
-        ),
+        // The walk away point stays on the server (the scorer checks it): the state model's text reaches attendee
+        // notes, so it never sees the point.
+        ("walk_away", "none".to_string()),
         ("key_facts", key_facts),
         ("phase_id", ctx.phase_id.clone()),
         (
@@ -623,14 +644,24 @@ pub fn build_update_request(
         ),
         (
             "state_json",
-            serde_json::to_string_pretty(&state_json(state)).unwrap_or_default(),
+            data_block(
+                "meeting_state",
+                &serde_json::to_string_pretty(&state_json(state)).unwrap_or_default(),
+            ),
         ),
-        ("last_exchange", render_exchange(state, last_exchange)),
+        (
+            "last_exchange",
+            data_block("transcript", &render_exchange(state, last_exchange)),
+        ),
     ]);
     MessagesRequest {
         model: ctx.model.clone(),
         max_tokens: UPDATE_MAX_TOKENS,
-        system: vec![SystemBlock::text(fill(prompt_template, &vars))],
+        system: vec![SystemBlock::text(format!(
+            "{}\n\n{}",
+            fill(prompt_template, &vars),
+            data_rule(&["user_text", "key_facts", "meeting_state", "transcript"])
+        ))],
         messages: vec![Message::user_text(
             "Update the meeting state after the last exchange.",
         )],
@@ -656,7 +687,15 @@ pub async fn fetch_update(llm: &dyn LlmApi, req: &MessagesRequest) -> anyhow::Re
             resp.stop_reason.unwrap_or_default()
         ));
     }
-    serde_json::from_str(resp.text().trim()).context("state update reply is not a state")
+    // The parse error can quote the model's text; keep only its kind and position.
+    serde_json::from_str(resp.text().trim()).map_err(|e| {
+        anyhow!(
+            "state update reply is not a state ({:?} at {}:{})",
+            e.classify(),
+            e.line(),
+            e.column()
+        )
+    })
 }
 
 /// `state::update`: the state after the last exchange. Runs on `ctx.model` (FAST_MODEL); the session runs it in the
@@ -676,7 +715,7 @@ pub async fn update(
     Ok(apply_update(
         state,
         &raw,
-        &speakers(last_exchange),
+        last_exchange,
         ctx.decision_phase_started,
     ))
 }
@@ -692,21 +731,58 @@ pub fn speakers(turns: &[Turn]) -> Vec<String> {
     out
 }
 
-/// Applies the model's judgement to `prev` with every bound enforced. `spoke`: panelist ids that spoke in the
-/// exchange (their silence count resets; everyone else's grows by one).
+/// Concern status changes one attendee may make in one update.
+const MAX_STATUS_CHANGES: usize = 2;
+
+/// Lowercase words, for checking that a quote is really the user's.
+fn word_list(s: &str) -> Vec<String> {
+    s.split(|c: char| !c.is_alphanumeric() && c != '\'')
+        .filter(|w| !w.is_empty())
+        .map(str::to_lowercase)
+        .collect()
+}
+
+/// Whether `quote` (at least two words) appears word for word in what the user said.
+fn quoted_from(quote: &str, user_words: &[String]) -> bool {
+    let q = word_list(quote);
+    q.len() >= 2 && user_words.windows(q.len()).any(|w| w == q.as_slice())
+}
+
+/// Applies the model's judgement of `exchange` to `prev`, with every bound enforced:
+/// - stance moves one step at most and stays within -2..2;
+/// - concern ids and texts stay fixed; at most two status changes per attendee; `resolved` needs an evidence quote
+///   the user actually said (otherwise it counts as `partly`); at most one new concern per attendee;
+/// - patience stays within 0..start and resets when a concern is resolved;
+/// - the ask once made stays made; next steps are merged, not replaced;
+/// - no text the attendees will see repeats the walk away point (it is blanked);
+/// - the outcome comes from the fixed rules.
 pub fn apply_update(
     prev: &MeetingState,
     raw: &ModelUpdate,
-    spoke: &[String],
+    exchange: &[Turn],
     decision_phase_started: bool,
 ) -> MeetingState {
+    let walk = WalkAway::new(prev.walk_away.as_deref());
+    let clean = |s: &str| walk.scrub(&plain(s));
+    let spoke = speakers(exchange);
+    let user_turns = exchange
+        .iter()
+        .filter(|t| t.speaker == "candidate")
+        .count()
+        .max(1) as u32;
+    let user_words: Vec<String> = exchange
+        .iter()
+        .filter(|t| t.speaker == "candidate")
+        .flat_map(|t| word_list(&t.text))
+        .collect();
+
     let mut next = prev.clone();
     next.updates = prev.updates + 1;
     for a in &mut next.attendees {
         a.turns_silent = if spoke.contains(&a.panelist_id) {
             0
         } else {
-            a.turns_silent.saturating_add(1)
+            a.turns_silent.saturating_add(user_turns)
         };
         let Some(r) = raw
             .attendees
@@ -719,46 +795,67 @@ pub fn apply_update(
 
         // Concerns: known ids change status only; texts and ids stay as they were.
         let mut newly_resolved = false;
+        let mut changes = 0;
         for c in &mut a.concerns {
-            if let Some(rc) = r.concerns.iter().find(|rc| rc.id.trim() == c.id)
-                && let Some(status) = rc.status
+            let Some(rc) = r.concerns.iter().find(|rc| rc.id.trim() == c.id) else {
+                continue;
+            };
+            let Some(mut status) = rc.status else {
+                continue;
+            };
+            let quote = clean(&rc.evidence_quote);
+            if status == ConcernStatus::Resolved
+                && c.status != ConcernStatus::Resolved
+                && !quoted_from(&quote, &user_words)
             {
-                if status == ConcernStatus::Resolved && c.status != ConcernStatus::Resolved {
-                    newly_resolved = true;
-                }
-                if status != c.status {
-                    c.evidence_quote = plain(&rc.evidence_quote);
-                }
-                c.status = status;
+                // A resolution needs the user's own words behind it.
+                status = if c.status == ConcernStatus::Open {
+                    ConcernStatus::Partly
+                } else {
+                    c.status
+                };
             }
+            if status == c.status || changes >= MAX_STATUS_CHANGES {
+                continue;
+            }
+            changes += 1;
+            if status == ConcernStatus::Resolved {
+                newly_resolved = true;
+            }
+            c.evidence_quote = quote;
+            c.status = status;
         }
         // At most one new concern per turn, raised by the user, open.
         if a.concerns.len() < MAX_CONCERNS
             && let Some(new) = r.concerns.iter().find(|rc| {
-                !rc.text.trim().is_empty()
+                !clean(&rc.text).is_empty()
                     && !a.concerns.iter().any(|c| {
                         c.id == rc.id.trim() || c.text.eq_ignore_ascii_case(rc.text.trim())
                     })
             })
         {
-            let stem = id_stem(&a.name);
+            let stem = a
+                .concerns
+                .first()
+                .and_then(|c| c.id.rsplit_once('_').map(|(s, _)| s.to_string()))
+                .unwrap_or_else(|| id_stem(&a.name));
             let mut n = a.concerns.len() + 1;
             while a.concerns.iter().any(|c| c.id == format!("{stem}_{n}")) {
                 n += 1;
             }
             a.concerns.push(ConcernState {
                 id: format!("{stem}_{n}"),
-                text: plain(&new.text),
+                text: clean(&new.text),
                 status: ConcernStatus::Open,
                 evidence_quote: String::new(),
             });
         }
 
-        // Stance: one step at most per user turn, within -2..2.
+        // Stance: one step at most per update, within -2..2.
         let wanted = r.stance.clamp(-2, 2) as i8;
         let stance = wanted.clamp(a.stance - 1, a.stance + 1).clamp(-2, 2);
         a.stance_reason = if stance != a.stance {
-            plain(&r.stance_reason)
+            clean(&r.stance_reason)
         } else {
             String::new()
         };
@@ -773,40 +870,49 @@ pub fn apply_update(
     }
 
     next.ask_made = prev.ask_made || raw.ask_made;
-    if !raw.ask_text.trim().is_empty() {
-        next.ask_text = plain(&raw.ask_text);
+    let ask_text = clean(&raw.ask_text);
+    if !ask_text.is_empty() {
+        next.ask_text = ask_text;
     }
-    if !raw.next_steps.is_empty() {
-        next.next_steps = raw
-            .next_steps
-            .iter()
-            .filter(|s| !s.action.trim().is_empty())
-            .take(MAX_NEXT_STEPS)
-            .map(|s| NextStep {
-                owner: plain(&s.owner),
-                action: plain(&s.action),
-                due: plain(&s.due),
-            })
-            .collect();
+    // Next steps: the model's list first, then earlier ones it left out.
+    let mut steps: Vec<NextStep> = raw
+        .next_steps
+        .iter()
+        .map(|s| NextStep {
+            owner: clean(&s.owner),
+            action: clean(&s.action),
+            due: clean(&s.due),
+        })
+        .filter(|s| !s.action.is_empty())
+        .collect();
+    for old in &prev.next_steps {
+        if !steps.iter().any(|s| {
+            s.action.eq_ignore_ascii_case(&old.action) && s.owner.eq_ignore_ascii_case(&old.owner)
+        }) {
+            steps.push(old.clone());
+        }
     }
+    steps.truncate(MAX_NEXT_STEPS);
+    next.next_steps = steps;
     next.user_contradiction = raw
         .user_contradiction
         .as_deref()
-        .map(plain)
+        .map(clean)
         .filter(|s| !s.is_empty());
-    next.below_walk_away = if next.walk_away.is_some() {
-        raw.below_walk_away.or(prev.below_walk_away)
-    } else {
-        None
-    };
+    // Checked against the walk away point by the scorer, which keeps it server only.
+    next.below_walk_away = None;
 
-    // Next speaker: the model's pick when it names an attendee, unless someone has been silent too long.
-    let silent = next
-        .attendees
-        .iter()
-        .filter(|a| a.turns_silent > MAX_SILENT_TURNS)
-        .max_by_key(|a| a.turns_silent)
-        .map(|a| a.name.clone());
+    // Next speaker: the model's pick when it names an attendee. Someone silent too long is brought in, except when
+    // the user runs the meeting (that is the user's call).
+    let silent = (!next.user_chairs)
+        .then(|| {
+            next.attendees
+                .iter()
+                .filter(|a| a.turns_silent > MAX_SILENT_TURNS)
+                .max_by_key(|a| a.turns_silent)
+                .map(|a| a.name.clone())
+        })
+        .flatten();
     let named = next.attendee(&raw.next_speaker).map(|a| a.name.clone());
     let impatient = next
         .attendees
@@ -821,14 +927,16 @@ pub fn apply_update(
     next.next_speaker_instruction = if silent.is_some() && silent != named {
         "Ask your most important open question.".into()
     } else {
-        plain(&raw.next_speaker_instruction)
+        clean(&raw.next_speaker_instruction)
     };
 
-    next.decision = decision(
-        &next,
-        raw.decision_guidance.as_ref(),
-        decision_phase_started,
-    );
+    let guidance = raw.decision_guidance.as_ref().map(|d| ModelDecision {
+        outcome: d.outcome,
+        reason: clean(&d.reason),
+        conditions: d.conditions.iter().map(|c| clean(c)).collect(),
+        missing_info: d.missing_info.iter().map(|c| clean(c)).collect(),
+    });
+    next.decision = decision(&next, guidance.as_ref(), decision_phase_started);
     next
 }
 

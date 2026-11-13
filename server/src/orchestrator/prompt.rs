@@ -296,9 +296,17 @@ pub fn perspective(
     if state.panel.len() < 2 {
         return messages;
     }
+    debug_assert!(
+        state
+            .history
+            .iter()
+            .enumerate()
+            .all(|(i, m)| m.role != Role::Assistant || state.message_owners.contains_key(&i)),
+        "every assistant message must be added with SessionState::push_message"
+    );
     let other = |i: usize| {
         state
-            .assistant_speakers
+            .message_owners
             .get(&i)
             .filter(|p| p.as_str() != panelist_id)
     };
@@ -306,11 +314,15 @@ pub fn perspective(
     let mut out: Vec<Message> = Vec::with_capacity(messages.len());
     for (i, m) in messages.iter().enumerate() {
         match m.role {
+            // Another panelist's note (it held their private state), or an untagged note right before another
+            // panelist's reply.
             Role::System
-                if messages
-                    .get(i + 1)
-                    .is_some_and(|n| n.role == Role::Assistant)
-                    && other(i + 1).is_some() => {}
+                if other(i).is_some()
+                    || (!state.message_owners.contains_key(&i)
+                        && messages
+                            .get(i + 1)
+                            .is_some_and(|n| n.role == Role::Assistant)
+                        && other(i + 1).is_some()) => {}
             Role::Assistant => match other(i) {
                 Some(speaker) => {
                     for b in &m.content {

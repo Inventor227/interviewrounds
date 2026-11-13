@@ -6,17 +6,19 @@
 //! `orchestrator::prompt::perspective`), never as its own turns.
 
 use std::collections::HashMap;
-use std::sync::Arc;
-use std::time::Instant;
+use std::sync::{Arc, Weak};
+use std::time::{Duration, Instant};
 
 use anyhow::anyhow;
-use tokio::sync::Mutex;
+use futures::future::BoxFuture;
+use tokio::sync::{Mutex, Notify};
+use tokio::task::JoinHandle;
 
-use super::ConcernStatus;
 use super::state::{
-    AttendeeState, MeetingState, UpdateContext, apply_update, build_update_request, fetch_update,
-    speakers, stance_words,
+    AttendeeState, MeetingState, UpdateContext, apply_update, build_update_request,
+    decision_if_asked, fetch_update, stance_words,
 };
+use super::{ConcernStatus, data_block, data_rule};
 use crate::content::{Catalog, Persona, RoundConfig};
 use crate::orchestrator::prompt::fill;
 use crate::orchestrator::{LlmApi, SessionState, Turn};
@@ -162,13 +164,13 @@ pub fn render_system(
         ("meeting.title", meeting.title.clone()),
         ("meeting.user_name", "the user".into()),
         ("meeting.user_role", meeting.user_role.clone()),
-        ("meeting.goal", meeting.goal.clone()),
+        ("meeting.goal", data_block("user_facts", &meeting.goal)),
         (
             "meeting.context",
             if context.is_empty() {
                 "none given".into()
             } else {
-                context.join("; ")
+                data_block("user_facts", &context.join("\n"))
             },
         ),
         (
@@ -216,6 +218,7 @@ pub fn render_system(
     {
         parts.push(format!("## user_chairs\n{s}"));
     }
+    parts.push(data_rule(&["user_facts"]));
     Ok(fill(&parts.join("\n\n"), &vars))
 }
 
@@ -312,7 +315,9 @@ pub fn turn_parts(
                 meeting.ask_text
             ));
         }
-    } else if clock.decision_started || clock.remaining_s < DECISION_SECONDS {
+    } else if !meeting.user_chairs
+        && (clock.decision_started || clock.remaining_s < DECISION_SECONDS)
+    {
         notes.push("The user has not made a clear ask yet.".into());
     }
 
@@ -348,9 +353,20 @@ pub fn turn_parts(
     if is_approver
         && (clock.decision_started || clock.remaining_s < DECISION_SECONDS || meeting.ask_made)
     {
-        let d = &meeting.decision;
+        // The user's newest words are not judged yet (the state follows confirmed turns), so when no ask is on
+        // record the decision is given for the case that those words were the ask.
+        let if_asked;
+        let (d, lead) = if meeting.ask_made {
+            (&meeting.decision, "If you are asked for a decision, it is")
+        } else {
+            if_asked = decision_if_asked(meeting, clock.decision_started);
+            (
+                &if_asked,
+                "If the user's last words were a clear ask for a decision, your decision is",
+            )
+        };
         let mut line = format!(
-            "If you are asked for a decision, it is: {}. Reason: {}",
+            "{lead}: {}. Reason: {}",
             d.outcome.words(),
             d.reason.trim_end_matches('.')
         );
@@ -364,6 +380,13 @@ pub fn turn_parts(
             ));
         }
         line.push_str(". Say it in your own words, in one or two sentences.");
+        if !meeting.ask_made {
+            line.push_str(if meeting.user_chairs {
+                " If they have not asked yet, answer as yourself and do not decide."
+            } else {
+                " If they have not said what they want, do not decide yet."
+            });
+        }
         notes.push(line);
     }
 
@@ -464,32 +487,108 @@ pub fn ending_note(meeting: &MeetingState, panelist_id: &str) -> Option<String> 
     }
 }
 
-/// One background state update: the state, the exchange it judges and where the meeting is.
+/// How long a decision turn waits for an update still running.
+pub const DECISION_WAIT: Duration = Duration::from_millis(1500);
+/// How long the end of a session waits for the last update.
+pub const DRAIN_WAIT: Duration = Duration::from_secs(4);
+/// The longest one state update may take.
+const UPDATE_TIMEOUT: Duration = Duration::from_secs(20);
+/// The most turns one update judges (several confirmed turns can be judged together).
+const MAX_EXCHANGE_TURNS: usize = 10;
+
+/// Runs a spawned task inside the caller's context, e.g. the usage ledger's session scope:
+/// `|session_id, fut| Box::pin(usage::LLM_SESSION.scope(uuid, fut))`.
+pub type TaskScope =
+    Arc<dyn Fn(String, BoxFuture<'static, ()>) -> BoxFuture<'static, ()> + Send + Sync>;
+
+/// The background state updates of one session. One runs at a time; requests made while one runs are coalesced
+/// into the next, which judges every confirmed turn since the last applied update. Each run carries a sequence
+/// number; a result is discarded when the state moved on under it or the session closed.
+#[derive(Debug, Default)]
+pub struct Updates {
+    /// Sequence number of the newest request (one per confirmed user turn).
+    pub requested: u64,
+    /// Requests up to this number are done (applied, discarded or failed).
+    pub finished: u64,
+    /// The run in flight.
+    pub in_flight: Option<u64>,
+    /// Turns (`SessionState::turns`) already judged.
+    pub judged_turns: usize,
+    /// No more runs; late results are dropped.
+    pub closed: bool,
+    pub wake: Arc<Notify>,
+    pub runner: Option<JoinHandle<()>>,
+    /// Results applied and discarded (stale), for tests and logs.
+    pub applied: u64,
+    pub discarded: u64,
+}
+
+impl Updates {
+    /// A confirmed user turn: judge it (soon).
+    pub fn request(&mut self) {
+        if self.closed {
+            return;
+        }
+        self.requested += 1;
+        self.wake.notify_one();
+    }
+
+    /// Nothing is running or waiting.
+    pub fn settled(&self) -> bool {
+        self.in_flight.is_none() && self.finished >= self.requested
+    }
+
+    /// Stops the runner; results still in flight are dropped.
+    pub fn close(&mut self) {
+        self.closed = true;
+        self.wake.notify_one();
+        if let Some(h) = self.runner.take() {
+            h.abort();
+        }
+    }
+}
+
+impl Drop for Updates {
+    fn drop(&mut self) {
+        self.close();
+    }
+}
+
+/// One state update: what it judges and the state it was built on.
 #[derive(Clone, Debug)]
 pub struct UpdateJob {
+    pub seq: u64,
     pub state: MeetingState,
     pub exchange: Vec<Turn>,
     pub ctx: UpdateContext,
+    /// `judged_turns` once applied.
+    pub turns_end: usize,
+    /// `MeetingState::updates` when built; a result for another value is stale.
+    pub base_updates: u32,
 }
 
-/// The update to run after the user's newest words: the last attendee line before them and the words themselves.
-/// None outside meetings or when the newest turn is not the user's.
-pub fn update_job(st: &SessionState, now: Instant) -> Option<UpdateJob> {
+/// The next update: every user turn not judged yet, after the attendee line that came before the first of them.
+/// None outside meetings or when no user turn waits.
+pub fn next_job(st: &SessionState, seq: u64, now: Instant) -> Option<UpdateJob> {
     let meeting = st.meeting.as_ref()?;
-    let user = st.turns.iter().rposition(|t| t.speaker == "candidate")?;
-    if st.turns[user + 1..].iter().any(|t| t.speaker != "app") {
-        return None;
-    }
-    let mut exchange: Vec<Turn> = Vec::new();
-    if let Some(prev) = st.turns[..user]
+    let from = st.meeting_updates.judged_turns.min(st.turns.len());
+    let first_user = from
+        + st.turns[from..]
+            .iter()
+            .position(|t| t.speaker == "candidate")?;
+    let last_user = st.turns.iter().rposition(|t| t.speaker == "candidate")?;
+    let start = st.turns[..first_user]
         .iter()
-        .rev()
-        .find(|t| t.speaker != "candidate" && t.speaker != "app")
-    {
-        exchange.push(prev.clone());
-    }
-    exchange.push(st.turns[user].clone());
+        .rposition(|t| t.speaker != "candidate" && t.speaker != "app")
+        .unwrap_or(first_user);
+    let start = start.max((last_user + 1).saturating_sub(MAX_EXCHANGE_TURNS));
+    let exchange: Vec<Turn> = st.turns[start..=last_user]
+        .iter()
+        .filter(|t| t.speaker != "app")
+        .cloned()
+        .collect();
     Some(UpdateJob {
+        seq,
         state: meeting.clone(),
         exchange,
         ctx: UpdateContext {
@@ -498,56 +597,179 @@ pub fn update_job(st: &SessionState, now: Instant) -> Option<UpdateJob> {
             minutes_left: st.round_minutes_left(now),
             decision_phase_started: decision_started(&st.round, st.phase_idx),
         },
+        turns_end: last_user + 1,
+        base_updates: meeting.updates,
     })
 }
 
-/// Runs a state update off the voice path. The result is bounded against the state as it is when the reply
-/// arrives (another update may have landed meanwhile) and shows up in the next turn's note.
-pub fn spawn_update(
+/// Starts the session's update runner if it has none (idempotent). Called by the live endpoint on each turn of a
+/// meeting; the commit of a confirmed user turn requests the updates (`Updates::request`).
+pub fn ensure_runner(
+    st: &mut SessionState,
+    session: &Arc<Mutex<SessionState>>,
     llm: Arc<dyn LlmApi>,
     catalog: Arc<Catalog>,
-    session: Arc<Mutex<SessionState>>,
-    job: UpdateJob,
-) -> tokio::task::JoinHandle<()> {
-    tokio::spawn(async move {
+    scope: Option<&TaskScope>,
+) {
+    if st.meeting.is_none() || st.meeting_updates.runner.is_some() || st.meeting_updates.closed {
+        return;
+    }
+    let fut: BoxFuture<'static, ()> = Box::pin(run_updates(
+        Arc::downgrade(session),
+        st.meeting_updates.wake.clone(),
+        llm,
+        catalog,
+    ));
+    let fut = match scope {
+        Some(scope) => scope(st.id.clone(), fut),
+        None => fut,
+    };
+    st.meeting_updates.runner = Some(tokio::spawn(fut));
+}
+
+async fn run_updates(
+    session: Weak<Mutex<SessionState>>,
+    wake: Arc<Notify>,
+    llm: Arc<dyn LlmApi>,
+    catalog: Arc<Catalog>,
+) {
+    let Some(template) = catalog.prompt("meeting-state").map(str::to_string) else {
+        tracing::warn!("content has no prompts/meeting-state.md; meeting state not updated");
+        return;
+    };
+    loop {
+        let job = {
+            let Some(handle) = session.upgrade() else {
+                return;
+            };
+            let mut st = handle.lock().await;
+            let u = &st.meeting_updates;
+            if u.closed {
+                return;
+            }
+            if u.finished >= u.requested {
+                None
+            } else {
+                let seq = u.requested;
+                match next_job(&st, seq, Instant::now()) {
+                    Some(job) => {
+                        st.meeting_updates.in_flight = Some(seq);
+                        Some(job)
+                    }
+                    None => {
+                        st.meeting_updates.finished = seq;
+                        None
+                    }
+                }
+            }
+        };
+        let Some(job) = job else {
+            wake.notified().await;
+            continue;
+        };
+
         let started = Instant::now();
-        let Some(template) = catalog.prompt("meeting-state") else {
-            tracing::warn!("content has no prompts/meeting-state.md; meeting state not updated");
+        let req = build_update_request(&template, &job.state, &job.exchange, &job.ctx);
+        let result = tokio::time::timeout(UPDATE_TIMEOUT, fetch_update(llm.as_ref(), &req)).await;
+
+        let Some(handle) = session.upgrade() else {
             return;
         };
-        let req = build_update_request(template, &job.state, &job.exchange, &job.ctx);
-        let raw = match tokio::time::timeout(
-            std::time::Duration::from_secs(20),
-            fetch_update(llm.as_ref(), &req),
-        )
-        .await
-        {
+        let mut st = handle.lock().await;
+        st.meeting_updates.in_flight = None;
+        if st.meeting_updates.closed {
+            return;
+        }
+        st.meeting_updates.finished = st.meeting_updates.finished.max(job.seq);
+        let session_id = st.id.clone();
+        let raw = match result {
             Ok(Ok(raw)) => raw,
             Ok(Err(e)) => {
-                tracing::warn!(error = %format!("{e:#}"), "meeting state update failed");
-                return;
+                tracing::warn!(session_id = %session_id, error = %e, "meeting state update failed");
+                continue;
             }
             Err(_) => {
-                tracing::warn!("meeting state update timed out");
-                return;
+                tracing::warn!(session_id = %session_id, "meeting state update timed out");
+                continue;
             }
         };
-        let mut st = session.lock().await;
-        let session_id = st.id.clone();
+        let stale = st
+            .meeting
+            .as_ref()
+            .is_none_or(|m| m.updates != job.base_updates);
+        if stale {
+            st.meeting_updates.discarded += 1;
+            tracing::info!(session_id = %session_id, seq = job.seq, "stale meeting state update discarded");
+            continue;
+        }
+        let decision_started = job.ctx.decision_phase_started;
         if let Some(current) = st.meeting.as_mut() {
-            *current = apply_update(
-                current,
-                &raw,
-                &speakers(&job.exchange),
-                job.ctx.decision_phase_started,
-            );
-            tracing::info!(
+            *current = apply_update(current, &raw, &job.exchange, decision_started);
+        }
+        st.meeting_updates.judged_turns = st.meeting_updates.judged_turns.max(job.turns_end);
+        st.meeting_updates.applied += 1;
+        tracing::info!(
+            session_id = %session_id,
+            seq = job.seq,
+            update_ms = started.elapsed().as_millis() as u64,
+            "meeting state updated"
+        );
+        if let Some(m) = st.meeting.as_ref() {
+            tracing::debug!(
                 session_id = %session_id,
-                update_ms = started.elapsed().as_millis() as u64,
-                outcome = current.decision.outcome.as_str(),
-                next = current.next_speaker.as_deref().unwrap_or(""),
-                "meeting state updated"
+                outcome = m.decision.outcome.as_str(),
+                next = m.next_speaker.as_deref().unwrap_or(""),
+                "meeting state"
             );
         }
-    })
+    }
+}
+
+/// Waits (at most `limit`) until no state update is running or waiting. True when settled.
+pub async fn wait_settled(session: &Arc<Mutex<SessionState>>, limit: Duration) -> bool {
+    let deadline = tokio::time::Instant::now() + limit;
+    loop {
+        {
+            let st = session.lock().await;
+            if st.meeting.is_none()
+                || st.meeting_updates.closed
+                || st.meeting_updates.runner.is_none()
+                || st.meeting_updates.settled()
+            {
+                return true;
+            }
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return false;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+}
+
+/// Whether this panelist's turn is the one that may state or call for the decision while an update is still
+/// running (then the turn waits up to `DECISION_WAIT` for it).
+pub fn decision_wait_needed(st: &SessionState, panelist_id: &str, now: Instant) -> bool {
+    let Some(m) = st.meeting.as_ref() else {
+        return false;
+    };
+    if st.meeting_updates.settled() || st.meeting_updates.runner.is_none() {
+        return false;
+    }
+    let clock = Clock::of(st, now);
+    let due = clock.decision_started || clock.remaining_s < DECISION_SECONDS || m.ask_made;
+    let me = m.by_panelist(panelist_id).map(|a| a.name.as_str());
+    let decides =
+        m.approver().map(|a| a.name.as_str()) == me || (!m.user_chairs && m.chair.as_deref() == me);
+    due && decides
+}
+
+/// At session end: lets the last update land (at most `limit`), then closes the runner so nothing changes the
+/// final state after it is read.
+pub async fn drain(session: &Arc<Mutex<SessionState>>, limit: Duration) {
+    let settled = wait_settled(session, limit).await;
+    let mut st = session.lock().await;
+    if !settled {
+        tracing::warn!(session_id = %st.id, "meeting state update still running at the end; dropped");
+    }
+    st.meeting_updates.close();
 }

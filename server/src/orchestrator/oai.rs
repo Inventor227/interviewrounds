@@ -446,6 +446,24 @@ fn turn_stream(
             return;
         }
 
+        // Meetings: the state update runner (it judges each confirmed user turn), and a decision turn waits briefly
+        // for an update still running so the decision follows the newest state.
+        let decision_wait = {
+            let mut st = session.lock().await;
+            crate::meeting::live::ensure_runner(
+                &mut st,
+                &session,
+                app.llm.clone(),
+                app.catalog.clone(),
+                app.task_scope.as_ref(),
+            );
+            let panelist = st.resolve_panelist(panelist_req.as_deref());
+            crate::meeting::live::decision_wait_needed(&st, &panelist, Instant::now())
+        };
+        if decision_wait {
+            crate::meeting::live::wait_settled(&session, crate::meeting::live::DECISION_WAIT).await;
+        }
+
         // The panelist first: only its own parked replies are settled against its own Fish transcript.
         let (panelist, handover_line, input, repeat_only, draft, live) = {
             let mut st = session.lock().await;
@@ -520,12 +538,6 @@ fn turn_stream(
         let mut req = {
             let mut st = session.lock().await;
             st.record_user(&mut draft, repeat_only, Instant::now());
-            // Meetings: judge what the user just said in the background; the next turn's note carries the result.
-            if !repeat_only && input.speech().is_some()
-                && let Some(job) = crate::meeting::live::update_job(&st, Instant::now())
-            {
-                crate::meeting::live::spawn_update(app.llm.clone(), app.catalog.clone(), session.clone(), job);
-            }
             request_for_draft(&st, &panelist, &draft)
         };
         guard.draft = Some(draft.clone());

@@ -270,9 +270,12 @@ pub struct SessionState {
     pub unanswered: HashMap<String, String>,
     /// Dev voice spike only: this many next replies are sent empty (to observe the voice platform).
     pub dev_empty_replies: u8,
-    /// Which panelist spoke each assistant message of `history` (by index). With two or more panelists, each one
-    /// sees the others' lines as "Name said: ..." user-side notes, never as its own turns.
-    pub assistant_speakers: HashMap<usize, String>,
+    /// Which panelist each assistant message and system note of `history` belongs to (by index). With two or more
+    /// panelists, each one sees the others' lines as "Name said: ..." user-side notes, never as its own turns, and
+    /// never sees their notes.
+    pub message_owners: HashMap<usize, String>,
+    /// Background meeting state updates: one per confirmed user turn, one at a time.
+    pub meeting_updates: crate::meeting::live::Updates,
 }
 
 impl SessionState {
@@ -435,26 +438,36 @@ impl SessionState {
             early_confirm: HashMap::new(),
             unanswered: HashMap::new(),
             dev_empty_replies: 0,
-            assistant_speakers: HashMap::new(),
+            message_owners: HashMap::new(),
+            meeting_updates: Default::default(),
         })
     }
 
-    /// Appends to the history, remembering which panelist spoke an assistant message.
+    /// Appends to the history, remembering which panelist an assistant message or system note belongs to. Every
+    /// assistant message must go through here (R28 perspective).
     pub fn push_message(&mut self, panelist_id: &str, message: Message) {
-        if message.role == Role::Assistant {
-            self.assistant_speakers
+        if matches!(message.role, Role::Assistant | Role::System) {
+            self.message_owners
                 .insert(self.history.len(), panelist_id.to_string());
         }
         self.history.push(message);
     }
 
     /// Meetings the user chairs: no attendee moves the phases, so they follow the schedule.
-    pub fn sync_meeting_phase(&mut self, now: Instant) {
-        if self.meeting.as_ref().is_some_and(|m| m.user_chairs) {
-            let elapsed_min = self.elapsed_ms(now) as f64 / 60_000.0;
-            let due = crate::meeting::live::scheduled_phase(&self.round, elapsed_min);
-            self.phase_idx = self.phase_idx.max(due);
+    /// When the phase moves, the browser gets a `round.state` (returned and broadcast).
+    pub fn sync_meeting_phase(&mut self, now: Instant) -> Option<ServerEvent> {
+        if !self.meeting.as_ref().is_some_and(|m| m.user_chairs) {
+            return None;
         }
+        let elapsed_min = self.elapsed_ms(now) as f64 / 60_000.0;
+        let due = crate::meeting::live::scheduled_phase(&self.round, elapsed_min);
+        if due <= self.phase_idx {
+            return None;
+        }
+        self.phase_idx = due;
+        let ev = ServerEvent::RoundState(self.round_state(now));
+        let _ = self.events.send(ev.clone());
+        Some(ev)
     }
 
     pub fn panelist(&self, id: &str) -> Option<&Panelist> {
@@ -904,7 +917,9 @@ impl SessionState {
             for m in &mut messages {
                 m.content.iter_mut().for_each(|c| c.set_cache_control(None));
             }
-            self.history.extend(messages);
+            for m in messages {
+                self.push_message(&panelist, m);
+            }
             for m in extra {
                 self.push_message(&panelist, m);
             }
@@ -945,6 +960,11 @@ impl SessionState {
             UserInput::Event(super::markers::EventKind::Handover)
         ) {
             self.floor = panelist.clone();
+        }
+
+        // A meeting judges each confirmed user turn in the background (the reply to it was played).
+        if self.meeting.is_some() && draft.input.speech().is_some() {
+            self.meeting_updates.request();
         }
 
         // No subscriber (no socket yet) is fine.
@@ -1053,6 +1073,8 @@ impl Registry {
     ) -> Option<(Arc<Mutex<SessionState>>, Vec<ServerEvent>)> {
         let handle = self.get(id)?;
         let events = handle.lock().await.flush_provisional();
+        // The last confirmed turn's meeting update lands (bounded) before the final state is read.
+        crate::meeting::live::drain(&handle, crate::meeting::live::DRAIN_WAIT).await;
         self.remove(id);
         Some((handle, events))
     }
