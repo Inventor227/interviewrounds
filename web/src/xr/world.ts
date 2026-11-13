@@ -386,7 +386,7 @@ export async function createXRApp(root: HTMLElement, opts: XRAppOptions): Promis
     reset: () => {
       placing = null;
       placementView.group.visible = false;
-      anchors.clear();
+      anchors.reset();
       room.setAnchorOffset(new Matrix4());
       if (mode === 'ar') room.root.visible = false;
       if (ui.status.group.parent === scene) {
@@ -405,6 +405,8 @@ export async function createXRApp(root: HTMLElement, opts: XRAppOptions): Promis
     room.root.visible = true;
     placementView.finish(room.sheet, now);
     ui.hideStatus();
+    // Back in a paused round (the resume path): keep the Resume card up.
+    if (ui.paused) ui.setStatus('paused');
     if (desk.source === 'fallback') {
       ui.layoutHint(headPose());
       ui.showHint('No desk? We set one up for you.', now, 6000);
@@ -593,6 +595,8 @@ export async function createXRApp(root: HTMLElement, opts: XRAppOptions): Promis
   };
   const onSessionEnd = () => {
     selects.detach();
+    left.tracked = false;
+    right.tracked = false;
     lifecycle.sessionEnded();
     governor = null;
     targetFps = null;

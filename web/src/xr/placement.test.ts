@@ -90,8 +90,8 @@ describe('DeskPlacement', () => {
     expect(s.result!.source).toBe('fallback');
   });
 
-  it('a_resting_hand_in_the_lap_is_not_a_desk', () => {
-    // Below headY - 0.75 (a lap or a knee): never a desk candidate, so the fallback wins.
+  it('a_resting_hand_below_the_desk_band_is_not_a_desk', () => {
+    // Below headY - 0.75 (a knee, a low lap): never a desk candidate, so the fallback wins.
     const p = new DeskPlacement(0);
     let s = p.update(0, head, []);
     const tip = { x: 0.1, y: HEAD_Y - 0.8, z: -0.3 };
@@ -101,6 +101,12 @@ describe('DeskPlacement', () => {
     }
     expect(s.result!.source).toBe('fallback');
     expect(detectDeskDwell(track(700, 0, tip))).toBeNull();
+  });
+
+  it('a_rest_on_the_thigh_inside_the_band_is_accepted_as_documented', () => {
+    // Accepted limit of the 0.25 to 0.75 m band: a seated thigh about 0.6 m below the eyes can still become the desk.
+    // The prompt asks for the desk, and placement can be redone; checked on device.
+    expect(detectDeskDwell(track(700, 0, { x: 0.1, y: HEAD_Y - 0.6, z: -0.3 }))).not.toBeNull();
   });
 
   it('a_real_dwell_past_the_timer_still_wins', () => {

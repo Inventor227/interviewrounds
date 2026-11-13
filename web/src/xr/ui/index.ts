@@ -118,6 +118,11 @@ export class RoundUI {
     this.brief.group.visible = on && this.state?.brief != null && !!this.state.brief.question;
   }
 
+  /** The round is paused (as last set by setRoundState). */
+  get paused(): boolean {
+    return this.state?.status === 'paused';
+  }
+
   get chromeVisible(): boolean {
     return this.chrome;
   }

@@ -145,6 +145,12 @@ export class AnchorTracker {
     if (this.cur) safeDelete(this.cur.anchor);
     this.cur = null;
   }
+
+  /** Session over: drop the anchor and invalidate any createAnchor still in flight. */
+  reset(): void {
+    this.clear();
+    this.gen++;
+  }
 }
 
 function safeDelete(a: AnchorLike): void {

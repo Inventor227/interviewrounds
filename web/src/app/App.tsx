@@ -122,7 +122,10 @@ function Session(props: { id?: string }) {
       </p>
       {handle?.mode !== 'preview' && (
         <div class="row">
-          <button class="btn btn-primary" data-test="enter-room" disabled={!handle} onClick={() => handle?.enter().catch((e: Error) => setNote(e.message))}>
+          <button class="btn btn-primary" data-test="enter-room" disabled={!handle} onClick={() => {
+              setNote('');
+              handle?.enter().catch((e: Error) => setNote(e.message));
+            }}>
             Enter the room
           </button>
         </div>

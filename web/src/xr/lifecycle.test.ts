@@ -100,6 +100,16 @@ describe('AnchorTracker', () => {
     expect(t.active).toBe(false);
   });
 
+  it('an_anchor_resolving_after_a_reset_is_never_adopted', () => {
+    const t = new AnchorTracker(vi.fn());
+    const gen = t.begin();
+    t.reset(); // session ended before createAnchor resolved
+    const del = vi.fn();
+    t.adopt(gen, { anchorSpace: {} as XRSpace, delete: del }, new Float32Array(16));
+    expect(del).toHaveBeenCalled();
+    expect(t.active).toBe(false);
+  });
+
   it('a_dead_session_anchor_never_throws_per_frame', () => {
     const apply = vi.fn();
     const t = new AnchorTracker(apply);
