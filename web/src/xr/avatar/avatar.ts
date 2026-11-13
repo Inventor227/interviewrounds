@@ -207,6 +207,11 @@ export class Avatar {
     return new Avatar(entry, gltf.scene, clips, opts);
   }
 
+  /** Wraps an already loaded model (for example from an asset cache) and its clips. */
+  static fromModel(entry: AvatarManifestEntry, model: Object3D, clips: AnimationClip[], opts: AvatarOptions = {}): Avatar {
+    return new Avatar(entry, model, clips, opts);
+  }
+
   get mode(): AvatarMode {
     return this._mode;
   }
@@ -314,7 +319,9 @@ export class Avatar {
 
     // Clips.
     this.scheduleClips(dt);
+    this.rig.restore();
     this.mixer.update(dt);
+    this.rig.capture();
 
     // Gaze target in the root frame.
     this.rig.begin();

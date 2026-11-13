@@ -68,6 +68,9 @@ export class Rig {
   private readonly hSide = new Vector3();
   /** Eye midpoint in the avatar root's frame, updated by applyEyes. */
   readonly eyeCenter = new Vector3();
+  /** Bones the procedural layers rotate, with their pose before that (see restore/capture). */
+  private readonly touched: Bone[] = [];
+  private readonly base: Quaternion[] = [];
 
   constructor(
     private readonly root: Object3D,
@@ -94,6 +97,12 @@ export class Rig {
     };
     this.armL = arm('L');
     this.armR = arm('R');
+    for (const b of [head, this.armL?.upper, this.armL?.fore, this.armR?.upper, this.armR?.fore]) {
+      if (b) {
+        this.touched.push(b);
+        this.base.push(b.quaternion.clone());
+      }
+    }
 
     // Bind pose: the head faces the avatar's forward. Express the root axes in head-local space.
     root.updateWorldMatrix(true, true);
@@ -105,6 +114,19 @@ export class Rig {
     this.hUp.copy(Y).applyQuaternion(qa);
     this.hSide.copy(X).applyQuaternion(qa);
     this.measureEyes();
+  }
+
+  /**
+   * Undoes last frame's procedural rotations. Call before the mixer: bones a clip animates are overwritten anyway,
+   * but bones without a track would otherwise accumulate the extra rotations frame after frame.
+   */
+  restore(): void {
+    for (let i = 0; i < this.touched.length; i++) this.touched[i]!.quaternion.copy(this.base[i]!);
+  }
+
+  /** Records the clip pose (after the mixer) that restore() returns to. */
+  capture(): void {
+    for (let i = 0; i < this.touched.length; i++) this.base[i]!.copy(this.touched[i]!.quaternion);
   }
 
   /** Call once per frame before the apply* methods: caches the root's world rotation. */
