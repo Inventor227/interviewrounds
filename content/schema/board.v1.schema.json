@@ -1,0 +1,492 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rounds.dijmo.com/schema/board.v1.schema.json",
+  "title": "Board",
+  "description": "One board per round. Units are board centimetres, origin top-left, x to the right, y down. Ops in $defs/board_op change it; the apply rules are in docs/protocol.md (Board ops).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "round", "rev", "size", "brief", "items", "edges", "code", "meeting", "focus", "ghosts", "op_ids"],
+  "properties": {
+    "schema": { "const": "ir.board.v1" },
+    "round": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "type", "question_id", "language"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "description": "Session id of the round this board belongs to." },
+        "type": { "$ref": "#/$defs/board_kit" },
+        "question_id": { "type": ["string", "null"] },
+        "language": { "type": ["string", "null"], "description": "Coding rounds only, e.g. \"python\"." }
+      }
+    },
+    "rev": { "type": "integer", "minimum": 0, "description": "Increases by 1 on every committed op." },
+    "size": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["w", "h"],
+      "properties": {
+        "w": { "type": "number", "exclusiveMinimum": 0 },
+        "h": { "type": "number", "exclusiveMinimum": 0 }
+      }
+    },
+    "brief": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["question", "lines"],
+      "properties": {
+        "question": { "type": "string" },
+        "lines": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "items": { "type": "array", "items": { "$ref": "#/$defs/item" } },
+    "edges": { "type": "array", "items": { "$ref": "#/$defs/edge" } },
+    "code": { "oneOf": [{ "$ref": "#/$defs/code" }, { "type": "null" }], "description": "Coding rounds only; null otherwise." },
+    "meeting": { "oneOf": [{ "$ref": "#/$defs/meeting" }, { "type": "null" }], "description": "Meeting rehearsal only; null otherwise." },
+    "focus": { "type": ["string", "null"], "description": "Item that \"that / this / it\" refers to. Set by the client; ops only clear it (item.delete)." },
+    "ghosts": { "type": "array", "items": { "$ref": "#/$defs/ghost_op" }, "description": "Suggested ops not yet committed." },
+    "op_ids": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "type": "string", "minLength": 1 },
+      "description": "op_id of every committed op, in commit order. An op whose op_id is already here is ignored (idempotent apply)."
+    }
+  },
+  "$defs": {
+    "board_kit": { "enum": ["hld", "lld", "coding", "pm", "meeting"] },
+    "id": { "type": "string", "minLength": 1, "pattern": "^[A-Za-z0-9_.:-]+$" },
+    "cm": { "type": "number", "description": "Board centimetres." },
+    "src": { "enum": ["hand", "voice_grammar", "scribe", "interviewer"] },
+    "component_type": {
+      "enum": ["client", "lb", "api_gateway", "service", "db", "kv", "cache", "queue", "cdn", "object_store", "search", "worker", "external", "note", "blank"],
+      "description": "blank = a box drawn by hand that has no type yet."
+    },
+    "class_kind": { "enum": ["class", "interface", "abstract", "enum"] },
+    "metric_role": { "enum": ["north_star", "input", "guardrail"] },
+    "lane": { "enum": ["user", "pain", "idea", "metric"] },
+    "quad": { "enum": ["tl", "tr", "bl", "br"], "description": "2x2 quadrant: t/b = top/bottom (impact high/low), l/r = left/right (effort low/high)." },
+    "dir": { "enum": ["->", "<->", "--"] },
+    "rel": { "enum": ["uses", "has_a", "is_a", "implements"] },
+    "vis": { "enum": ["+", "-", "#", "~"] },
+
+    "item": {
+      "type": "object",
+      "required": ["kind"],
+      "properties": { "kind": { "enum": ["component", "class", "sticky", "group", "metric", "ink", "interviewer_card"] } },
+      "allOf": [
+        { "if": { "type": "object", "required": ["kind"], "properties": { "kind": { "const": "component" } } }, "then": { "$ref": "#/$defs/component" } },
+        { "if": { "type": "object", "required": ["kind"], "properties": { "kind": { "const": "class" } } }, "then": { "$ref": "#/$defs/class" } },
+        { "if": { "type": "object", "required": ["kind"], "properties": { "kind": { "const": "sticky" } } }, "then": { "$ref": "#/$defs/sticky" } },
+        { "if": { "type": "object", "required": ["kind"], "properties": { "kind": { "const": "group" } } }, "then": { "$ref": "#/$defs/group" } },
+        { "if": { "type": "object", "required": ["kind"], "properties": { "kind": { "const": "metric" } } }, "then": { "$ref": "#/$defs/metric" } },
+        { "if": { "type": "object", "required": ["kind"], "properties": { "kind": { "const": "ink" } } }, "then": { "$ref": "#/$defs/ink" } },
+        { "if": { "type": "object", "required": ["kind"], "properties": { "kind": { "const": "interviewer_card" } } }, "then": { "$ref": "#/$defs/interviewer_card" } }
+      ]
+    },
+    "component": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "type", "label", "x", "y", "w", "h"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "kind": { "const": "component" },
+        "type": { "$ref": "#/$defs/component_type" },
+        "label": { "type": ["string", "null"] },
+        "x": { "$ref": "#/$defs/cm" },
+        "y": { "$ref": "#/$defs/cm" },
+        "w": { "$ref": "#/$defs/cm" },
+        "h": { "$ref": "#/$defs/cm" },
+        "group": { "type": ["string", "null"] },
+        "notes": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "member": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "vis", "name"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "vis": { "$ref": "#/$defs/vis" },
+        "name": { "type": "string", "minLength": 1 },
+        "type": { "type": ["string", "null"], "description": "Fields: the field type." },
+        "params": {
+          "type": "array",
+          "description": "Methods only.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name"],
+            "properties": { "name": { "type": "string" }, "type": { "type": ["string", "null"] } }
+          }
+        },
+        "returns": { "type": ["string", "null"], "description": "Methods only." }
+      }
+    },
+    "class": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "label", "class_kind", "fields", "methods", "x", "y", "w", "h"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "kind": { "const": "class" },
+        "label": { "type": ["string", "null"] },
+        "class_kind": { "$ref": "#/$defs/class_kind" },
+        "fields": { "type": "array", "items": { "$ref": "#/$defs/member" } },
+        "methods": { "type": "array", "items": { "$ref": "#/$defs/member" } },
+        "x": { "$ref": "#/$defs/cm" },
+        "y": { "$ref": "#/$defs/cm" },
+        "w": { "$ref": "#/$defs/cm" },
+        "h": { "$ref": "#/$defs/cm" },
+        "group": { "type": ["string", "null"] }
+      }
+    },
+    "sticky": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "lane", "text", "votes", "quad", "x", "y"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "kind": { "const": "sticky" },
+        "lane": { "oneOf": [{ "$ref": "#/$defs/lane" }, { "type": "null" }] },
+        "text": { "type": "string" },
+        "group": { "type": ["string", "null"] },
+        "votes": { "type": "integer", "minimum": 0 },
+        "quad": { "oneOf": [{ "$ref": "#/$defs/quad" }, { "type": "null" }] },
+        "rank": { "type": ["integer", "null"], "minimum": 1, "description": "Rung on the ranked ladder, 1 = top." },
+        "x": { "$ref": "#/$defs/cm" },
+        "y": { "$ref": "#/$defs/cm" },
+        "w": { "$ref": "#/$defs/cm", "default": 7 },
+        "h": { "$ref": "#/$defs/cm", "default": 7 }
+      }
+    },
+    "group": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "label", "x", "y", "w", "h"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "kind": { "const": "group" },
+        "label": { "type": ["string", "null"] },
+        "x": { "$ref": "#/$defs/cm" },
+        "y": { "$ref": "#/$defs/cm" },
+        "w": { "$ref": "#/$defs/cm" },
+        "h": { "$ref": "#/$defs/cm" }
+      }
+    },
+    "metric": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "role", "label", "x", "y"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "kind": { "const": "metric" },
+        "role": { "$ref": "#/$defs/metric_role" },
+        "label": { "type": ["string", "null"] },
+        "group": { "type": ["string", "null"] },
+        "x": { "$ref": "#/$defs/cm" },
+        "y": { "$ref": "#/$defs/cm" },
+        "w": { "$ref": "#/$defs/cm", "default": 10 },
+        "h": { "$ref": "#/$defs/cm", "default": 4 }
+      }
+    },
+    "ink": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "points", "recognized"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "kind": { "const": "ink" },
+        "points": {
+          "type": "array",
+          "minItems": 2,
+          "description": "[x, y] in board cm, rounded to 1 decimal.",
+          "items": { "type": "array", "prefixItems": [{ "type": "number" }, { "type": "number" }], "items": false, "minItems": 2 }
+        },
+        "recognized": {
+          "enum": [null, "rect", "line", "arrow", "circle"],
+          "description": "What the recognizer made of the stroke. A recognized stroke is normally replaced by the item it produced; a kept stroke records it here."
+        }
+      }
+    },
+    "interviewer_card": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "title", "body", "x", "y"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "kind": { "const": "interviewer_card" },
+        "title": { "type": "string" },
+        "body": { "type": "string" },
+        "x": { "$ref": "#/$defs/cm" },
+        "y": { "$ref": "#/$defs/cm" },
+        "w": { "$ref": "#/$defs/cm", "default": 14 },
+        "h": { "$ref": "#/$defs/cm", "default": 8 }
+      }
+    },
+    "edge": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "from", "to", "dir", "label", "rel"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "from": { "$ref": "#/$defs/id" },
+        "to": { "$ref": "#/$defs/id" },
+        "dir": { "$ref": "#/$defs/dir" },
+        "label": { "type": ["string", "null"] },
+        "rel": { "oneOf": [{ "$ref": "#/$defs/rel" }, { "type": "null" }], "description": "Class diagrams only." }
+      }
+    },
+    "code_line": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "indent", "text", "src"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "indent": { "type": "integer", "minimum": 0, "maximum": 6 },
+        "text": { "type": "string" },
+        "src": { "$ref": "#/$defs/src" }
+      }
+    },
+    "code": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["language", "lines", "approach", "complexity", "trace"],
+      "properties": {
+        "language": { "type": "string" },
+        "lines": { "type": "array", "items": { "$ref": "#/$defs/code_line" } },
+        "approach": { "type": "array", "items": { "type": "string" } },
+        "complexity": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["time", "space"],
+          "properties": { "time": { "type": ["string", "null"] }, "space": { "type": ["string", "null"] } }
+        },
+        "trace": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["line", "t"],
+            "properties": { "line": { "$ref": "#/$defs/id" }, "t": { "type": "number", "description": "Seconds since round start." } }
+          }
+        }
+      }
+    },
+    "meeting": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["agenda", "shown", "parked"],
+      "properties": {
+        "agenda": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "text", "done", "t"],
+            "properties": {
+              "id": { "$ref": "#/$defs/id" },
+              "text": { "type": "string" },
+              "done": { "type": "boolean" },
+              "t": { "type": ["number", "null"], "description": "Seconds since round start when ticked; null when not done." }
+            }
+          }
+        },
+        "numbers": {
+          "type": "array",
+          "description": "Key number cards from the meeting setup.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "label", "value"],
+            "properties": { "id": { "$ref": "#/$defs/id" }, "label": { "type": "string" }, "value": { "type": "string" } }
+          }
+        },
+        "shown": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["kind", "ref", "t"],
+            "properties": {
+              "kind": { "enum": ["slide", "number"] },
+              "ref": { "type": ["integer", "string"], "description": "Slide: 1-based page. Number: the number card id." },
+              "t": { "type": "number" }
+            }
+          }
+        },
+        "parked": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+
+    "op_name": {
+      "enum": [
+        "item.create", "item.move", "item.delete", "item.label", "item.set_type", "item.note.add",
+        "edge.create", "edge.delete", "edge.set_dir", "edge.set_rel", "edge.label",
+        "group.create", "member.add", "member.move", "member.remove",
+        "sticky.vote", "sticky.set_quad",
+        "code.insert", "code.edit", "code.move", "code.indent", "code.delete", "code.complexity", "code.trace",
+        "agenda.check", "present.show", "park.add", "undo"
+      ]
+    },
+    "op_args": {
+      "description": "args shape per op name. Apply semantics: docs/protocol.md (Board ops).",
+      "allOf": [
+        { "if": { "type": "object", "required": ["op"], "properties": { "op": { "const": "item.create" } } }, "then": { "type": "object", "properties": { "args": { "$ref": "#/$defs/item" } } } },
+        { "if": { "type": "object", "required": ["op"], "properties": { "op": { "const": "item.move" } } }, "then": { "type": "object", "properties": { "args": {
+          "type": "object", "additionalProperties": false, "required": ["id", "x", "y"],
+          "properties": {
+            "id": { "$ref": "#/$defs/id" }, "x": { "$ref": "#/$defs/cm" }, "y": { "$ref": "#/$defs/cm" },
+            "lane": { "oneOf": [{ "$ref": "#/$defs/lane" }, { "type": "null" }], "description": "Stickies: lane it was dropped in." },
+            "rank": { "type": ["integer", "null"], "minimum": 1, "description": "Stickies: ladder rung it was dropped on." }
+          } } } } },
+        { "if": { "type": "object", "required": ["op"], "properties": { "op": { "const": "item.delete" } } }, "then": { "type": "object", "properties": { "args": { "$ref": "#/$defs/args_id" } } } },
+        { "if": { "type": "object", "required": ["op"], "properties": { "op": { "const": "item.label" } } }, "then": { "type": "object", "properties": { "args": { "$ref": "#/$defs/args_id_text" } } } },
+        { "if": { "type": "object", "required": ["op"], "properties": { "op": { "const": "item.set_type" } } }, "then": { "type": "object", "properties": { "args": {
+          "type": "object", "additionalProperties": false, "required": ["id", "type"],
+          "properties": {
+            "id": { "$ref": "#/$defs/id" },
+            "type": { "anyOf": [{ "$ref": "#/$defs/component_type" }, { "$ref": "#/$defs/class_kind" }, { "$ref": "#/$defs/metric_role" }] }
+          } } } } },
+        { "if": { "type": "object", "required": ["op"], "properties": { "op": { "const": "item.note.add" } } }, "then": { "type": "object", "properties": { "args": {
+          "type": "object", "additionalProperties": false, "required": ["id", "text"],
+          "properties": { "id": { "$ref": "#/$defs/id" }, "text": { "type": "string", "minLength": 1 } } } } } },
+        { "if": { "type": "object", "required": ["op"], "properties": { "op": { "const": "edge.create" } } }, "then": { "type": "object", "properties": { "args": {
+          "type": "object", "additionalProperties": false, "required": ["id", "from", "to"],
+          "properties": {
+            "id": { "$ref": "#/$defs/id" }, "from": { "$ref": "#/$defs/id" }, "to": { "$ref": "#/$defs/id" },
+            "dir": { "$ref": "#/$defs/dir", "default": "->" },
+            "label": { "type": ["string", "null"], "default": null },
+            "rel": { "oneOf": [{ "$ref": "#/$defs/rel" }, { "type": "null" }], "default": null }
+          } } } } },
+        { "if": { "type": "object", "required": ["op"], "properties": { "op": { "const": "edge.delete" } } }, "then": { "type": "object", "properties": { "args": { "$ref": "#/$defs/args_id" } } } },
+        { "if": { "type": "object", "required": ["op"], "properties": { "op": { "const": "edge.set_dir" } } }, "then": { "type": "object", "properties": { "args": {
+          "type": "object", "additionalProperties": false, "required": ["id", "dir"],
+          "properties": { "id": { "$ref": "#/$defs/id" }, "dir": { "$ref": "#/$defs/dir" } } } } } },
+        { "if": { "type": "object", "required": ["op"], "properties": { "op": { "const": "edge.set_rel" } } }, "then": { "type": "object", "properties": { "args": {
+          "type": "object", "additionalProperties": false, "required": ["id", "rel"],
+          "properties": { "id": { "$ref": "#/$defs/id" }, "rel": { "oneOf": [{ "$ref": "#/$defs/rel" }, { "type": "null" }] } } } } } },
+        { "if": { "type": "object", "required": ["op"], "properties": { "op": { "const": "edge.label" } } }, "then": { "type": "object", "properties": { "args": { "$ref": "#/$defs/args_id_text" } } } },
+        { "if": { "type": "object", "required": ["op"], "properties": { "op": { "const": "group.create" } } }, "then": { "type": "object", "properties": { "args": {
+          "type": "object", "additionalProperties": false, "required": ["id", "label", "x", "y", "w", "h", "members"],
+          "properties": {
+            "id": { "$ref": "#/$defs/id" }, "label": { "type": ["string", "null"] },
+            "x": { "$ref": "#/$defs/cm" }, "y": { "$ref": "#/$defs/cm" }, "w": { "$ref": "#/$defs/cm" }, "h": { "$ref": "#/$defs/cm" },
+            "members": { "type": "array", "items": { "$ref": "#/$defs/id" }, "description": "Items whose group becomes this id." }
+          } } } } },
+        { "if": { "type": "object", "required": ["op"], "properties": { "op": { "const": "member.add" } } }, "then": { "type": "object", "properties": { "args": {
+          "type": "object", "additionalProperties": false, "required": ["class_id", "section", "member"],
+          "properties": {
+            "class_id": { "$ref": "#/$defs/id" }, "section": { "enum": ["fields", "methods"] }, "member": { "$ref": "#/$defs/member" }
+          } } } } },
+        { "if": { "type": "object", "required": ["op"], "properties": { "op": { "const": "member.move" } } }, "then": { "type": "object", "properties": { "args": {
+          "type": "object", "additionalProperties": false, "required": ["id", "to_class_id"],
+          "properties": { "id": { "$ref": "#/$defs/id" }, "to_class_id": { "$ref": "#/$defs/id" } } } } } },
+        { "if": { "type": "object", "required": ["op"], "properties": { "op": { "const": "member.remove" } } }, "then": { "type": "object", "properties": { "args": { "$ref": "#/$defs/args_id" } } } },
+        { "if": { "type": "object", "required": ["op"], "properties": { "op": { "const": "sticky.vote" } } }, "then": { "type": "object", "properties": { "args": {
+          "type": "object", "additionalProperties": false, "required": ["id", "delta"],
+          "properties": { "id": { "$ref": "#/$defs/id" }, "delta": { "enum": [1, -1] } } } } } },
+        { "if": { "type": "object", "required": ["op"], "properties": { "op": { "const": "sticky.set_quad" } } }, "then": { "type": "object", "properties": { "args": {
+          "type": "object", "additionalProperties": false, "required": ["id", "quad"],
+          "properties": { "id": { "$ref": "#/$defs/id" }, "quad": { "oneOf": [{ "$ref": "#/$defs/quad" }, { "type": "null" }] } } } } } },
+        { "if": { "type": "object", "required": ["op"], "properties": { "op": { "const": "code.insert" } } }, "then": { "type": "object", "properties": { "args": {
+          "type": "object", "additionalProperties": false, "required": ["line", "after"],
+          "properties": {
+            "line": { "$ref": "#/$defs/code_line" },
+            "after": { "type": ["string", "null"], "description": "Id of the line it goes after; null = first line." }
+          } } } } },
+        { "if": { "type": "object", "required": ["op"], "properties": { "op": { "const": "code.edit" } } }, "then": { "type": "object", "properties": { "args": {
+          "type": "object", "additionalProperties": false, "required": ["id", "text"],
+          "properties": { "id": { "$ref": "#/$defs/id" }, "text": { "type": "string" } } } } } },
+        { "if": { "type": "object", "required": ["op"], "properties": { "op": { "const": "code.move" } } }, "then": { "type": "object", "properties": { "args": {
+          "type": "object", "additionalProperties": false, "required": ["id", "after"],
+          "properties": { "id": { "$ref": "#/$defs/id" }, "after": { "type": ["string", "null"] } } } } } },
+        { "if": { "type": "object", "required": ["op"], "properties": { "op": { "const": "code.indent" } } }, "then": { "type": "object", "properties": { "args": {
+          "type": "object", "additionalProperties": false, "required": ["id", "delta"],
+          "properties": { "id": { "$ref": "#/$defs/id" }, "delta": { "type": "integer", "description": "Levels to add; the result is clamped to 0..6." } } } } } },
+        { "if": { "type": "object", "required": ["op"], "properties": { "op": { "const": "code.delete" } } }, "then": { "type": "object", "properties": { "args": { "$ref": "#/$defs/args_id" } } } },
+        { "if": { "type": "object", "required": ["op"], "properties": { "op": { "const": "code.complexity" } } }, "then": { "type": "object", "properties": { "args": {
+          "type": "object", "additionalProperties": false, "required": ["slot", "value"],
+          "properties": { "slot": { "enum": ["time", "space"] }, "value": { "type": ["string", "null"] } } } } } },
+        { "if": { "type": "object", "required": ["op"], "properties": { "op": { "const": "code.trace" } } }, "then": { "type": "object", "properties": { "args": {
+          "type": "object", "additionalProperties": false, "required": ["line", "t"],
+          "properties": { "line": { "$ref": "#/$defs/id" }, "t": { "type": "number" } } } } } },
+        { "if": { "type": "object", "required": ["op"], "properties": { "op": { "const": "agenda.check" } } }, "then": { "type": "object", "properties": { "args": {
+          "type": "object", "additionalProperties": false, "required": ["id", "done", "t"],
+          "properties": { "id": { "$ref": "#/$defs/id" }, "done": { "type": "boolean" }, "t": { "type": ["number", "null"] } } } } } },
+        { "if": { "type": "object", "required": ["op"], "properties": { "op": { "const": "present.show" } } }, "then": { "type": "object", "properties": { "args": {
+          "type": "object", "additionalProperties": false, "required": ["kind", "ref", "t"],
+          "properties": { "kind": { "enum": ["slide", "number"] }, "ref": { "type": ["integer", "string"] }, "t": { "type": "number" } } } } } },
+        { "if": { "type": "object", "required": ["op"], "properties": { "op": { "const": "park.add" } } }, "then": { "type": "object", "properties": { "args": {
+          "type": "object", "additionalProperties": false, "required": ["text"],
+          "properties": { "text": { "type": "string", "minLength": 1 } } } } } },
+        { "if": { "type": "object", "required": ["op"], "properties": { "op": { "const": "undo" } } }, "then": { "type": "object", "properties": { "args": {
+          "type": "object", "additionalProperties": false, "required": ["target_op_id"],
+          "properties": { "target_op_id": { "type": "string", "minLength": 1 } } } } } }
+      ]
+    },
+    "args_id": {
+      "type": "object", "additionalProperties": false, "required": ["id"],
+      "properties": { "id": { "$ref": "#/$defs/id" } }
+    },
+    "args_id_text": {
+      "type": "object", "additionalProperties": false, "required": ["id", "text"],
+      "properties": { "id": { "$ref": "#/$defs/id" }, "text": { "type": ["string", "null"] } }
+    },
+
+    "board_op": {
+      "description": "An op as applied: the WebSocket board.op / board.apply payload and each entry of a fixture's ops list.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["op_id", "src", "op", "args"],
+      "properties": {
+        "op_id": { "type": "string", "minLength": 1, "description": "Unique per session. Applying the same op_id twice changes nothing." },
+        "src": { "$ref": "#/$defs/src" },
+        "op": { "$ref": "#/$defs/op_name" },
+        "args": { "type": "object" },
+        "rev_base": { "type": "integer", "minimum": 0, "description": "Board rev the sender saw." },
+        "at_ms": { "type": "number", "description": "Client clock, ms since round start." }
+      },
+      "allOf": [{ "$ref": "#/$defs/op_args" }]
+    },
+    "ghost_op": {
+      "description": "A suggested op shown faded on the board. Accepting it sends a board.op with the same op_id; committing that op_id removes the ghost.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["op_id", "src", "op", "args"],
+      "properties": {
+        "op_id": { "type": "string", "minLength": 1 },
+        "src": { "enum": ["scribe", "interviewer"] },
+        "op": { "$ref": "#/$defs/op_name" },
+        "args": { "type": "object" }
+      },
+      "allOf": [{ "$ref": "#/$defs/op_args" }]
+    },
+    "op_log_entry": {
+      "description": "Append-only log sent with the final board; also the undo stack. t uses the transcript clock.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["op_id", "t", "rev", "src", "op", "args", "accepted"],
+      "properties": {
+        "op_id": { "type": "string", "minLength": 1 },
+        "t": { "type": "number", "description": "Seconds since round start." },
+        "rev": { "type": "integer", "minimum": 0, "description": "Board rev after this op (unchanged when not accepted)." },
+        "src": { "$ref": "#/$defs/src" },
+        "op": { "$ref": "#/$defs/op_name" },
+        "args": { "type": "object" },
+        "accepted": { "type": "boolean", "description": "False when the op was rejected or a ghost was dismissed." }
+      },
+      "allOf": [{ "$ref": "#/$defs/op_args" }]
+    },
+    "ops_fixture": {
+      "description": "content/fixtures/board-ops/*.json: apply ops to start in order; the result must deep-equal expected.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "start", "ops", "expected"],
+      "properties": {
+        "name": { "type": "string" },
+        "start": { "$ref": "#" },
+        "ops": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/board_op" } },
+        "expected": { "$ref": "#" }
+      }
+    }
+  }
+}
