@@ -1,0 +1,120 @@
+{
+  "name": "undo of an undo is rejected: board unchanged",
+  "start": {
+    "schema": "ir.board.v1",
+    "round": {
+      "id": "s_fixture",
+      "type": "hld",
+      "question_id": null,
+      "language": null
+    },
+    "rev": 0,
+    "size": {
+      "w": 64,
+      "h": 40
+    },
+    "brief": {
+      "question": "Fixture board",
+      "lines": []
+    },
+    "items": [],
+    "edges": [],
+    "code": null,
+    "meeting": null,
+    "focus": null,
+    "ghosts": [],
+    "op_ids": []
+  },
+  "log": [
+    {
+      "op_id": "o1",
+      "t": 5,
+      "rev": 1,
+      "src": "hand",
+      "op": "item.create",
+      "args": {
+        "id": "n1",
+        "kind": "component",
+        "type": "cache",
+        "label": "Redis",
+        "x": 4,
+        "y": 4,
+        "w": 8,
+        "h": 5
+      },
+      "accepted": true
+    },
+    {
+      "op_id": "o2",
+      "t": 8,
+      "rev": 2,
+      "src": "hand",
+      "op": "item.move",
+      "args": {
+        "id": "n1",
+        "x": 10,
+        "y": 10
+      },
+      "accepted": true
+    },
+    {
+      "op_id": "u1",
+      "t": 10,
+      "rev": 3,
+      "src": "hand",
+      "op": "undo",
+      "args": {
+        "target_op_id": "o2"
+      },
+      "accepted": true
+    }
+  ],
+  "undo": {
+    "op_id": "u2",
+    "src": "hand",
+    "op": "undo",
+    "args": {
+      "target_op_id": "u1"
+    }
+  },
+  "expected": {
+    "schema": "ir.board.v1",
+    "round": {
+      "id": "s_fixture",
+      "type": "hld",
+      "question_id": null,
+      "language": null
+    },
+    "rev": 3,
+    "size": {
+      "w": 64,
+      "h": 40
+    },
+    "brief": {
+      "question": "Fixture board",
+      "lines": []
+    },
+    "items": [
+      {
+        "id": "n1",
+        "kind": "component",
+        "type": "cache",
+        "label": "Redis",
+        "x": 4,
+        "y": 4,
+        "w": 8,
+        "h": 5
+      }
+    ],
+    "edges": [],
+    "code": null,
+    "meeting": null,
+    "focus": null,
+    "ghosts": [],
+    "op_ids": [
+      "o1",
+      "o2",
+      "u1"
+    ]
+  }
+}

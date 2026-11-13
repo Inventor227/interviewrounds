@@ -1,0 +1,20 @@
+{
+  "identity": { "kind": "guest" },
+  "sign_in_available": true,
+  "settings": {
+    "default_role": null,
+    "default_level": "mid",
+    "default_style": "neutral",
+    "voice_speed": 1.0,
+    "captions": false,
+    "dominant_hand": "right",
+    "sfx_volume": 0.6,
+    "avatar_brightness": 1.0,
+    "practice_mode": false
+  },
+  "onboarding_done": false,
+  "streak": { "current": 0, "best": 0, "today_done": false },
+  "daily": { "round_id": "sde.behavioral.short", "title": "Behavioral" },
+  "limits": { "short_left_today": 2, "full_left": 1, "resets_at": "2026-11-14T00:00:00Z", "reason": null },
+  "entitlements": { "plan": "guest", "free_rounds_left": 3, "minutes_total": null, "minutes_used": null, "period_end": null }
+}

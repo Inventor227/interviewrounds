@@ -1,0 +1,10 @@
+{
+  "name": "avatar-preview",
+  "private": true,
+  "type": "module",
+  "description": "Headless screenshots of converted avatars in a plain three.js page.",
+  "dependencies": {
+    "playwright": "1.64.1",
+    "three": "npm:super-three@0.185.0"
+  }
+}

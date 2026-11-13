@@ -1,0 +1,126 @@
+{
+  "name": "ops that reference unknown ids or reuse an id are rejected: board, rev and op_ids unchanged",
+  "start": {
+    "schema": "ir.board.v1",
+    "round": {
+      "id": "s_fixture",
+      "type": "hld",
+      "question_id": null,
+      "language": null
+    },
+    "rev": 1,
+    "size": {
+      "w": 64,
+      "h": 40
+    },
+    "brief": {
+      "question": "Fixture board",
+      "lines": []
+    },
+    "items": [
+      {
+        "id": "n1",
+        "kind": "component",
+        "type": "client",
+        "label": "App",
+        "x": 4,
+        "y": 18,
+        "w": 8,
+        "h": 5
+      }
+    ],
+    "edges": [],
+    "code": null,
+    "meeting": null,
+    "focus": null,
+    "ghosts": [],
+    "op_ids": [
+      "o1"
+    ]
+  },
+  "ops": [
+    {
+      "op_id": "o2",
+      "src": "hand",
+      "op": "edge.create",
+      "args": {
+        "id": "e1",
+        "from": "n1",
+        "to": "n9"
+      }
+    },
+    {
+      "op_id": "o3",
+      "src": "hand",
+      "op": "item.create",
+      "args": {
+        "id": "n1",
+        "kind": "component",
+        "type": "db",
+        "label": "Dup",
+        "x": 30,
+        "y": 30,
+        "w": 8,
+        "h": 5
+      }
+    },
+    {
+      "op_id": "o4",
+      "src": "hand",
+      "op": "item.move",
+      "args": {
+        "id": "n9",
+        "x": 1,
+        "y": 1
+      }
+    },
+    {
+      "op_id": "o5",
+      "src": "hand",
+      "op": "edge.create",
+      "args": {
+        "id": "e2",
+        "from": "n1",
+        "to": "n1"
+      }
+    }
+  ],
+  "expected": {
+    "schema": "ir.board.v1",
+    "round": {
+      "id": "s_fixture",
+      "type": "hld",
+      "question_id": null,
+      "language": null
+    },
+    "rev": 1,
+    "size": {
+      "w": 64,
+      "h": 40
+    },
+    "brief": {
+      "question": "Fixture board",
+      "lines": []
+    },
+    "items": [
+      {
+        "id": "n1",
+        "kind": "component",
+        "type": "client",
+        "label": "App",
+        "x": 4,
+        "y": 18,
+        "w": 8,
+        "h": 5
+      }
+    ],
+    "edges": [],
+    "code": null,
+    "meeting": null,
+    "focus": null,
+    "ghosts": [],
+    "op_ids": [
+      "o1"
+    ]
+  }
+}

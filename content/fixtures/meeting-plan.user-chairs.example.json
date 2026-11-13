@@ -1,0 +1,29 @@
+{
+  "user_chairs": true,
+  "chair_attendee": null,
+  "attendees": [
+    {
+      "name": "Jordan",
+      "role": "Senior engineer, your direct report",
+      "cares_about": ["fairness", "promotion path"],
+      "personality": "skeptical",
+      "likely_objections": ["Nobody told me this was a problem", "The deadlines were never realistic"],
+      "decision_power": "influencer",
+      "voice_base": "persona.sam",
+      "hidden": {
+        "stance": -1,
+        "concerns": [
+          { "id": "c1", "text": "Feedback without specific examples", "status": "open" },
+          { "id": "c2", "text": "Whether promotion is still possible", "status": "open" }
+        ],
+        "patience": 3,
+        "persona_id": "persona.sam",
+        "avatar_id": "m02",
+        "voice_id": "voice.sam"
+      }
+    }
+  ],
+  "opening_line": "You wanted to talk about my review?",
+  "success_criteria": ["One specific example given early", "The gap named by the report", "Two actions with dates"],
+  "tips": ["Lead with one specific example.", "Ask before you tell.", "End with agreed actions and dates."]
+}

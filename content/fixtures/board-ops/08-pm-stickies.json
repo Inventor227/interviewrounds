@@ -1,0 +1,135 @@
+{
+  "name": "sticky: create, drop into a lane, vote twice, unvote once, place in a quadrant",
+  "start": {
+    "schema": "ir.board.v1",
+    "round": {
+      "id": "s_fixture",
+      "type": "pm",
+      "question_id": null,
+      "language": null
+    },
+    "rev": 0,
+    "size": {
+      "w": 64,
+      "h": 40
+    },
+    "brief": {
+      "question": "Fixture board",
+      "lines": []
+    },
+    "items": [],
+    "edges": [],
+    "code": null,
+    "meeting": null,
+    "focus": null,
+    "ghosts": [],
+    "op_ids": []
+  },
+  "ops": [
+    {
+      "op_id": "p1",
+      "src": "hand",
+      "op": "item.create",
+      "args": {
+        "id": "s1",
+        "kind": "sticky",
+        "lane": null,
+        "text": "Commuters can't find parking",
+        "votes": 0,
+        "quad": null,
+        "x": 2,
+        "y": 30
+      }
+    },
+    {
+      "op_id": "p2",
+      "src": "hand",
+      "op": "item.move",
+      "args": {
+        "id": "s1",
+        "x": 18,
+        "y": 8,
+        "lane": "pain"
+      }
+    },
+    {
+      "op_id": "p3",
+      "src": "hand",
+      "op": "sticky.vote",
+      "args": {
+        "id": "s1",
+        "delta": 1
+      }
+    },
+    {
+      "op_id": "p4",
+      "src": "hand",
+      "op": "sticky.vote",
+      "args": {
+        "id": "s1",
+        "delta": 1
+      }
+    },
+    {
+      "op_id": "p5",
+      "src": "hand",
+      "op": "sticky.vote",
+      "args": {
+        "id": "s1",
+        "delta": -1
+      }
+    },
+    {
+      "op_id": "p6",
+      "src": "hand",
+      "op": "sticky.set_quad",
+      "args": {
+        "id": "s1",
+        "quad": "tl"
+      }
+    }
+  ],
+  "expected": {
+    "schema": "ir.board.v1",
+    "round": {
+      "id": "s_fixture",
+      "type": "pm",
+      "question_id": null,
+      "language": null
+    },
+    "rev": 6,
+    "size": {
+      "w": 64,
+      "h": 40
+    },
+    "brief": {
+      "question": "Fixture board",
+      "lines": []
+    },
+    "items": [
+      {
+        "id": "s1",
+        "kind": "sticky",
+        "lane": "pain",
+        "text": "Commuters can't find parking",
+        "votes": 1,
+        "quad": "tl",
+        "x": 18,
+        "y": 8
+      }
+    ],
+    "edges": [],
+    "code": null,
+    "meeting": null,
+    "focus": null,
+    "ghosts": [],
+    "op_ids": [
+      "p1",
+      "p2",
+      "p3",
+      "p4",
+      "p5",
+      "p6"
+    ]
+  }
+}
