@@ -132,8 +132,10 @@ function send(t, d) {
 }
 
 // ---------- the voice turn (what the voice platform would send) ----------
-const history = [];
-async function turn(sessionId, token, text, label) {
+// Each panelist has its own voice session, so its own transcript.
+const histories = {};
+async function turn(sessionId, token, text, label, panelist = "p1") {
+  const history = (histories[panelist] ??= []);
   const messages = [...history, { role: "user", content: text }];
   const started = now();
   const res = await fetch(`${ORIGIN}/v1/chat/completions`, {
@@ -143,7 +145,7 @@ async function turn(sessionId, token, text, label) {
       model: "interview-rounds",
       stream: true,
       messages,
-      fishaudio_extra_body: { session_id: sessionId, panelist_id: "p1" },
+      fishaudio_extra_body: { session_id: sessionId, panelist_id: panelist },
     }),
   });
   if (!res.ok) throw new Error(`turn ${label}: HTTP ${res.status} ${await res.text()}`);
@@ -171,24 +173,66 @@ async function turn(sessionId, token, text, label) {
   }
   const total = now() - started;
   history.push({ role: "user", content: text }, { role: "assistant", content: reply });
-  record("turn", label, { user: text, reply, ttft_ms: ttft, total_ms: total });
+  record("turn", label, { panelist, user: text, reply, ttft_ms: ttft, total_ms: total });
   say(`${label}: first text ${ttft} ms, ${total} ms: "${reply}"`);
   return { reply, ttft, total };
 }
 
-function spoken(reply) {
+function spoken(reply, panelist = "p1") {
   // The browser reports the first words as the voice plays them.
-  send("voice.spoken", { panelist_id: "p1", text_prefix: reply.slice(0, 60) });
+  send("voice.spoken", { panelist_id: panelist, text_prefix: reply.slice(0, 60) });
 }
+
+async function openSocket(ws_url, token) {
+  frames.length = 0;
+  waiters.length = 0;
+  clientSeq = 0;
+  closeCode = null;
+  lastState = "";
+  for (const k of Object.keys(histories)) delete histories[k];
+  const wsOrigin = ORIGIN.replace(/^http/, "ws");
+  ws = new WebSocket(`${wsOrigin}${ws_url}`, { headers: { Origin: ORIGIN } });
+  ws.onmessage = (ev) => onFrame(JSON.parse(typeof ev.data === "string" ? ev.data : ev.data.toString()));
+  ws.onclose = (ev) => { closeCode = ev.code; record("in", "close", { code: ev.code, reason: ev.reason }); };
+  await new Promise((r, j) => { ws.onopen = r; ws.onerror = j; });
+  send("hello", { client_token: token, last_seq: 0 });
+  return setInterval(() => { if (ws.readyState === 1) send("ping", {}); }, 15000);
+}
+
+const summary = { origin: ORIGIN, started_at: new Date(t0).toISOString(), checks: {} };
+const check = (name, ok, detail) => {
+  summary.checks[name] = { ok: !!ok, ...(detail !== undefined ? { detail } : {}) };
+  say(`${ok ? "PASS" : "FAIL"} ${name}${detail !== undefined ? `: ${JSON.stringify(detail)}` : ""}`);
+};
+
+function validateReport(data) {
+  const ajv = new Ajv2020({ allErrors: true, strict: false });
+  addFormats(ajv);
+  const schema = JSON.parse(readFileSync(join(REPO, "content/schema/report.v1.schema.json"), "utf8"));
+  const ok = ajv.validate(schema, data);
+  return { ok, errors: ajv.errors };
+}
+
+const MODE = opt("--only", "both");
 
 async function main() {
   mkdirSync(OUT, { recursive: true });
-  const summary = { origin: ORIGIN, started_at: new Date(t0).toISOString(), checks: {} };
-  const check = (name, ok, detail) => {
-    summary.checks[name] = { ok: !!ok, ...(detail !== undefined ? { detail } : {}) };
-    say(`${ok ? "PASS" : "FAIL"} ${name}${detail !== undefined ? `: ${JSON.stringify(detail)}` : ""}`);
-  };
+  if (MODE !== "meeting") await interviewRound();
+  if (MODE !== "interview") {
+    try {
+      await meetingRound();
+    } catch (e) {
+      check("meeting round", false, e.message);
+    }
+  }
+  summary.ok = Object.values(summary.checks).every((c) => c.ok);
+  summary.total_s = Math.round(now() / 100) / 10;
+  writeFileSync(join(OUT, "summary.json"), JSON.stringify(summary, null, 2) + "\n");
+  say(`${summary.ok ? "SMOKE OK" : "SMOKE FAILED"}; artifacts in ${OUT}`);
+  process.exit(summary.ok ? 0 : 1);
+}
 
+async function interviewRound() {
   const me = await api("GET", "/api/me");
   check("guest identity", me.status === 200 && cookie, { status: me.status });
   const created = await api(
@@ -201,14 +245,7 @@ async function main() {
   const { session_id: id, client_token: token, ws_url } = created.data;
   summary.session_id = id;
   say(`session ${id}`);
-
-  const wsOrigin = ORIGIN.replace(/^http/, "ws");
-  ws = new WebSocket(`${wsOrigin}${ws_url}`, { headers: { Origin: ORIGIN } });
-  ws.onmessage = (ev) => onFrame(JSON.parse(typeof ev.data === "string" ? ev.data : ev.data.toString()));
-  ws.onclose = (ev) => { closeCode = ev.code; record("in", "close", { code: ev.code, reason: ev.reason }); };
-  await new Promise((r, j) => { ws.onopen = r; ws.onerror = j; });
-  send("hello", { client_token: token, last_seq: 0 });
-  const ping = setInterval(() => { if (ws.readyState === 1) send("ping", {}); }, 15000);
+  const ping = await openSocket(ws_url, token);
 
   const state = await waitFrame((f) => f.t === "round.state", 5000, "round.state");
   check("brief card before the opener", state.d.brief?.question && state.d.brief.lines?.length > 0, state.d.brief);
@@ -282,23 +319,106 @@ async function main() {
 
   const rep = await api("GET", `/api/sessions/${id}/report`);
   writeFileSync(join(OUT, "report.json"), JSON.stringify(rep.data, null, 2) + "\n");
-  const ajv = new Ajv2020({ allErrors: true, strict: false });
-  addFormats(ajv);
-  const schema = JSON.parse(readFileSync(join(REPO, "content/schema/report.v1.schema.json"), "utf8"));
-  const valid = rep.status === 200 && ajv.validate(schema, rep.data);
-  check("report matches report.v1", valid, valid ? { verdict: rep.data.headline?.verdict, summary: rep.data.headline?.summary } : ajv.errors?.slice(0, 5) ?? rep.status);
+  const v = rep.status === 200 ? validateReport(rep.data) : { ok: false, errors: rep.status };
+  check("report matches report.v1", v.ok, v.ok ? { verdict: rep.data.headline?.verdict, summary: rep.data.headline?.summary } : v.errors?.slice?.(0, 5) ?? v.errors);
 
   const ttfts = [opener, ...turns, closing].map((t) => t.ttft).filter((x) => x !== null);
   summary.timings = {
     turn_first_text_ms: ttfts,
-    turn_first_text_p50_ms: ttfts.sort((a, b) => a - b)[Math.floor(ttfts.length / 2)],
-    total_s: Math.round(now() / 100) / 10,
+    turn_first_text_p50_ms: [...ttfts].sort((a, b) => a - b)[Math.floor(ttfts.length / 2)],
+    interview_s: Math.round(now() / 100) / 10,
   };
-  summary.ok = Object.values(summary.checks).every((c) => c.ok);
   writeFileSync(join(OUT, "events.json"), JSON.stringify(log, null, 2) + "\n");
-  writeFileSync(join(OUT, "summary.json"), JSON.stringify(summary, null, 2) + "\n");
-  say(`${summary.ok ? "SMOKE OK" : "SMOKE FAILED"}; artifacts in ${OUT}`);
-  process.exit(summary.ok ? 0 : 1);
+}
+
+// ---------- a meeting rehearsal ----------
+const MEETING_SETUP = {
+  template_id: "exec_update",
+  goal: "Get approval to move one engineer from the payments team for six weeks.",
+  user_role: "Engineering lead for the mobile launch",
+  attendees: [
+    { name: "Dana", role: "VP of Engineering", cares_about: ["launch date", "bottom line first"], personality: "skeptical", decision_power: "approver" },
+    { name: "Owen", role: "Payments lead", cares_about: ["his team's roadmap"], personality: "neutral", likely_objections: ["Losing an engineer delays the refunds work"] },
+  ],
+  length: "short",
+  key_facts: ["Launch is slipping 3 weeks", "One extra engineer brings it back to 1 week late"],
+  ask: "One payments engineer for six weeks",
+  notes: "Status: QA found 40 open bugs, 12 of them blockers.",
+  difficulty: "realistic",
+};
+const MEETING_LINES = [
+  "Bottom line first: the mobile launch is slipping three weeks. QA found forty open bugs, twelve of them " +
+    "blockers. I'm asking for one payments engineer for six weeks, which brings us back to one week late.",
+  "Owen, I know that hits the refunds work. I'd take the engineer who already knows our checkout code, and I'll " +
+    "give the refunds team two of my people for the week after launch so the refunds date only moves by one week.",
+  "So the ask is clear: one payments engineer for six weeks, starting Monday. In return the refunds work gets two " +
+    "of my engineers right after launch. Dana, can we agree on that today?",
+];
+
+async function meetingRound() {
+  record("round", "meeting", {});
+  const t = now();
+  const prep = await api("POST", "/api/meetings/prepare", MEETING_SETUP);
+  check("meeting prepared", prep.status === 200 && prep.data?.meeting_plan_id, { status: prep.status, ms: now() - t, attendees: prep.data?.plan?.attendees?.map((a) => `${a.name} (${a.role})`), error: prep.status === 200 ? undefined : prep.data });
+  if (prep.status !== 200) return;
+  const created = await api(
+    "POST",
+    "/api/sessions",
+    { mode: "meeting", meeting_plan_id: prep.data.meeting_plan_id, length: "short", level: "mid", style: "neutral", voice: "fake" },
+    { "X-Dev-Key": DEV_KEY },
+  );
+  if (created.status !== 200) throw new Error(`meeting create: HTTP ${created.status} ${JSON.stringify(created.data)}`);
+  const { session_id: id, client_token: token, ws_url } = created.data;
+  summary.meeting_session_id = id;
+  let floor = created.data.floor;
+  say(`meeting session ${id}, floor ${floor}, panel ${created.data.panel.map((p) => `${p.panelist_id}=${p.display_name}`).join(", ")}`);
+  const ping = await openSocket(ws_url, token);
+  await waitFrame((f) => f.t === "round.state", 5000, "round.state");
+
+  // A hand-over moves the floor: the browser joins the next attendee, whose first line is already spoken.
+  const handOver = async (since) => {
+    const ho = frames.find((x) => x.t_ms >= since && x.f.t === "panel.hand_over");
+    if (!ho) return;
+    const { to, opening_line } = ho.f.d;
+    const res = await api("POST", `/api/sessions/${id}/panelists/${to}/join`, { opening_line });
+    record("http", "join", { to, status: res.status });
+    if (res.status === 200) {
+      floor = to;
+      spoken(opening_line, to);
+      say(`hand-over to ${to}: "${opening_line}"`);
+    }
+  };
+
+  let since = now();
+  const opener = await turn(id, token, "[event: start]", "meeting opener", floor);
+  spoken(opener.reply, floor);
+  await sleep(2500);
+  await handOver(since);
+  for (const [i, line] of MEETING_LINES.entries()) {
+    since = now();
+    const r = await turn(id, token, line, `meeting answer ${i + 1}`, floor);
+    spoken(r.reply, floor);
+    await sleep(3000);
+    await handOver(since);
+  }
+  send("ui.event", { kind: "end", reason: "user_ended" });
+  const ended = next((f) => f.t === "round.ended", 40000, "meeting round.ended");
+  const closing = await turn(id, token, "[event: ending]", "meeting closing", floor);
+  spoken(closing.reply, floor);
+  const e = await ended;
+  const endedAt = now();
+  check("meeting ended", !!e.d.reason, e.d);
+  const ready = await next((f) => f.t === "report.ready" || (f.t === "error" && f.d.code === "report_failed"), 150000, "meeting report");
+  check("meeting report ready", ready.t === "report.ready", { ms_after_end: now() - endedAt });
+  clearInterval(ping);
+  if (ws.readyState === 1) ws.close();
+  const rep = await api("GET", `/api/sessions/${id}/report`);
+  writeFileSync(join(OUT, "meeting-report.json"), JSON.stringify(rep.data, null, 2) + "\n");
+  const v = rep.status === 200 ? validateReport(rep.data) : { ok: false, errors: rep.status };
+  check("meeting report matches report.v1", v.ok, v.ok ? undefined : v.errors?.slice?.(0, 5) ?? v.errors);
+  const details = rep.data?.round_details;
+  check("meeting outcome in the report", details?.kind === "meeting" && !!details?.outcome, { kind: details?.kind, outcome: details?.outcome, goal_reached: details?.goal_reached });
+  writeFileSync(join(OUT, "events.json"), JSON.stringify(log, null, 2) + "\n");
 }
 
 main().catch((err) => {
