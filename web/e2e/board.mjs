@@ -143,18 +143,34 @@ r = await step(
 );
 if (r?.edges?.length !== 1) fail('the line did not connect the boxes', r);
 
-// 4. Select the first box and label it by voice; label the second one too.
+// 4. Select the first box and label it by voice ("call that ..." labels at once); "that's the ..." on the second
+//    box only suggests the label as a ghost.
 r = await step(
-  'board-04-labelled',
+  'board-04-suggested',
   `const [a, c] = (await board()).items;
   await tap(a.x + a.w / 2, a.y + a.h / 2);
   await say('call that the shortener service');
   await tap(c.x + c.w / 2, c.y + c.h / 2);
   await say("that's the URL store");
   const b = await board();
-  return { labels: b.items.map((i) => i.label), status: await status() };`,
+  return { labels: b.items.map((i) => i.label), ghosts: b.ghosts.map((g) => [g.op, g.args.text]), status: await status() };`,
 );
 if (r?.labels?.[0] !== 'Shortener service') fail('the voice label did not land on the first box', r);
+if (r?.labels?.[1] !== null) fail('a statement must not label at once', r);
+
+// 4b. Click the suggestion to keep it (it would also settle by itself after 4 s).
+r = await step(
+  'board-04-labelled',
+  `const b0 = await board();
+  const g = b0.ghosts[0];
+  if (g) {
+    const rect = await frame.evaluate((id) => window.__board.ghostRect(id), g.op_id);
+    if (rect) await tap(rect.x + rect.w / 2, rect.y + rect.h / 2);
+  }
+  const b = await board();
+  return { labels: b.items.map((i) => i.label), ghosts: b.ghosts.length, status: await status() };`,
+);
+if (r?.labels?.[1] !== 'URL store' || r?.ghosts !== 0) fail('accepting the suggestion did not label the second box', r);
 
 // 5. Pull a cache card from the tray, connect the service to it with its tab, draw a client circle and a note.
 r = await step(
