@@ -81,6 +81,7 @@ pub fn request_for_draft(
         .unwrap_or(&state.panel[0]);
     let mut messages = state.history.clone();
     messages.extend(draft.messages.clone());
+    let mut messages = perspective(state, panelist_id, messages);
     // Second cache breakpoint on the newest user turn (in the history when it was recorded at turn start), so the
     // growing history is read from cache next turn. It exists only in the request; the stored history carries none.
     if let Some(block) = messages
@@ -165,7 +166,17 @@ pub fn turn_note(
     let last_phase = state.phase_idx + 1 >= state.round.phases.len();
 
     let mut warned = false;
-    let time_line = if round_left <= 0.0 {
+    let meeting_parts = state.meeting.as_ref().map(|m| {
+        crate::meeting::live::turn_parts(
+            m,
+            panelist_id,
+            &crate::meeting::live::Clock::of(state, now),
+        )
+    });
+    let time_line = if let Some((line, _)) = &meeting_parts {
+        // Meetings: only the chair keeps time, and nobody does when the user chairs.
+        line.clone()
+    } else if round_left <= 0.0 {
         "Time is up for the round. Close now in one line, then call end_round with that line."
             .to_string()
     } else if phase_left <= 0.0 && !last_phase {
@@ -182,7 +193,7 @@ pub fn turn_note(
 
     let mut notes: Vec<String> = Vec::new();
     if let Some(kind) = input.event() {
-        if let Some(note) = event_note(state, kind, time_line.is_empty()) {
+        if let Some(note) = event_note(state, panelist_id, kind, time_line.is_empty()) {
             notes.push(note);
         }
     }
@@ -202,15 +213,8 @@ pub fn turn_note(
         ));
     }
     notes.extend(state.pending_notes.iter().cloned());
-    if let Some(meeting) = state
-        .meeting
-        .as_ref()
-        .filter(|m| !m.hidden.trim().is_empty())
-    {
-        notes.push(format!(
-            "Meeting state, for you only: {}",
-            meeting.hidden.trim()
-        ));
+    if let Some((_, meeting_notes)) = meeting_parts {
+        notes.extend(meeting_notes);
     }
 
     let board_text = if !state.board_text.trim().is_empty() {
@@ -249,7 +253,15 @@ pub fn turn_note(
 }
 
 /// The note an app event adds to the turn.
-fn event_note(state: &SessionState, kind: EventKind, no_time_line: bool) -> Option<String> {
+fn event_note(
+    state: &SessionState,
+    panelist_id: &str,
+    kind: EventKind,
+    no_time_line: bool,
+) -> Option<String> {
+    if let (Some(m), EventKind::Ending) = (&state.meeting, kind) {
+        return crate::meeting::live::ending_note(m, panelist_id);
+    }
     Some(match kind {
         EventKind::Start => "The round starts now. Open as the round script says.".into(),
         EventKind::TimeCheck => {
@@ -270,6 +282,71 @@ fn event_note(state: &SessionState, kind: EventKind, no_time_line: bool) -> Opti
         ),
         EventKind::Ending => "Time is up. Close now in one line, with no feedback, then call end_round with that line.".into(),
     })
+}
+
+/// The conversation as one panelist sees it. With two or more panelists, another panelist's reply is not this
+/// panelist's own turn: it becomes a user-side line "Name said: ...", the note that panelist got before it is left
+/// out (it held that panelist's private state), and tool calls it made disappear with their results. The model's own
+/// replies stay assistant turns. The view only grows as the history grows, so the prompt cache holds.
+pub fn perspective(
+    state: &SessionState,
+    panelist_id: &str,
+    messages: Vec<Message>,
+) -> Vec<Message> {
+    if state.panel.len() < 2 {
+        return messages;
+    }
+    let other = |i: usize| {
+        state
+            .assistant_speakers
+            .get(&i)
+            .filter(|p| p.as_str() != panelist_id)
+    };
+    let mut dropped_tools: Vec<String> = Vec::new();
+    let mut out: Vec<Message> = Vec::with_capacity(messages.len());
+    for (i, m) in messages.iter().enumerate() {
+        match m.role {
+            Role::System
+                if messages
+                    .get(i + 1)
+                    .is_some_and(|n| n.role == Role::Assistant)
+                    && other(i + 1).is_some() => {}
+            Role::Assistant => match other(i) {
+                Some(speaker) => {
+                    for b in &m.content {
+                        if let ContentBlock::ToolUse { id, .. } = b {
+                            dropped_tools.push(id.clone());
+                        }
+                    }
+                    let said = m.text();
+                    if !said.trim().is_empty() {
+                        out.push(Message::user_text(format!(
+                            "{} said: \"{}\"",
+                            state.display_name(speaker),
+                            said.trim()
+                        )));
+                    }
+                }
+                None => out.push(m.clone()),
+            },
+            Role::User if !dropped_tools.is_empty() => {
+                let content: Vec<ContentBlock> = m
+                    .content
+                    .iter()
+                    .filter(|b| !matches!(b, ContentBlock::ToolResult { tool_use_id, .. } if dropped_tools.contains(tool_use_id)))
+                    .cloned()
+                    .collect();
+                if !content.is_empty() {
+                    out.push(Message {
+                        role: Role::User,
+                        content,
+                    });
+                }
+            }
+            _ => out.push(m.clone()),
+        }
+    }
+    out
 }
 
 /// Whole minutes for the note: 0 once time is up, at least 1 while any is left.

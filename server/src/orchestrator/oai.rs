@@ -452,8 +452,10 @@ fn turn_stream(
             let panelist = st.resolve_panelist(panelist_req.as_deref());
             st.resolve_provisional(&panelist, fish_last.as_deref());
             st.observe_fish_transcript(&panelist, fish_last.as_deref());
+            st.sync_meeting_phase(Instant::now());
+            // A line written in advance is spoken word for word: a hand-over, or a meeting's opening line.
             let handover_line = match input {
-                UserInput::Event(EventKind::Handover) => st.pending_handover.get(&panelist).cloned(),
+                UserInput::Event(EventKind::Handover | EventKind::Start) => st.pending_handover.get(&panelist).cloned(),
                 _ => None,
             };
             // Words Fish repeats from an earlier request (its draft reply was never played) are recorded already.
@@ -518,6 +520,12 @@ fn turn_stream(
         let mut req = {
             let mut st = session.lock().await;
             st.record_user(&mut draft, repeat_only, Instant::now());
+            // Meetings: judge what the user just said in the background; the next turn's note carries the result.
+            if !repeat_only && input.speech().is_some()
+                && let Some(job) = crate::meeting::live::update_job(&st, Instant::now())
+            {
+                crate::meeting::live::spawn_update(app.llm.clone(), app.catalog.clone(), session.clone(), job);
+            }
             request_for_draft(&st, &panelist, &draft)
         };
         guard.draft = Some(draft.clone());

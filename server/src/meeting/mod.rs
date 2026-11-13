@@ -8,6 +8,7 @@
 //!   bounds every move and works out the decision from the approver's state.
 //! - `live`: the attendee prompts and the per-turn note each attendee sees (only its own hidden state).
 
+pub mod live;
 pub mod prepare;
 pub mod state;
 
