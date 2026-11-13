@@ -18,12 +18,15 @@ anyhow = "1"
 async-stream = "0.3"
 async-trait = "0.1"
 axum = { version = "0.8.9", features = ["ws", "macros"] }
+base64 = "0.22"
 bytes = "1"
 chrono = { version = "0.4", features = ["serde"] }
 eventsource-stream = "0.2.3"
 futures = "0.3"
 getrandom = "0.3"
 hex = "0.4"
+image = { version = "0.25", default-features = false, features = ["png"] }
+jsonschema = { version = "0.61", default-features = false }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 sha2 = "0.10"

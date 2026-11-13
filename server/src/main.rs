@@ -4,7 +4,7 @@ use std::time::Duration;
 use anyhow::Context;
 use ir_server::content::Catalog;
 use ir_server::ws::CLOSE_RESTART;
-use ir_server::{AppState, Config, db, persist, router};
+use ir_server::{AppState, Config, db, persist, router, scoring};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
@@ -67,6 +67,8 @@ async fn serve() -> anyhow::Result<()> {
         tracing::warn!(error = %format!("{err:#}"), "startup sweep failed");
     }
     persist::spawn_janitor(state.clone(), state.timing.janitor);
+    let scoring = scoring::ScoringDeps::from_app(&state).context("setting up scoring")?;
+    scoring::spawn_worker(scoring, Duration::from_secs(2));
     let hubs = state.hubs.clone();
     let app = router(state);
 

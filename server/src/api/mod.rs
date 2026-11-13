@@ -3,6 +3,7 @@
 pub mod content;
 pub mod llm_gate;
 pub mod me;
+pub mod report;
 pub mod sessions;
 
 use axum::Router;

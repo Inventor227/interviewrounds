@@ -13,6 +13,7 @@ pub mod fish;
 pub mod identity;
 pub mod orchestrator;
 pub mod persist;
+pub mod scoring;
 pub mod scribe;
 pub mod usage;
 pub mod ws;
