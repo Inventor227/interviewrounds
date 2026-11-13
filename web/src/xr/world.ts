@@ -1,7 +1,7 @@
 // The XR app: one IWSDK world for the round room, in passthrough (`ar`) or as a 2D preview in the page (`preview`).
 //
-// ar:      immersive-ar, hand tracking and hit test required, anchors optional, 90 Hz when the device offers it,
-//          medium fixed foveation. On session start the desk placement runs ("Touch your desk where the sheet
+// ar:      immersive-ar, hand tracking required, hit test and anchors optional, 72 Hz raised to 90 only with
+//          measured headroom, medium fixed foveation, pause on XRSession visibility changes. On session start the desk placement runs ("Touch your desk where the sheet
 //          should go"), then the room is built and anchored around that desk.
 // preview: no WebXR. The same room in a calm virtual meeting room, camera at seated eye height, mouse input.
 //
@@ -22,6 +22,7 @@ import {
 } from '@iwsdk/core';
 import { ACESFilmicToneMapping, Matrix4, Quaternion, Vector3, type Mesh, type Object3D, type Scene } from 'three';
 import { yawPitchFromQuat } from './math';
+import { FrameRateGovernor } from './framerate';
 import { DeskPlacement, type DeskPose, type HandState, type HeadPose } from './placement';
 import { PlacementView } from './placementView';
 import { buildPreviewRoom, MouseLook, PREVIEW_DESK, PREVIEW_FOV } from './preview';
@@ -61,7 +62,12 @@ export interface RenderStats {
   multiview: boolean;
   /** Draw calls per eye: calls / views without multiview. */
   callsPerView: number;
+  /** The session's target frame rate (72 until measured headroom allows 90), null outside a session. */
+  targetFps: number | null;
 }
+
+/** XRSession visibility: 'visible', 'visible-blurred' (system menu over the app) or 'hidden' (headset off). */
+export type XRVisibility = 'visible' | 'visible-blurred' | 'hidden';
 
 export interface XRApp {
   world: World;
@@ -79,6 +85,13 @@ export interface XRApp {
   headPose(): HeadPose;
   hands(): HandState[];
   visibility$: ReadonlySignal<VisibilityState>;
+  /**
+   * XRSession visibility changes (Quest system menu, headset off). The app also asks the round UI to pause by
+   * itself (a 'pause' action, so the Resume card shows) when a live round loses visibility.
+   */
+  onVisibility(cb: (v: XRVisibility) => void): () => void;
+  /** The immersive session ended; byApp is true when exit() asked for it (End), false for the system or the user. */
+  onSessionEnd(cb: (e: { byApp: boolean }) => void): () => void;
   /** The placed desk, null until placement finishes. */
   desk$: ReadonlySignal<DeskPose | null>;
   /** Re-runs placement (also runs by itself on session start). */
@@ -93,6 +106,15 @@ const TIPS = ['thumb-tip', 'index-finger-tip', 'middle-finger-tip', 'ring-finger
 
 type FrameCb = (dt: number, nowMs: number) => void;
 const hooks = new WeakMap<World, Set<FrameCb>>();
+
+const frameStarts = new WeakMap<World, number>();
+
+/** Runs first each frame so the frame's CPU time (systems + render) can be measured. */
+class FrameStartSystem extends createSystem({}) {
+  override update(): void {
+    frameStarts.set(this.world as World, performance.now());
+  }
+}
 
 class FrameHookSystem extends createSystem({}) {
   override update(delta: number): void {
@@ -116,7 +138,7 @@ export async function createXRApp(root: HTMLElement, opts: XRAppOptions): Promis
             referenceSpace: ReferenceSpaceType.LocalFloor,
             offer: opts.offer ? 'once' : 'none',
             // Plane and mesh detection stay off: they cost a permission prompt (research/06 §2.2).
-            features: { handTracking: { required: true }, hitTest: { required: true }, anchors: true },
+            features: { handTracking: { required: true }, hitTest: true, anchors: true },
           },
           render: { near: 0.01, far: 50, ...base.render },
           features: { ...base.features, sceneUnderstanding: false },
@@ -133,6 +155,7 @@ export async function createXRApp(root: HTMLElement, opts: XRAppOptions): Promis
   renderer.toneMapping = ACESFilmicToneMapping;
   renderer.toneMappingExposure = mode === 'ar' ? 0.9 : 1.0;
   renderer.xr.setFoveation(0.5);
+  world.registerSystem(FrameStartSystem, { priority: -100 });
   world.registerSystem(FrameHookSystem, { priority: 10 });
   const frameCbs = new Set<FrameCb>();
   hooks.set(world, frameCbs);
@@ -145,7 +168,7 @@ export async function createXRApp(root: HTMLElement, opts: XRAppOptions): Promis
   const ui = new RoundUI(sounds);
   const placementView = new PlacementView();
   placementView.group.visible = false;
-  scene.add(placementView.group);
+  scene.add(placementView.group, ui.hint.group);
 
   // Panels are entities so rays, pokes and the mouse reach them.
   const panelEntities = Object.values(ui.groups).map((g) => {
@@ -171,6 +194,7 @@ export async function createXRApp(root: HTMLElement, opts: XRAppOptions): Promis
   };
 
   let handStates: HandState[] = [];
+  let controllersHinted = false;
   world.onXRFrame((frame) => {
     const ref = world.xrReferenceSpace;
     const session = world.session;
@@ -200,6 +224,11 @@ export async function createXRApp(root: HTMLElement, opts: XRAppOptions): Promis
       out.push({ hand: src.handedness, tracked: true, indexTip: index, tips, pinch: Math.max(0, Math.min(1, 1 - (d - 0.012) / 0.03)) });
     }
     handStates = out;
+    if (!controllersHinted && session.inputSources && Array.from(session.inputSources).some((s) => !s.hand && !!s.gamepad && s.targetRayMode === 'tracked-pointer')) {
+      controllersHinted = true;
+      ui.layoutHint(headPose());
+      ui.showHint('Put your controllers down; use your hands', performance.now(), 7000);
+    }
     updateAnchor(frame, ref);
   });
 
@@ -294,6 +323,10 @@ export async function createXRApp(root: HTMLElement, opts: XRAppOptions): Promis
     build(desk);
     placementView.finish(room.sheet, now);
     ui.hideStatus();
+    if (desk.source === 'fallback') {
+      ui.layoutHint(headPose());
+      ui.showHint('No desk? We set one up for you.', now, 6000);
+    }
     sounds.flap();
     desk$.value = desk;
     void createAnchor(desk);
@@ -391,19 +424,61 @@ export async function createXRApp(root: HTMLElement, opts: XRAppOptions): Promis
     for (const s of standins) if (s.object.visible) s.mixer.update(dt);
   });
 
-  // Session tuning: 90 Hz when offered, foveation, then placement.
-  renderer.xr.addEventListener('sessionstart', () => {
-    const s = renderer.xr.getSession();
-    const rates = (s as XRSession & { supportedFrameRates?: Float32Array })?.supportedFrameRates;
-    if (s && rates && Array.from(rates).includes(90)) {
-      (s as XRSession & { updateTargetFrameRate?(r: number): Promise<void> }).updateTargetFrameRate?.(90)?.catch(() => {});
+  // ---- session lifecycle: frame rate, foveation, visibility, end ----
+  type RateSession = XRSession & { supportedFrameRates?: Float32Array; frameRate?: number; updateTargetFrameRate?(r: number): Promise<void> };
+  let governor: FrameRateGovernor | null = null;
+  let targetFps: number | null = null;
+  const visCbs = new Set<(v: XRVisibility) => void>();
+  const endCbs = new Set<(e: { byApp: boolean }) => void>();
+  let exitByApp = false;
+
+  // Frame CPU time = from the first system to the end of render. Feeds the 72/90 Hz choice.
+  const render = renderer.render.bind(renderer);
+  renderer.render = (s, c) => {
+    render(s, c);
+    const start = frameStarts.get(world);
+    if (governor && start !== undefined && world.session?.visibilityState === 'visible') {
+      const now = performance.now();
+      const rate = governor.frame(now - start, now);
+      const session = world.session as RateSession;
+      if (rate && session.updateTargetFrameRate) {
+        session
+          .updateTargetFrameRate(rate)
+          .then(() => {
+            targetFps = rate;
+            console.info(`[xr] frame rate ${rate} Hz (${governor?.describe()}; p95 CPU frame time ${rate === 90 ? 'under 9' : 'over 11'} ms)`);
+          })
+          .catch(() => console.info(`[xr] frame rate ${rate} Hz refused; staying at ${targetFps ?? 72} Hz`));
+      }
     }
+  };
+
+  renderer.xr.addEventListener('sessionstart', () => {
+    const s = renderer.xr.getSession() as RateSession | null;
+    // Start at 72 Hz (the WebXR default on Quest); 90 only after measured headroom.
+    const rates = s?.supportedFrameRates ? Array.from(s.supportedFrameRates) : [];
+    governor = new FrameRateGovernor(rates.map((r) => Math.round(r)));
+    targetFps = s?.frameRate ? Math.round(s.frameRate) : 72;
+    if (s?.updateTargetFrameRate && rates.some((r) => Math.round(r) === 72)) s.updateTargetFrameRate(72).catch(() => {});
+    console.info(`[xr] frame rate 72 Hz to start; offered: ${rates.join(', ') || 'unknown'}`);
     renderer.xr.setFoveation(0.5);
+    exitByApp = false;
+    s?.addEventListener('visibilitychange', () => {
+      const v = s.visibilityState as XRVisibility;
+      if (v !== 'visible') ui.systemPause();
+      for (const cb of visCbs) cb(v);
+    });
     void placeDesk();
   });
   renderer.xr.addEventListener('sessionend', () => {
     placing = null;
     placementView.group.visible = false;
+    governor = null;
+    targetFps = null;
+    const byApp = exitByApp;
+    exitByApp = false;
+    if (!byApp) ui.systemPause();
+    for (const cb of endCbs) cb({ byApp });
   });
 
   void loadStandins();
@@ -447,7 +522,17 @@ export async function createXRApp(root: HTMLElement, opts: XRAppOptions): Promis
       });
     },
     exit() {
-      if (mode === 'ar') world.exitXR();
+      if (mode !== 'ar' || !world.session) return;
+      exitByApp = true;
+      world.exitXR();
+    },
+    onVisibility(cb) {
+      visCbs.add(cb);
+      return () => visCbs.delete(cb);
+    },
+    onSessionEnd(cb) {
+      endCbs.add(cb);
+      return () => endCbs.delete(cb);
     },
     destroy() {
       resizeObs?.disconnect();
@@ -491,6 +576,7 @@ export async function createXRApp(root: HTMLElement, opts: XRAppOptions): Promis
         geometries: i.memory.geometries,
         textures: i.memory.textures,
         programs: i.programs?.length ?? 0,
+        targetFps,
         fps: Math.round(fps * 10) / 10,
       };
     },
