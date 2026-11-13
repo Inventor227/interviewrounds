@@ -539,7 +539,8 @@ fn today_start(now: DateTime<Utc>) -> DateTime<Utc> {
 }
 
 /// Session counts that limits are based on: rounds that went live (the browser's first socket hello). Failed
-/// sessions and sessions that never started (made on the mic tap, never entered) do not count.
+/// sessions and sessions that never started (made on the mic tap, never entered) do not count. A retry counts as
+/// a quick round.
 #[derive(Clone, Copy, Debug, Default)]
 struct Counts {
     short_today: i64,
@@ -554,8 +555,8 @@ async fn counts(
     now: DateTime<Utc>,
 ) -> Result<Counts, sqlx::Error> {
     let row: (i64, i64, i64, i64) = sqlx::query_as(
-        "select count(*) filter (where length = 'short' and created_at >= $2), \
-                count(*) filter (where length = 'short'), \
+        "select count(*) filter (where length in ('short', 'retry') and created_at >= $2), \
+                count(*) filter (where length in ('short', 'retry')), \
                 count(*) filter (where length = 'full'), \
                 count(*) \
          from sessions \

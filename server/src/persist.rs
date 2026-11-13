@@ -356,12 +356,21 @@ pub async fn state_from_row(app: &AppState, row: &SessionRow) -> anyhow::Result<
         meeting: meeting_state(&app.db, row.meeting_plan_id).await?,
     };
     let now = Instant::now();
-    let mut st = SessionState::new(
-        spec,
-        &app.catalog,
-        LiveSettings::from_config(&app.config),
-        now,
-    )?;
+    let live = LiveSettings::from_config(&app.config);
+    let mut st = if row.length == "retry" {
+        // A retry's round and prompt are rebuilt from what it re-asks.
+        let (retry, _) = crate::retry::stored(&app.db, row.id)
+            .await?
+            .ok_or_else(|| anyhow!("retry session {} has no retry spec", row.id))?;
+        let base = app
+            .catalog
+            .round(&spec.round_id)
+            .ok_or_else(|| anyhow!("unknown round {}", spec.round_id))?
+            .clone();
+        crate::retry::state(spec, &retry, &base, &app.catalog, live, now)?
+    } else {
+        SessionState::new(spec, &app.catalog, live, now)?
+    };
     match &row.live_state {
         Some(v) => {
             let snap: LiveSnapshot =

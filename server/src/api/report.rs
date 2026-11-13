@@ -50,13 +50,17 @@ async fn owned_status(app: &AppState, raw_id: &str, who: &Identity) -> AppResult
     }
 }
 
-/// `GET /api/sessions/{id}/report` → `Report`, or 404 until it is ready.
+/// `GET /api/sessions/{id}/report` → `Report`, or 404 until it is ready. A retry answers its parent's report
+/// (with the retry's before and after on it) once the retry is scored.
 async fn get_report(
     State(app): State<AppState>,
     Extension(who): Extension<Identity>,
     Path(id): Path<String>,
 ) -> AppResult<Response> {
     let (id, _) = owned_status(&app, &id, &who).await?;
+    let id = crate::retry::report_session(&app.db, id)
+        .await?
+        .ok_or(AppError::NotFound)?;
     let report: Option<Value> =
         sqlx::query_scalar("select report from reports where session_id = $1")
             .bind(id)

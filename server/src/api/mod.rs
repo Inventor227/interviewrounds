@@ -23,6 +23,7 @@ pub fn routes(state: &AppState) -> Router<AppState> {
         .route("/api/sessions/{id}", get(sessions::status))
         .route("/api/sessions/{id}/resume", post(sessions::resume))
         .route("/api/sessions/{id}/end", post(sessions::end))
+        .route("/api/sessions/{id}/retry", post(sessions::retry))
         .route(
             "/api/sessions/{id}/panelists/{pid}/join",
             post(sessions::join),

@@ -15,6 +15,7 @@ pub mod live_board;
 pub mod meeting;
 pub mod orchestrator;
 pub mod persist;
+pub mod retry;
 pub mod scoring;
 pub mod scribe;
 pub mod usage;

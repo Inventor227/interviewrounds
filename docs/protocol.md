@@ -39,13 +39,30 @@ JSON; cookie `ir_id` identifies the device/user; all under same origin. A new gu
 - `POST /api/sessions/{id}/end` `{reason:"completed"|"user_ended"|"time_limit"|"disconnected"|"headset_removed"}` → 202. Ends
   the round at once with this reason (also during the goodbye after `ui.event {kind: "end"}`).
 - `GET /api/sessions/{id}` → `{status:"created"|"live"|"paused"|"scoring"|"scored"|"failed"|"abandoned", report_ready}`
-- `GET /api/sessions/{id}/report` → `Report` (404 until ready, and for a session that is not the caller's)
+- `GET /api/sessions/{id}/report` → `Report` (404 until ready, and for a session that is not the caller's). A retry
+  session has no report of its own: it answers its parent's report (with the retry's entry in
+  `weakest_moment.retries`) once the retry is scored, and 404 before. `GET /api/sessions/{id}` gives a retry
+  `report_ready: true` once it is `scored`. The web app shows a retry's report at its parent's address
+  (`/report/{parent}`).
 - `POST /api/sessions/{id}/report` → 202 `{status:"scoring"}`: score a `failed` session again ("Try again"). Scoring
   makes at most 2 attempts per session; this gives 2 fresh ones. At most 2 per session per day (429
   `rescore_limit`); 409 when the session is scored or has not ended; 202 no-op when already `scoring`.
 - `POST /api/sessions/{id}/board-image` (body `image/png`, ≤ 2 MB, ≤ 4096 px a side) → 204. One image per session:
   a new one replaces the old. Only while the session is `live`, `paused` or `scoring` (409 after).
-- `POST /api/sessions/{id}/retry` → `CreateSessionRes` (2-minute re-ask of the weakest moment)
+- `POST /api/sessions/{id}/retry` (no body) → `CreateSessionRes`: a 2-minute re-ask of the weakest moment of the
+  caller's scored interview round. Only when its report has `weakest_moment.retry.prompt`; else `409 {code:
+  "no_retry"}` (also for a meeting, a round not yet `scored`, or a retry); 404 for a session that is not the
+  caller's. The retry is a new session with `parent_session_id` = the round, stored with length `retry`, on the same
+  round id, level, style and voice (`voice: "fake"` needs `X-Dev-Key` as on create). Its `round` is a `RoundPublic`
+  of the parent round with `length: "short"`, `target_minutes: 2`, `hands: "none"`, `board_kit: null`, two phases
+  (`retry` 1.5 min, then `close` 0.5 min; the time check at 90 s) and one panelist: the persona who asked the weakest
+  question. `timing.hard_stop_minutes` is 2.5: at 120 s the time check asks for the goodbye, and the round stops on
+  its own 30 s later if none came. The opening line on `[event: start]` is `retry.prompt` (its first two sentences),
+  spoken word for word with no model call; the brief card holds the question. Caps and guest limits are those of a
+  quick round (a retry counts as one). Scoring is one `FAST_MODEL` call (ledgered like any other) that scores the new
+  answer 1 to 4 on the parent's weakest-moment competency, then appends `{session_id, at, before_score, after_score,
+  note}` to the parent report's `weakest_moment.retries` (once per retry); the socket gets `report.progress` and
+  `report.ready` as for a round (no headset card).
 - `GET /api/me` → `{identity:{kind:"guest"|"user", name?, email?}, sign_in_available, settings, onboarding_done,
   streak:{current, best, today_done}, daily:{round_id, title}|null, resumable:{session_id, round_title, expires_at}|null,
   limits, entitlements}`. `resumable` is a dropped live session the user can still resume (`POST /api/sessions/{id}/resume`)
