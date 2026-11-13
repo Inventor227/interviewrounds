@@ -34,6 +34,10 @@ test("conversation settings match the brief", () => {
   assert.equal(c.speculative_response, true);
 });
 
+test("the voice platform never hangs up on its own", () => {
+  assert.deepEqual(buildConfig(input).tools, { system_tools: { hang_up_call: false } });
+});
+
 test("origin must be https", () => {
   assert.throws(() => buildConfig({ ...input, appOrigin: "http://rounds.dijmo.com" }), /https/);
   assert.throws(() => buildConfig({ ...input, llmSecret: "" }), /FISH_LLM_SECRET/);

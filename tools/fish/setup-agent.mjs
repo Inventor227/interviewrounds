@@ -77,6 +77,9 @@ export function buildConfig({
       echo_guard: { web_voice: true },
       record_audio: true,
     },
+    // Rounds end through our server (end_round, the browser's end, time limits), never through the voice
+    // platform hanging up on its own.
+    tools: { system_tools: { hang_up_call: false } },
   };
 }
 
@@ -197,7 +200,11 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
   if (fallbackMode !== "off") {
     throw new Error(`published agent ${agentId} has llm.fallback.mode=${fallbackMode}, expected off`);
   }
-  log(`published (fallback off, asr ${live?.asr?.model}, tts ${live?.voice?.tts_model}); set FISH_AGENT_ID=${agentId}`);
+  const hangUp = live?.tools?.system_tools?.hang_up_call;
+  if (hangUp !== false) {
+    throw new Error(`published agent ${agentId} has tools.system_tools.hang_up_call=${hangUp}, expected false`);
+  }
+  log(`published (fallback off, hang up off, asr ${live?.asr?.model}, tts ${live?.voice?.tts_model}); set FISH_AGENT_ID=${agentId}`);
   process.stdout.write(`${agentId}\n`);
   return agentId;
 }
