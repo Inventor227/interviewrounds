@@ -3,7 +3,9 @@
 //! - `POST /api/diag`: stores one result blob (a JSON object, at most 64 KB) for the caller's identity. At most
 //!   `PER_IDENTITY_PER_HOUR` per identity and `ALL_PER_DAY` in total.
 //! - `GET /api/diag/latest?limit=n`: the newest results, newest first. Needs `X-Dev-Key` (404 without it).
-//! - `POST /api/diag/echo`: a Fish voice session for the echo test. Needs `X-Dev-Key`. The agent reads a fixed
+//! - `POST /api/diag/echo`: a Fish voice session for the echo test. Needs `X-Dev-Key` and an identity, at most
+//!   `ECHO_PER_IDENTITY_PER_HOUR` per identity; each run is charged to the usage ledger (2 minutes, Fish, the current
+//!   phase) when it is minted, so the build cap sees it. The agent reads a fixed
 //!   passage as its first message (Fish speaks it; no model call), so the page can count what the microphone
 //!   picks up while the tester stays silent, then time a barge-in. The session carries no app session id, so
 //!   nothing it hears reaches a round. The server ends it after `ECHO_MAX_SECS` whatever the page does.
@@ -29,6 +31,11 @@ use crate::usage;
 pub const MAX_BYTES: usize = 64 * 1024;
 pub const PER_IDENTITY_PER_HOUR: i64 = 20;
 pub const ALL_PER_DAY: i64 = 1000;
+/// Results are kept this many days.
+pub const KEEP_DAYS: i64 = 30;
+pub const ECHO_PER_IDENTITY_PER_HOUR: i64 = 3;
+/// Serialises limit checks with their inserts (results and echo runs are rare).
+const DIAG_LOCK: i64 = 0x4952_4449_4147;
 /// Echo sessions per server process (each one bills Fish minutes).
 pub const MAX_ECHO_SESSIONS: usize = 6;
 /// The server ends an echo session this long after minting it.
@@ -55,13 +62,13 @@ pub fn routes(state: &AppState) -> Router<AppState> {
             "/api/diag",
             post(post_result).layer(DefaultBodyLimit::max(MAX_BYTES)),
         )
+        .route("/api/diag/echo", post(echo_session))
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             identity::require,
         ));
     Router::new()
         .route("/api/diag/latest", get(latest))
-        .route("/api/diag/echo", post(echo_session))
         .merge(with_identity)
 }
 
@@ -91,13 +98,30 @@ async fn post_result(
             "The results must be a JSON object.".into(),
         ));
     }
+    // Postgres jsonb cannot store a NUL character.
+    if payload.to_string().contains("\\u0000") {
+        return Err(AppError::BadRequest(
+            "The results contain a NUL character.".into(),
+        ));
+    }
+    let mut tx = app.db.begin().await?;
+    sqlx::query("select pg_advisory_xact_lock($1)")
+        .bind(DIAG_LOCK)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query(
+        "delete from diag_results where created_at < now() - make_interval(days => $1::int)",
+    )
+    .bind(KEEP_DAYS as i32)
+    .execute(&mut *tx)
+    .await?;
     let (mine, all): (i64, i64) = sqlx::query_as(
         "select count(*) filter (where identity_id = $1 and created_at > now() - interval '1 hour'), \
                 count(*) \
          from diag_results where created_at > now() - interval '1 day'",
     )
     .bind(me.id)
-    .fetch_one(&app.db)
+    .fetch_one(&mut *tx)
     .await?;
     if mine >= PER_IDENTITY_PER_HOUR || all >= ALL_PER_DAY {
         return Err(AppError::Limited {
@@ -110,8 +134,9 @@ async fn post_result(
     )
     .bind(me.id)
     .bind(&payload)
-    .fetch_one(&app.db)
+    .fetch_one(&mut *tx)
     .await?;
+    tx.commit().await?;
     Ok((StatusCode::CREATED, Json(json!({"id": id}))))
 }
 
@@ -156,20 +181,41 @@ fn echo_voice(app: &AppState) -> Option<String> {
         .map(str::to_string)
 }
 
-async fn echo_session(State(app): State<AppState>, headers: HeaderMap) -> AppResult<Json<Value>> {
+async fn echo_session(
+    State(app): State<AppState>,
+    Extension(me): Extension<Identity>,
+    headers: HeaderMap,
+) -> AppResult<Json<Value>> {
     if !dev_key_ok(&app, &headers) {
         return Err(AppError::NotFound);
     }
     let voice_id = echo_voice(&app).ok_or(AppError::Unavailable)?;
-    {
-        let mut conn = app.db.acquire().await?;
-        let spent = usage::fish_build_spend(&mut conn, &app.config).await?;
-        if spent + ECHO_RESERVE_MIN * app.config.fish_rate_per_min > app.config.fish_build_cap_usd {
-            return Err(AppError::Limited {
-                code: "fish_cap",
-                message: "The voice budget is used up.".into(),
-            });
-        }
+    // Limits and the ledger row in one transaction under the lock, so parallel taps cannot pass the limits.
+    let mut tx = app.db.begin().await?;
+    sqlx::query("select pg_advisory_xact_lock($1)")
+        .bind(DIAG_LOCK)
+        .execute(&mut *tx)
+        .await?;
+    let mine: i64 = sqlx::query_scalar(
+        "select count(*) from usage_events where identity_id = $1 and kind = 'diag_echo' \
+         and created_at > now() - interval '1 hour'",
+    )
+    .bind(me.id)
+    .fetch_one(&mut *tx)
+    .await?;
+    if mine >= ECHO_PER_IDENTITY_PER_HOUR {
+        return Err(AppError::Limited {
+            code: "echo_limit",
+            message: "Three echo tests an hour at most. Try again later.".into(),
+        });
+    }
+    let reserve = ECHO_RESERVE_MIN * app.config.fish_rate_per_min;
+    let spent = usage::fish_build_spend(&mut *tx, &app.config).await?;
+    if spent + reserve > app.config.fish_build_cap_usd {
+        return Err(AppError::Limited {
+            code: "fish_cap",
+            message: "The voice budget is used up.".into(),
+        });
     }
     if ECHO_SESSIONS.fetch_add(1, Ordering::SeqCst) >= MAX_ECHO_SESSIONS {
         return Err(AppError::Limited {
@@ -192,6 +238,19 @@ async fn echo_session(State(app): State<AppState>, headers: HeaderMap) -> AppRes
         .await
         .map_err(|e| AppError::Internal(anyhow::anyhow!("fish echo session: {e}")))?;
     tracing::info!(fish_session_id = %token.session_id, "diag echo session");
+    // Charged at the most it can run (the server ends it after two minutes).
+    sqlx::query(
+        "insert into usage_events (identity_id, provider, kind, usage_phase, minutes, cost_usd, meta) \
+         values ($1, 'fish', 'diag_echo', $2, $3, $4, $5)",
+    )
+    .bind(me.id)
+    .bind(app.config.usage_phase.as_str())
+    .bind(ECHO_RESERVE_MIN)
+    .bind(reserve)
+    .bind(json!({"fish_session_id": token.session_id}))
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
     let fish = app.fish.clone();
     let fish_id = token.session_id.clone();
     tokio::spawn(async move {
