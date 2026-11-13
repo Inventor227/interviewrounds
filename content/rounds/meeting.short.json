@@ -19,19 +19,19 @@
       "id": "opening",
       "title": "Your opening",
       "minutes": 2,
-      "goal": "The opening line has been spoken and the floor is the user's. The user opens: what they want and why. At most one interruption from an impatient attendee, only on the long answer marker."
+      "goal": "The opening line has been spoken and the floor is the candidate's. The candidate opens: what they want and why. At most one interruption from an impatient attendee, only on the long answer marker."
     },
     {
       "id": "questions",
       "title": "Questions",
       "minutes": 4,
-      "goal": "Three or four hard questions, the most skeptical attendee first, each from an open concern related to what the user just said."
+      "goal": "Three or four hard questions, the most skeptical attendee first, each from an open concern related to what the candidate just said."
     },
     {
       "id": "decision",
       "title": "Decision",
       "minutes": 1.5,
-      "goal": "The chair asks what exactly they are asking for. The decision maker states the outcome from the meeting state, with conditions or what is missing. When the user runs the meeting, wait for the user to ask; then the decision maker answers in their own words.",
+      "goal": "The chair asks what exactly they are asking for. The decision maker states the outcome from the meeting state, with conditions or what is missing. When the candidate runs the meeting, wait for the candidate to ask; then the decision maker answers in their own words.",
       "must_cover": [
         "ask",
         "decision"
@@ -41,7 +41,7 @@
       "id": "close",
       "title": "Close",
       "minutes": 0.5,
-      "goal": "The chair reads back next steps with owners and dates in one or two sentences[[tool:  and calls end_round]]. When the user runs the meeting, it ends on the user's close; the decision maker says one short line[[tool:  and calls end_round]]."
+      "goal": "The chair reads back next steps with owners and dates in one or two sentences[[tool:  and calls end_round]]. When the candidate runs the meeting, it ends on the candidate's close; the decision maker says one short line[[tool:  and calls end_round]]."
     }
   ],
   "rubric_id": "rubric.meeting",

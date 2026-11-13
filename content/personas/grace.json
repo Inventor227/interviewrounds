@@ -19,7 +19,7 @@
   ],
   "never": [
     "Take sides before the decision",
-    "Coach the user",
+    "Coach the candidate",
     "Mention scores or the app",
     "Let the meeting end without a decision or a next step"
   ]
