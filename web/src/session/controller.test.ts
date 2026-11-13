@@ -8,17 +8,36 @@ import type {
   ServerMsgMap,
   ServerMsgType,
 } from '../shared/types';
+import type { SocketStatus } from '../net/ws';
 import { ScriptedTransport, sessionRes } from '../voice/testkit';
 import { VoiceError, type TransportOptions } from '../voice/transport';
-import { RoundController, type RoundControllerDeps } from './controller';
+import { RoundController, SessionError, type RoundControllerDeps, type RoundError } from './controller';
 import type { AvatarPort, HeadSamplerPort, SocketPort, UiAction, VisibilityPort, XRPort } from './ports';
 
 class FakeSocket implements SocketPort {
   sent: { t: string; d: Record<string, unknown> }[] = [];
   private handlers = new Map<string, Set<(d: never) => void>>();
+  terminalCbs = new Set<(i: { code: number; reason: string }) => void>();
+  statusCbs = new Set<(s: SocketStatus) => void>();
+  connectError: Error | null = null;
   constructor(private readonly log: string[]) {}
   async connect(): Promise<void> {
     this.log.push('socket.connect');
+    if (this.connectError) throw this.connectError;
+  }
+  onTerminal(cb: (i: { code: number; reason: string }) => void): () => void {
+    this.terminalCbs.add(cb);
+    return () => this.terminalCbs.delete(cb);
+  }
+  onStatus(cb: (s: SocketStatus) => void): () => void {
+    this.statusCbs.add(cb);
+    return () => this.statusCbs.delete(cb);
+  }
+  status(st: SocketStatus): void {
+    for (const cb of [...this.statusCbs]) cb(st);
+  }
+  terminal(code: number): void {
+    for (const cb of [...this.terminalCbs]) cb({ code, reason: '' });
   }
   send<T extends ClientMsgType>(t: T, d: ClientMsgMap[T]): void {
     this.sent.push({ t, d: d as Record<string, unknown> });
@@ -57,7 +76,27 @@ class FakeVisibility implements VisibilityPort {
 
 const REPORT = { headline: { summary: 'ok' } } as unknown as Report;
 
-function harness(opts: { mode?: 'interview' | 'meeting'; voice?: 'fish' | 'fake'; panelMode?: 'swap' | 'joined' } = {}) {
+/** A transport whose start() waits for release(), or rejects with fail(). */
+class SlowTransport extends ScriptedTransport {
+  release!: () => void;
+  fail!: (e: Error) => void;
+  override async start(): Promise<void> {
+    this.started = true;
+    await new Promise<void>((res, rej) => {
+      this.release = res;
+      this.fail = rej;
+    });
+  }
+}
+
+function harness(
+  opts: {
+    mode?: 'interview' | 'meeting';
+    voice?: 'fish' | 'fake';
+    panelMode?: 'swap' | 'joined';
+    slow?: string[];
+  } = {},
+) {
   const log: string[] = [];
   const transports: ScriptedTransport[] = [];
   const socket = new FakeSocket(log);
@@ -106,10 +145,11 @@ function harness(opts: { mode?: 'interview' | 'meeting'; voice?: 'fish' | 'fake'
     endSession: vi.fn(async () => void log.push('api.endSession')),
     report: vi.fn(async () => REPORT),
   };
+  const micTrack = { stop: vi.fn() };
   const media = {
     getMic: vi.fn(async () => {
       log.push('media.getMic');
-      return { getTracks: () => [{ stop: vi.fn() }] } as unknown as MediaStream;
+      return { getTracks: () => [micTrack] } as unknown as MediaStream;
     }),
     resumeAudio: vi.fn(async () => void log.push('media.resumeAudio')),
   };
@@ -117,7 +157,8 @@ function harness(opts: { mode?: 'interview' | 'meeting'; voice?: 'fish' | 'fake'
     api,
     makeSocket: () => socket,
     makeTransport: (p: Panelist, o?: TransportOptions) => {
-      const t = new ScriptedTransport(p.panelist_id, log, o, p);
+      const T = opts.slow?.includes(p.panelist_id) ? SlowTransport : ScriptedTransport;
+      const t = new T(p.panelist_id, log, o, p);
       transports.push(t);
       return t;
     },
@@ -154,6 +195,7 @@ function harness(opts: { mode?: 'interview' | 'meeting'; voice?: 'fish' | 'fake'
     xr,
     head,
     avatars,
+    micTrack,
     board: () => boardCbs.forEach((cb) => cb()),
     ui: (a: UiAction) => uiAction?.(a),
   };
@@ -396,6 +438,7 @@ describe('RoundController', () => {
     expect(states.map((s) => s.mode)).toEqual(['thinking', 'speaking', 'listening']);
     expect(states[0]!.latency).toBeUndefined();
     expect(states[2]!.latency).toMatchObject({ to_thinking_ms: 300, to_first_text_ms: 1200 });
+    expect(h.ctl.latencyHistory).toHaveLength(1);
     expect(splits).toHaveLength(1);
   });
 
@@ -460,3 +503,323 @@ describe('RoundController', () => {
     expect(states).toEqual(['ending', 'scoring', 'summary']);
   });
 });
+
+const rs = (phase_index: number, phase_remaining_s: number, time_check_due?: boolean) => ({
+  status: 'live' as const,
+  phase_id: `ph${phase_index}`,
+  phase_index,
+  phases: [],
+  elapsed_s: 0,
+  remaining_s: 600,
+  phase_remaining_s,
+  brief: { question: '', lines: [] },
+  floor: 'p1',
+  ...(time_check_due === undefined ? {} : { time_check_due }),
+});
+
+function errorsOf(h: ReturnType<typeof harness>): RoundError[] {
+  const errors: RoundError[] = [];
+  h.ctl.on('error', (e) => errors.push(e));
+  return errors;
+}
+
+describe('RoundController lifecycle races', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-11-13T10:00:00Z'));
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('end_while_voices_connect_stops_them_and_never_greets', async () => {
+    const h = harness({ slow: ['p1'] });
+    const starting = h.ctl.start(h.req);
+    await vi.waitFor(() => expect(h.transports).toHaveLength(1));
+    expect(h.ctl.state).toBe('greeting');
+    h.ui('end');
+    await vi.waitFor(() => expect(h.ctl.state).toBe('scoring'));
+    (h.transports[0] as SlowTransport).release();
+    await starting;
+    expect(h.transports[0]!.stopped).toBe(true);
+    expect(h.markers()).not.toContain('[event: start]');
+    expect(h.head.start).not.toHaveBeenCalled();
+    expect(h.api.endSession).toHaveBeenCalledWith('sess1', 'user_ended');
+  });
+
+  it('pause_while_voices_connect_greets_after_resume', async () => {
+    const h = harness({ slow: ['p1'] });
+    const starting = h.ctl.start(h.req);
+    await vi.waitFor(() => expect(h.transports).toHaveLength(1));
+    h.visibility.set('hidden');
+    (h.transports[0] as SlowTransport).release();
+    await starting;
+    const t = h.transports[0]!;
+    expect(h.ctl.state).toBe('paused');
+    expect(t.muted).toBe(true);
+    expect(t.sentEvents).toEqual([]);
+    h.ui('resume');
+    expect(t.sentEvents).toEqual(['[event: start]']);
+    expect(h.ctl.state).toBe('greeting');
+    expect(t.muted).toBe(false);
+  });
+
+  it('voice_start_failure_stops_started_voices_and_releases_mic', async () => {
+    const h = harness({ panelMode: 'joined', slow: ['p2'] });
+    const starting = h.ctl.start(h.req);
+    await vi.waitFor(() => expect(h.transports).toHaveLength(2));
+    (h.transports[1] as SlowTransport).fail(new Error('livekit down'));
+    await expect(starting).rejects.toMatchObject({ code: 'connect_failed' });
+    expect(h.transports[0]!.stopped).toBe(true);
+    expect(h.transports[1]!.stopped).toBe(true);
+    expect(h.micTrack.stop).toHaveBeenCalled();
+    expect(h.ctl.state).toBe('failed');
+  });
+
+  it('placement_failure_can_be_retried', async () => {
+    const h = harness();
+    vi.mocked(h.xr.place).mockRejectedValueOnce(new Error('no desk'));
+    await expect(h.ctl.start(h.req)).rejects.toMatchObject({ code: 'placement_failed' });
+    expect(h.ctl.state).toBe('placing');
+    await h.ctl.enter();
+    expect(h.xr.enter).toHaveBeenCalledTimes(1);
+    expect(h.ctl.state).toBe('greeting');
+    expect(h.markers()).toEqual(['[event: start]']);
+  });
+
+  it('dispose_during_placement_starts_no_voice', async () => {
+    const h = harness();
+    let placed!: () => void;
+    vi.mocked(h.xr.place).mockImplementationOnce(() => new Promise<void>((r) => (placed = r)));
+    const starting = h.ctl.start(h.req);
+    await vi.waitFor(() => expect(h.ctl.state).toBe('placing'));
+    await h.ctl.dispose();
+    placed();
+    await starting;
+    expect(h.transports).toHaveLength(0);
+  });
+
+  it('mic_busy_is_not_reported_as_denied', async () => {
+    const h = harness({ voice: 'fish' });
+    h.media.getMic.mockRejectedValueOnce(Object.assign(new Error('busy'), { name: 'NotReadableError' }));
+    await expect(h.ctl.start(h.req)).rejects.toMatchObject({ code: 'mic_busy' });
+  });
+
+  it('start_does_not_wait_for_audio_resume', async () => {
+    const h = harness();
+    h.media.resumeAudio.mockImplementationOnce(() => new Promise<undefined>(() => undefined));
+    await h.ctl.start(h.req);
+    expect(h.ctl.state).toBe('greeting');
+  });
+});
+
+describe('RoundController hand-overs', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-11-13T10:00:00Z'));
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('hand_over_waits_while_paused_and_is_ignored_after_the_round', async () => {
+    const h = harness();
+    const t = await live(h);
+    h.visibility.set('hidden');
+    h.socket.serverSend('panel.hand_over', { from: 'p1', to: 'p2', opening_line: 'Hi' });
+    await vi.advanceTimersByTimeAsync(10);
+    expect(h.api.joinPanelist).not.toHaveBeenCalled();
+
+    h.ui('resume');
+    await vi.waitFor(() => expect(t.stopped).toBe(true));
+    expect(h.transports[1]!.panelistId).toBe('p2');
+    expect(t.sentEvents).not.toContain('[event: resume]');
+
+    const p2 = h.transports[1]!;
+    h.ui('end');
+    p2.mode('speaking');
+    p2.mode('listening');
+    await vi.waitFor(() => expect(h.ctl.state).toBe('scoring'));
+    h.socket.serverSend('panel.hand_over', { from: 'p2', to: 'p1', opening_line: 'Me again' });
+    await vi.advanceTimersByTimeAsync(10);
+    expect(h.transports).toHaveLength(2);
+    expect(h.api.joinPanelist).toHaveBeenCalledTimes(1);
+  });
+
+  it('hand_over_lets_the_outgoing_panelist_finish', async () => {
+    const h = harness();
+    const t = await live(h);
+    t.mode('speaking');
+    h.socket.serverSend('panel.hand_over', { from: 'p1', to: 'p2', opening_line: 'Hi' });
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(h.api.joinPanelist).not.toHaveBeenCalled();
+    t.mode('listening');
+    await vi.waitFor(() => expect(h.api.joinPanelist).toHaveBeenCalled());
+
+    // The wait is capped.
+    const h2 = harness();
+    const t2 = await live(h2);
+    t2.mode('speaking');
+    h2.socket.serverSend('panel.hand_over', { from: 'p1', to: 'p2', opening_line: 'Hi' });
+    await vi.advanceTimersByTimeAsync(4900);
+    expect(h2.api.joinPanelist).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(200);
+    expect(h2.api.joinPanelist).toHaveBeenCalled();
+  });
+
+  it('no_markers_or_voice_lost_during_a_hand_over', async () => {
+    const h = harness({ slow: ['p2'] });
+    const t = await live(h);
+    const errors = errorsOf(h);
+    h.socket.serverSend('panel.hand_over', { from: 'p1', to: 'p2', opening_line: 'Hi' });
+    await vi.waitFor(() => expect(h.transports).toHaveLength(2));
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(t.sentEvents).toEqual([]);
+    t.events.emit('ended', { reason: 'agent_hangup' });
+    expect(errors).toEqual([]);
+    (h.transports[1] as SlowTransport).release();
+    await vi.waitFor(() => expect(t.stopped).toBe(true));
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(h.transports[1]!.sentEvents).toEqual(['[event: silence_check]']);
+  });
+
+  it('transcripts_from_a_non_floor_session_are_ignored', async () => {
+    const h = harness({ panelMode: 'joined' });
+    await live(h);
+    const p2 = h.transports.find((t) => t.panelistId === 'p2')!;
+    p2.user('x1', 'I would use a queue', true);
+    expect(h.socket.of('transcript.mark')).toEqual([]);
+    h.transports[0]!.user('x1', 'I would use a queue', true);
+    expect(h.socket.of('transcript.mark')).toHaveLength(1);
+  });
+});
+
+describe('RoundController socket, audio and server signals', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-11-13T10:00:00Z'));
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('socket_failures_surface_as_typed_errors', async () => {
+    const h = harness();
+    const errors = errorsOf(h);
+    await live(h);
+
+    h.socket.serverSend('error', { code: 'op_rejected', message: 'bad op', op_id: 'o1' });
+    h.socket.serverSend('error', { code: 'session_gone', message: 'Session is gone' });
+    expect(errors.map((e) => (e as SessionError).code)).toEqual(['server_error']);
+
+    h.socket.status('reconnecting');
+    await vi.advanceTimersByTimeAsync(7_999);
+    expect(errors).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect((errors[1] as SessionError).code).toBe('socket_failed');
+    expect(h.xr.ui.setStatus).toHaveBeenLastCalledWith('Reconnecting to the room');
+    h.socket.status('open');
+    expect(h.xr.ui.setStatus).toHaveBeenLastCalledWith(null);
+
+    h.socket.terminal(4409);
+    expect(errors[2]).toBeInstanceOf(SessionError);
+    expect((errors[2] as SessionError).code).toBe('socket_terminal');
+  });
+
+  it('a_failed_first_connect_is_reported', async () => {
+    const h = harness();
+    h.socket.connectError = new Error('refused');
+    const errors = errorsOf(h);
+    await h.ctl.start(h.req);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(errors.map((e) => (e as SessionError).code)).toContain('socket_failed');
+  });
+
+  it('greeting_watchdog_offers_tap_to_hear', async () => {
+    const h = harness();
+    const errors = errorsOf(h);
+    await h.ctl.start(h.req);
+    const t = h.floor();
+    await vi.advanceTimersByTimeAsync(7_999);
+    expect(errors).toEqual([]);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(errors.map((e) => (e as VoiceError).code)).toEqual(['audio_blocked']);
+    expect(h.xr.ui.setStatus).toHaveBeenLastCalledWith('Tap to hear your interviewer');
+
+    h.ui('hear');
+    expect(t.audioStarts).toBe(1);
+    expect(t.sentEvents).toEqual(['[event: start]', '[event: start]']); // nothing came back: resend
+    expect(h.xr.ui.setStatus).toHaveBeenLastCalledWith(null);
+
+    t.mode('thinking');
+    await vi.advanceTimersByTimeAsync(8_000);
+    h.ui('hear');
+    expect(t.sentEvents).toHaveLength(2); // the agent reacted: only retry playback
+    t.mode('speaking');
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(errors).toHaveLength(2);
+  });
+
+  it('every_ui_action_retries_blocked_audio', async () => {
+    const h = harness();
+    const t = await live(h);
+    h.ui('mute');
+    h.ui('unmute');
+    expect(t.audioStarts).toBe(2);
+    expect(h.media.resumeAudio).toHaveBeenCalledTimes(3);
+  });
+
+  it('time_check_follows_time_check_due', async () => {
+    const h = harness();
+    const t = await live(h);
+    const TC = '[event: time_check]';
+    h.socket.serverSend('round.state', rs(0, 30, false));
+    h.socket.serverSend('round.state', rs(0, 0, true));
+    h.socket.serverSend('round.state', rs(0, 0, true));
+    expect(count(t.sentEvents, TC)).toBe(1);
+    h.socket.serverSend('round.state', rs(1, 300, false));
+    expect(count(t.sentEvents, TC)).toBe(1);
+    // Once the server says when, a quick phase change alone does not trigger one.
+    h.socket.serverSend('round.state', rs(1, 1));
+    h.socket.serverSend('round.state', rs(2, 300));
+    expect(count(t.sentEvents, TC)).toBe(1);
+    h.socket.serverSend('round.state', rs(2, 0, true));
+    expect(count(t.sentEvents, TC)).toBe(2);
+  });
+
+  it('a_segment_that_never_finalizes_stops_blocking_silence_checks', async () => {
+    const h = harness();
+    const t = await live(h);
+    t.user('u1', 'So', false);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(h.head.speaking.at(-1)).toBe(false);
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(t.sentEvents).toEqual(['[event: silence_check]']);
+  });
+
+  it('board_activity_reaches_the_voice_at_most_once_a_second', async () => {
+    const h = harness();
+    const t = await live(h);
+    for (let i = 0; i < 5; i++) h.board();
+    expect(t.activity).toBe(1);
+    await vi.advanceTimersByTimeAsync(1000);
+    h.board();
+    expect(t.activity).toBe(2);
+  });
+
+  it('long_answer_timer_only_runs_while_live', async () => {
+    const h = harness();
+    const spy = vi.spyOn(globalThis, 'setTimeout');
+    const turnTimers = () => spy.mock.calls.filter((c) => c[1] === 10_001).length;
+    await h.ctl.start(h.req);
+    const t = h.floor();
+    t.user('u1', 'hello', false); // during the greeting
+    expect(turnTimers()).toBe(0);
+    t.mode('speaking');
+    t.mode('listening');
+    h.ui('end'); // and during the goodbye
+    t.user('u2', 'thanks', false);
+    expect(turnTimers()).toBe(0);
+  });
+});
+

@@ -2,7 +2,7 @@
 // runtime, the board and the head sampler implement these; tests use small fakes.
 
 import type { Api } from '../net/api';
-import type { SocketStatus } from '../net/ws';
+import type { CloseInfo, SocketStatus } from '../net/ws';
 import type {
   ClientMsgMap,
   ClientMsgType,
@@ -24,8 +24,12 @@ export type ControllerState =
   | 'summary'
   | 'failed';
 
-/** Buttons and gestures on the in-headset UI (round bar, summary card). */
-export type UiAction = 'mute' | 'unmute' | 'pause' | 'resume' | 'end' | 'retry' | 'report';
+/**
+ * Buttons and gestures on the in-headset UI (round bar, status card, summary card). `hear` is the
+ * "Tap to hear your interviewer" action shown when agent audio seems blocked. Every action is a
+ * user gesture, so the controller also retries blocked audio on each one.
+ */
+export type UiAction = 'mute' | 'unmute' | 'pause' | 'resume' | 'end' | 'hear' | 'retry' | 'report';
 
 export interface SeatPoseLike {
   position: { x: number; y: number; z: number };
@@ -76,6 +80,8 @@ export interface SocketPort {
   send<T extends ClientMsgType>(t: T, d: ClientMsgMap[T]): void;
   on<T extends ServerMsgType>(t: T, cb: (d: ServerMsgMap[T]) => void): () => void;
   onStatus?(cb: (s: SocketStatus) => void): () => void;
+  /** The server closed for good (bad token, unknown or ended session). */
+  onTerminal?(cb: (info: CloseInfo) => void): () => void;
   close(): void;
 }
 

@@ -48,13 +48,25 @@ describe('DevConsole', () => {
     expect(input.value).toBe('');
   });
 
+  it('keeps_consecutive_agent_turns_apart', () => {
+    const s = source();
+    const root = mount(s);
+    act(() => {
+      s.ev.emit('transcript', { panelistId: 'p1', role: 'agent', segmentId: 'a1', text: 'Hello', final: false });
+      s.ev.emit('transcript', { panelistId: 'p1', role: 'agent', segmentId: 'a1', text: 'Hello there.', final: false });
+      s.ev.emit('transcript', { panelistId: 'p1', role: 'agent', segmentId: 'a2', text: 'Still there?', final: false });
+    });
+    const items = [...root.querySelectorAll('li')].map((li) => li.textContent);
+    expect(items).toEqual(['p1: Hello there.', 'p1: Still there?']);
+  });
+
   it('shows_state_transcript_and_latency', () => {
     const s = source();
     const root = mount(s);
     act(() => {
       s.ev.emit('state', 'paused');
-      s.ev.emit('transcript', { panelistId: 'p1', role: 'user', text: 'Hi', final: false });
-      s.ev.emit('transcript', { panelistId: 'p1', role: 'user', text: 'Hi there', final: true });
+      s.ev.emit('transcript', { panelistId: 'p1', role: 'user', segmentId: 'u1', text: 'Hi', final: false });
+      s.ev.emit('transcript', { panelistId: 'p1', role: 'user', segmentId: 'u1', text: 'Hi there', final: true });
       s.history.push({ turn: 1, user_final_at_ms: 0, to_thinking_ms: null, to_first_text_ms: 1500 });
       s.ev.emit('latency', s.history[0]!);
     });

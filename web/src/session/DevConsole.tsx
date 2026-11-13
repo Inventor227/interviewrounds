@@ -44,10 +44,10 @@ export function DevConsole({ source }: { source: DevConsoleSource }) {
       source.on('latency', () => setSplits(source.latencyHistory.slice(-SPLITS))),
       source.on('transcript', (l) =>
         setLines((prev) => {
-          const last = prev.at(-1);
-          // Interim and streamed updates of one line replace it.
-          const same = last && last.role === l.role && last.panelistId === l.panelistId && !last.final;
-          return [...(same ? prev.slice(0, -1) : prev), l].slice(-LINES);
+          // Interim and streamed updates of one segment replace its line in place.
+          const i = prev.findIndex((p) => p.segmentId === l.segmentId && p.role === l.role);
+          if (i >= 0) return prev.map((p, j) => (j === i ? l : p));
+          return [...prev, l].slice(-LINES);
         }),
       ),
     ];
@@ -65,8 +65,8 @@ export function DevConsole({ source }: { source: DevConsoleSource }) {
     <div style={box} data-test="dev-console">
       <div data-test="dev-state">Round: {state}</div>
       <ol style={{ margin: '8px 0', paddingLeft: 18 }}>
-        {lines.map((l, i) => (
-          <li key={i}>
+        {lines.map((l) => (
+          <li key={`${l.role}:${l.segmentId}`}>
             <b>{l.role === 'user' ? 'You' : l.panelistId}</b>: {l.text}
           </li>
         ))}

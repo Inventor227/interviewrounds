@@ -12,6 +12,7 @@ export class ScriptedTransport implements VoiceTransport {
   sentTexts: string[] = [];
   interrupts = 0;
   activity = 0;
+  audioStarts = 0;
   stream: MediaStream | null = null;
 
   constructor(
@@ -51,6 +52,9 @@ export class ScriptedTransport implements VoiceTransport {
   }
   noteActivity(): void {
     this.activity++;
+  }
+  async startAudio(): Promise<void> {
+    this.audioStarts++;
   }
 
   // ----- driven by the test -----
