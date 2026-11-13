@@ -23,10 +23,10 @@ use serde_json::{Value, json};
 
 use super::{
     Concern, ConcernStatus, DecisionPower, Difficulty, Hidden, MeetingPlan, MeetingSetup,
-    Personality, PlanAttendee, id_stem, plain, validate_setup,
+    Personality, PlanAttendee, WalkAway, data_block, data_rule, id_stem, plain, validate_setup,
 };
 use crate::claude::{
-    Message, MessagesRequest, MessagesResponse, OutputConfig, SystemBlock, fallbacks_for,
+    Message, MessagesRequest, MessagesResponse, OutputConfig, SystemBlock, Usage, fallbacks_for,
 };
 use crate::content::Catalog;
 use crate::orchestrator::LlmApi;
@@ -91,30 +91,53 @@ pub async fn prepare(
     catalog: &Catalog,
     setup: &MeetingSetup,
 ) -> Result<MeetingPlan, PrepareError> {
+    Ok(prepare_with_usage(llm, catalog, setup).await?.plan)
+}
+
+/// A prepared plan and what the model call used (for the ledger), when a call was made and answered.
+#[derive(Clone, Debug)]
+pub struct Prepared {
+    pub plan: MeetingPlan,
+    /// The model that answered and its token usage.
+    pub usage: Option<(String, Usage)>,
+}
+
+/// `prepare`, also returning the model usage so the caller can record the spend.
+pub async fn prepare_with_usage(
+    llm: &dyn LlmApi,
+    catalog: &Catalog,
+    setup: &MeetingSetup,
+) -> Result<Prepared, PrepareError> {
     validate_setup(setup).map_err(PrepareError::Invalid)?;
-    let model = match build_request(catalog, setup) {
+    let (model, usage) = match build_request(catalog, setup) {
         Some(req) => call_model(llm, &req).await,
         None => {
             tracing::warn!(
                 "content has no prompts/meeting-prepare.md; preparing without the model"
             );
-            None
+            (None, None)
         }
     };
-    build_plan(catalog, setup, model.as_ref())
+    Ok(Prepared {
+        plan: build_plan(catalog, setup, model.as_ref())?,
+        usage,
+    })
 }
 
-async fn call_model(llm: &dyn LlmApi, req: &MessagesRequest) -> Option<ModelPlan> {
+async fn call_model(
+    llm: &dyn LlmApi,
+    req: &MessagesRequest,
+) -> (Option<ModelPlan>, Option<(String, Usage)>) {
     let started = std::time::Instant::now();
     let resp = match tokio::time::timeout(PREPARE_TIMEOUT, llm.create(req)).await {
         Ok(Ok(resp)) => resp,
         Ok(Err(e)) => {
             tracing::warn!(error = %e, "meeting prepare call failed; using the rules alone");
-            return None;
+            return (None, None);
         }
         Err(_) => {
             tracing::warn!("meeting prepare call timed out; using the rules alone");
-            return None;
+            return (None, None);
         }
     };
     tracing::info!(
@@ -125,7 +148,12 @@ async fn call_model(llm: &dyn LlmApi, req: &MessagesRequest) -> Option<ModelPlan
         stop = resp.stop_reason.as_deref().unwrap_or(""),
         "meeting prepare"
     );
-    parse_model_plan(&resp)
+    let model = if resp.model.is_empty() {
+        req.model.clone()
+    } else {
+        resp.model.clone()
+    };
+    (parse_model_plan(&resp), Some((model, resp.usage.clone())))
 }
 
 /// The model's JSON, unless it refused, ran out of tokens or wrote something else.
@@ -140,7 +168,8 @@ pub fn parse_model_plan(resp: &MessagesResponse) -> Option<ModelPlan> {
     match serde_json::from_str::<ModelPlan>(resp.text().trim()) {
         Ok(p) => Some(p),
         Err(e) => {
-            tracing::warn!(error = %e, "meeting prepare reply is not a plan");
+            // The error can quote the model's text; log only its kind and where.
+            tracing::warn!(kind = ?e.classify(), line = e.line(), column = e.column(), "meeting prepare reply is not a plan");
             None
         }
     }
@@ -155,10 +184,23 @@ pub fn build_request(catalog: &Catalog, setup: &MeetingSetup) -> Option<Messages
         .and_then(|t| catalog.templates.get(t.as_str()))
         .map(pretty)
         .unwrap_or_else(|| "none".to_string());
+    // The walk away point stays on the server: nothing the model writes for attendees can repeat it.
+    let walk = WalkAway::new(setup.walk_away.as_deref());
+    let mut shown = setup.clone();
+    shown.walk_away = None;
+    shown.key_facts.retain(|f| !walk.hits(f));
+    shown.notes = shown
+        .notes
+        .as_deref()
+        .map(|n| walk.drop_sentences(n))
+        .filter(|n| !n.is_empty());
     let vars = std::collections::HashMap::from([
         (
             "setup_json",
-            serde_json::to_string_pretty(setup).unwrap_or_default(),
+            data_block(
+                "meeting_setup",
+                &serde_json::to_string_pretty(&shown).unwrap_or_default(),
+            ),
         ),
         ("template_json", template_json),
         ("personas_json", pretty(&roster(catalog))),
@@ -166,7 +208,11 @@ pub fn build_request(catalog: &Catalog, setup: &MeetingSetup) -> Option<Messages
     Some(MessagesRequest {
         model: PREPARE_MODEL.into(),
         max_tokens: PREPARE_MAX_TOKENS,
-        system: vec![SystemBlock::text(fill(template, &vars))],
+        system: vec![SystemBlock::text(format!(
+            "{}\n\n{}",
+            fill(template, &vars),
+            data_rule(&["meeting_setup"])
+        ))],
         messages: vec![Message::user_text(
             "Prepare the meeting plan for this setup now, following the rules.",
         )],
@@ -415,7 +461,25 @@ pub fn build_plan(
         if concern_texts.is_empty() {
             concern_texts.push("Hears a clear, specific ask.".into());
         }
-        let stem = id_stem(&a.name);
+        // Concern ids are unique across the plan ("Dr. Rhea" and "Dr. Tom" give rhea_1 and tom_1; two Sams give
+        // sam_1 and sam2_1).
+        let mut stem = id_stem(&a.name);
+        let taken = |stem: &str| {
+            attendees.iter().any(|p: &PlanAttendee| {
+                p.hidden
+                    .concerns
+                    .iter()
+                    .any(|c| c.id.starts_with(&format!("{stem}_")))
+            })
+        };
+        if taken(&stem) {
+            let base = stem.clone();
+            let mut n = 2;
+            while taken(&format!("{base}{n}")) {
+                n += 1;
+            }
+            stem = format!("{base}{n}");
+        }
         let concerns = concern_texts
             .into_iter()
             .enumerate()
@@ -445,13 +509,18 @@ pub fn build_plan(
         });
     }
 
-    // Somebody decides: the model's approver (already applied above), else the first attendee.
+    // Somebody decides. When the user named no approver (the setup page may send the default "influencer" for
+    // everyone), the model's approver pick wins, else the first attendee.
     if !attendees
         .iter()
         .any(|a| a.decision_power == DecisionPower::Approver)
-        && let Some(first) = attendees.first_mut()
     {
-        first.decision_power = DecisionPower::Approver;
+        let picked = attendees.iter().position(|a| {
+            find(&a.name).and_then(|m| m.decision_power) == Some(DecisionPower::Approver)
+        });
+        if let Some(a) = attendees.get_mut(picked.unwrap_or(0)) {
+            a.decision_power = DecisionPower::Approver;
+        }
     }
 
     let names: Vec<String> = attendees.iter().map(|a| a.name.clone()).collect();
@@ -488,6 +557,7 @@ pub fn build_plan(
         == Some("chair");
     let opening_line = model
         .and_then(|m| fit_opening(&m.opening_line))
+        .filter(|l| !leak.hits(l))
         .unwrap_or_else(|| default_opening(user_chairs, chair_opens).to_string());
 
     let success_criteria = {
@@ -496,7 +566,7 @@ pub fn build_plan(
                 m.success_criteria
                     .iter()
                     .map(|s| plain(s))
-                    .filter(|s| !s.is_empty())
+                    .filter(|s| !s.is_empty() && !leak.hits(s))
                     .take(4)
                     .collect()
             })
@@ -764,11 +834,12 @@ pub fn fit_opening(line: &str) -> Option<String> {
 }
 
 fn sentences(text: &str) -> Vec<String> {
+    let chars: Vec<char> = text.chars().collect();
     let mut out = Vec::new();
     let mut cur = String::new();
-    for c in text.chars() {
+    for (i, &c) in chars.iter().enumerate() {
         cur.push(c);
-        if matches!(c, '.' | '?' | '!') {
+        if matches!(c, '.' | '?' | '!') && chars.get(i + 1).is_none_or(|n| n.is_whitespace()) {
             let s = cur.trim().to_string();
             if !s.is_empty() {
                 out.push(s);
@@ -832,59 +903,6 @@ fn three_tips(
     };
     defaults.iter().map(|s| s.to_string()).for_each(&mut push);
     tips
-}
-
-/// Finds generated text that repeats the user's walk away point: its text, or any of its numbers.
-struct WalkAway {
-    text: Option<String>,
-    numbers: Vec<String>,
-}
-
-impl WalkAway {
-    fn new(walk_away: Option<&str>) -> Self {
-        let text = walk_away
-            .map(|w| w.trim().to_lowercase())
-            .filter(|w| !w.is_empty());
-        let numbers = text.as_deref().map(numbers).unwrap_or_default();
-        WalkAway { text, numbers }
-    }
-
-    fn hits(&self, s: &str) -> bool {
-        let Some(text) = &self.text else {
-            return false;
-        };
-        let lower = s.to_lowercase();
-        lower.contains(text.as_str()) || numbers(&lower).iter().any(|n| self.numbers.contains(n))
-    }
-}
-
-/// Numbers with two or more digits, thousands separators dropped and decimals kept: "120,000" → "120000",
-/// "1.2 million" → "1.2".
-fn numbers(s: &str) -> Vec<String> {
-    let chars: Vec<char> = s.chars().collect();
-    let mut out = Vec::new();
-    let mut cur = String::new();
-    let flush = |cur: &mut String, out: &mut Vec<String>| {
-        if cur.chars().filter(char::is_ascii_digit).count() >= 2 {
-            out.push(cur.clone());
-        }
-        cur.clear();
-    };
-    for (i, &c) in chars.iter().enumerate() {
-        let between_digits =
-            !cur.is_empty() && chars.get(i + 1).is_some_and(|n| n.is_ascii_digit());
-        if c.is_ascii_digit() {
-            cur.push(c);
-        } else if c == ',' && between_digits {
-            // thousands separator: dropped
-        } else if c == '.' && between_digits {
-            cur.push('.');
-        } else {
-            flush(&mut cur, &mut out);
-        }
-    }
-    flush(&mut cur, &mut out);
-    out
 }
 
 #[cfg(test)]
