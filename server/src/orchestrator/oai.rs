@@ -562,10 +562,19 @@ fn turn_stream(
             let mut text_seen = !guard.spoken.is_empty();
             let mut stop_reason: Option<String> = None;
             let mut error: Option<String> = None;
+            // The model could not answer (overloaded, 5xx, 429, no text in time): the retry goes to the fallback.
+            let mut unavailable = false;
 
             match tokio::time::timeout_at(deadline, app.llm.stream(&req)).await {
-                Err(_) => error = Some("no response before the first-text deadline".into()),
-                Ok(Err(e)) => error = Some(e.to_string()),
+                Err(_) => {
+                    error = Some("no response before the first-text deadline".into());
+                    unavailable = true;
+                    crate::usage::note_failure(app.db.clone(), app.config.usage_phase, "live_turn", req.model.clone(), "timeout");
+                }
+                Ok(Err(e)) => {
+                    unavailable = e.is_unavailable();
+                    error = Some(e.to_string());
+                }
                 Ok(Ok(mut events)) => loop {
                     let next = if text_seen {
                         let idle = (tokio::time::Instant::now() + opts.idle_timeout).min(turn_deadline);
@@ -576,6 +585,8 @@ fn turn_stream(
                     match next {
                         Err(_) => {
                             error = Some(if text_seen { "stream stalled or turn deadline" } else { "no text before the first-text deadline" }.into());
+                            unavailable = !text_seen;
+                            crate::usage::note_failure(app.db.clone(), app.config.usage_phase, "live_turn", req.model.clone(), "timeout");
                             break;
                         }
                         Ok(None) => {
@@ -583,6 +594,7 @@ fn turn_stream(
                             break;
                         }
                         Ok(Some(Err(e))) => {
+                            unavailable = !text_seen && e.is_unavailable();
                             error = Some(e.to_string());
                             break;
                         }
@@ -642,7 +654,8 @@ fn turn_stream(
                 }
                 (None, None) => break,
             }
-            // Nothing was said yet: one retry on the fast model, if the turn deadline leaves room for it.
+            // Nothing was said yet: one retry, never on the model that just failed (the fallback when it was
+            // unavailable or is the fast model itself), if the turn deadline leaves room for it.
             let left = turn_deadline.saturating_duration_since(tokio::time::Instant::now());
             if retried || left < MIN_RETRY_WINDOW {
                 break;
@@ -653,7 +666,9 @@ fn turn_stream(
             // must neither silence the retry nor be recorded if the retry is dropped).
             filter = SpeechFilter::new();
             guard.said.clear();
-            retarget_for_retry(&mut req, &live.fast_model);
+            let target = live.retry_model(&req.model, unavailable).to_string();
+            tracing::info!(session_id = %session_id, panelist_id = %panelist, failed = %req.model, retry = %target, unavailable, "live retry");
+            retarget_for_retry(&mut req, &target);
         }
 
         let tail = filter.finish();
@@ -704,6 +719,13 @@ fn turn_stream(
         let speech = input.speech().is_some();
         let jobs = {
             let mut st = session.lock().await;
+            // Several failed turns in a row (even after the fallback): the round clock holds and the browser is told
+            // (`round.state.degraded`) until a turn gets through.
+            match st.note_live_turn(silent_failure, Instant::now()) {
+                Some(true) => tracing::warn!(session_id = %session_id, "model unavailable for several turns; round clock held"),
+                Some(false) => tracing::info!(session_id = %session_id, "model back; round clock runs"),
+                None => {}
+            }
             let id = st.new_turn_id();
             let director_req = (!silent_failure)
                 .then(|| director::build_request(&st, &panelist, &draft, &spoken, &live.fast_model));
@@ -798,7 +820,12 @@ async fn run_director(
     req: MessagesRequest,
 ) {
     let started = Instant::now();
-    let res = tokio::time::timeout(DIRECTOR_TIMEOUT, app.llm.create(&req)).await;
+    let fallback = session.lock().await.live.fallback_model.clone();
+    let res = tokio::time::timeout(
+        DIRECTOR_TIMEOUT,
+        super::create_with_fallback(app.llm.as_ref(), &req, Some(&fallback)),
+    )
+    .await;
     let ms = started.elapsed().as_millis() as u64;
     let resp = match res {
         Ok(Ok(resp)) => resp,

@@ -47,6 +47,8 @@ struct ScriptedLlm {
     /// Non-streamed (director) replies, and the requests they answered.
     creates: Mutex<VecDeque<MessagesResponse>>,
     created: Mutex<Vec<MessagesRequest>>,
+    /// The next this many creates fail as overloaded.
+    failing_creates: Mutex<usize>,
 }
 
 impl ScriptedLlm {
@@ -75,6 +77,13 @@ impl ScriptedLlm {
 impl LlmApi for ScriptedLlm {
     async fn create(&self, req: &MessagesRequest) -> Result<MessagesResponse, ClaudeError> {
         self.created.lock().unwrap().push(req.clone());
+        {
+            let mut failing = self.failing_creates.lock().unwrap();
+            if *failing > 0 {
+                *failing -= 1;
+                return Err(ClaudeError::Overloaded);
+            }
+        }
         self.creates
             .lock()
             .unwrap()
@@ -120,6 +129,7 @@ fn catalog() -> Catalog {
 
 fn live() -> LiveSettings {
     LiveSettings {
+        fallback_model: "claude-haiku-5-5".into(),
         model: "claude-opus-5-5".into(),
         fast_model: "claude-haiku-5-5".into(),
         effort: "low".into(),
@@ -2615,4 +2625,142 @@ fn a_cut_reply_keeps_only_what_was_spoken() {
     ];
     keep_spoken_text(&mut reply, "Okay. ");
     assert_eq!(reply, vec![thinking, ContentBlock::text("Okay.")]);
+}
+
+// ---------- overload fallback (R62) ----------
+
+/// The settings prod runs: live and fast model are both Sonnet; the fallback is Haiku.
+fn prod_live() -> LiveSettings {
+    LiveSettings {
+        model: "claude-sonnet-5-5".into(),
+        fast_model: "claude-sonnet-5-5".into(),
+        fallback_model: "claude-haiku-5-5".into(),
+        effort: "low".into(),
+        max_tokens: 300,
+    }
+}
+
+fn prod_state(id: &str) -> SessionState {
+    let mut st = new_state(id, "sde.system_design.short", VoiceKind::Fish);
+    st.live = prod_live();
+    st
+}
+
+#[tokio::test]
+async fn overload_with_prod_settings_retries_on_the_fallback_model() {
+    let llm = ScriptedLlm::new(vec![Script::Fail(ClaudeError::Overloaded), reply("Okay.")]);
+    let (app, state) = test_app(llm.clone());
+    state.registry.insert(prod_state("s1"));
+    let res = post_chat(
+        &app,
+        SECRET,
+        chat_body("s1", "p1", json!([{"role": "user", "content": "Hi."}])),
+    )
+    .await;
+    assert_eq!(res.text(), "Okay.", "a real reply, not the hold line");
+    assert_eq!(llm.request(0).model, "claude-sonnet-5-5");
+    let retry = llm.request(1);
+    assert_eq!(
+        retry.model, "claude-haiku-5-5",
+        "never the model that failed"
+    );
+    assert_eq!(retry.thinking, None);
+    // A model that stalls before its first text is unavailable too.
+    let llm = ScriptedLlm::new(vec![Script::Hang, reply("Okay.")]);
+    let (app, state) = test_app(llm.clone());
+    state.registry.insert(prod_state("s2"));
+    let res = post_chat(
+        &app,
+        SECRET,
+        chat_body("s2", "p1", json!([{"role": "user", "content": "Hi."}])),
+    )
+    .await;
+    assert_eq!(res.text(), "Okay.");
+    assert_eq!(llm.request(1).model, "claude-haiku-5-5");
+}
+
+#[tokio::test]
+async fn three_failed_turns_hold_the_clock_until_a_turn_gets_through() {
+    let mut scripts = Vec::new();
+    for _ in 0..6 {
+        scripts.push(Script::Fail(ClaudeError::Overloaded));
+    }
+    scripts.push(reply("Back again. Where were we?"));
+    let llm = ScriptedLlm::new(scripts);
+    let (app, state) = test_app(llm.clone());
+    state.registry.insert(prod_state("s1"));
+    let handle = state.registry.get("s1").unwrap();
+    let ask = |n: usize| {
+        let mut msgs = Vec::new();
+        for i in 0..n {
+            msgs.push(json!({"role": "user", "content": format!("Point {i}.")}));
+            msgs.push(json!({"role": "assistant", "content": "Sorry, give me a second."}));
+        }
+        msgs.push(json!({"role": "user", "content": format!("Point {n}.")}));
+        chat_body("s1", "p1", json!(msgs))
+    };
+    for n in 0..3 {
+        let res = post_chat(&app, SECRET, ask(n)).await;
+        assert_eq!(res.text(), "Sorry, give me a second.");
+        let st = handle.lock().await;
+        assert_eq!(st.degraded, n == 2, "turn {n}");
+    }
+    // Degraded: round.state says so, and the round clock stands still.
+    let (before, flag) = {
+        let st = handle.lock().await;
+        let now = Instant::now();
+        (st.elapsed_ms(now), st.round_state(now).degraded)
+    };
+    assert!(flag);
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let held = handle.lock().await.elapsed_ms(Instant::now());
+    assert!(held.abs_diff(before) <= 5, "{before} -> {held}");
+    // A turn gets through: not degraded, the clock runs again.
+    let res = post_chat(&app, SECRET, ask(3)).await;
+    assert_eq!(res.text(), "Back again. Where were we?");
+    {
+        let st = handle.lock().await;
+        assert!(!st.degraded);
+        assert_eq!(st.failed_turns, 0);
+    }
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(handle.lock().await.elapsed_ms(Instant::now()) > before + 100);
+}
+
+#[tokio::test]
+async fn director_retries_once_on_the_fallback_model() {
+    let llm = ScriptedLlm::with_creates(
+        vec![reply("Okay. Let's move on to the design.")],
+        vec![director_reply(json!([
+            {"type": "tool_use", "id": "toolu_d1", "name": "next_phase", "input": {}}
+        ]))],
+    );
+    *llm.failing_creates.lock().unwrap() = 1;
+    let (app, state) = test_app(llm.clone());
+    let st = prod_state("s1");
+    let mut events = st.events.subscribe();
+    state.registry.insert(st);
+    let res = post_chat(
+        &app,
+        SECRET,
+        chat_body(
+            "s1",
+            "p1",
+            json!([{"role": "user", "content": "The API is two calls."}]),
+        ),
+    )
+    .await;
+    assert_eq!(res.text(), "Okay. Let's move on to the design.");
+    let ev = tokio::time::timeout(Duration::from_secs(2), events.recv())
+        .await
+        .expect("director event")
+        .unwrap();
+    assert!(
+        matches!(ev, ServerEvent::RoundState(ref r) if r.phase_index == 1),
+        "{ev:?}"
+    );
+    let created = llm.created.lock().unwrap().clone();
+    assert_eq!(created.len(), 2);
+    assert_eq!(created[0].model, "claude-sonnet-5-5");
+    assert_eq!(created[1].model, "claude-haiku-5-5");
 }

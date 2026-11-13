@@ -355,9 +355,10 @@ pub fn after_utterance(app: &AppState, hub: &Arc<Hub>, handle: &Arc<Mutex<Sessio
 }
 
 async fn scribe_loop(app: AppState, hub: Arc<Hub>, handle: Arc<Mutex<SessionState>>) {
-    let Some(scribe) = Scribe::from_catalog(&app.catalog, &app.config.fast_model) else {
+    let Some(mut scribe) = Scribe::from_catalog(&app.catalog, &app.config.fast_model) else {
         return;
     };
+    scribe.fallback_model = Some(app.config.live_fallback_model.clone());
     loop {
         let (commits, utterances) = {
             let st = handle.lock().await;

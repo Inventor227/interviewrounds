@@ -572,10 +572,11 @@ async fn resume_from_pause_holds_the_clock_until_back_and_logs_it() {
     // Connected, but the user is not back in the room yet: the round clock does not run.
     let before = round_ms(&app, &id).await;
     tokio::time::sleep(Duration::from_millis(400)).await;
-    assert_eq!(
-        round_ms(&app, &id).await,
-        before,
-        "the clock ran before the user was back"
+    // (Within a few ms: the stopped clock is two rounded durations.)
+    let held = round_ms(&app, &id).await;
+    assert!(
+        held.abs_diff(before) <= 5,
+        "the clock ran before the user was back: {before} -> {held}"
     );
     // The resume flow's typed turn: the clock runs and the return is logged after the pause.
     assert_eq!(

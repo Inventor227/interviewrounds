@@ -34,6 +34,41 @@ pub trait LlmApi: Send + Sync {
     ) -> Result<BoxStream<'static, Result<StreamEvent, ClaudeError>>, ClaudeError>;
 }
 
+/// One non-streamed call with a second attempt on `fallback` when the model is unavailable (overloaded, 5xx, 429,
+/// connection failed). Fast side calls use it (director, Scribe, meeting state, meeting prepare): an overload of
+/// one model never takes all of them down. No fallback, or a fallback equal to the model, means one attempt.
+pub async fn create_with_fallback(
+    llm: &dyn LlmApi,
+    req: &MessagesRequest,
+    fallback: Option<&str>,
+) -> Result<MessagesResponse, ClaudeError> {
+    match llm.create(req).await {
+        Err(e) if e.is_unavailable() => match fallback.filter(|m| *m != req.model) {
+            Some(model) => {
+                tracing::warn!(model = %req.model, fallback = %model, error = %e.kind(), "model unavailable; one try on the fallback");
+                llm.create(&retarget(req, model)).await
+            }
+            None => Err(e),
+        },
+        other => other,
+    }
+}
+
+/// The same request on another model: its own thinking setting (adaptive or omitted stays so; a "thinking off"
+/// setting becomes the new model's way of turning it off) and server-side fallbacks.
+pub fn retarget(req: &MessagesRequest, model: &str) -> MessagesRequest {
+    use crate::claude::Thinking;
+    let mut out = req.clone();
+    out.model = model.to_string();
+    out.thinking = match req.thinking {
+        None => None,
+        Some(Thinking::Adaptive) => Some(Thinking::Adaptive),
+        Some(Thinking::Disabled | Thinking::BetweenTools) => crate::claude::thinking_for(model),
+    };
+    out.fallbacks = crate::claude::fallbacks_for(model);
+    out
+}
+
 #[async_trait]
 impl LlmApi for ClaudeClient {
     async fn create(&self, req: &MessagesRequest) -> Result<MessagesResponse, ClaudeError> {
@@ -216,4 +251,7 @@ pub struct RoundStateMsg {
     /// Empty until the interviewer calls show_question.
     pub brief: Brief,
     pub floor: String,
+    /// The interviewer's model has been unavailable for several turns in a row; the round clock is held until a
+    /// turn gets through (the browser shows that the interviewer is reconnecting).
+    pub degraded: bool,
 }

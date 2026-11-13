@@ -208,6 +208,10 @@ pub struct ScoringDeps {
     pub card_model: String,
     /// `FAST_MODEL`: scores a retry (one before and after call).
     pub fast_model: String,
+    /// The second scoring attempt's model when the first failed because `model` was unavailable (Sonnet for Opus).
+    pub fallback_model: String,
+    /// The headset card's one more try when `card_model` is unavailable (`LIVE_FALLBACK_MODEL`).
+    pub card_fallback_model: String,
     pub data_dir: PathBuf,
     pub usage_phase: UsagePhase,
     pub events: Arc<dyn ReportEvents>,
@@ -246,6 +250,8 @@ impl ScoringDeps {
             max_tokens: MAX_TOKENS,
             card_model: CARD_MODEL.to_string(),
             fast_model: crate::config::DEFAULT_LIVE_MODEL.to_string(),
+            fallback_model: crate::config::DEFAULT_LIVE_MODEL.to_string(),
+            card_fallback_model: crate::config::DEFAULT_LIVE_FALLBACK_MODEL.to_string(),
             data_dir: PathBuf::from("data"),
             usage_phase: UsagePhase::Build,
             events: Arc::new(LogEvents),
@@ -268,6 +274,11 @@ impl ScoringDeps {
         );
         deps.fish = Some(app.fish.clone());
         deps.fast_model = app.config.fast_model.clone();
+        deps.card_fallback_model = app.config.live_fallback_model.clone();
+        // Never the model that failed: Sonnet for Opus, the live fallback when scoring itself runs on Sonnet.
+        if deps.fallback_model == deps.model {
+            deps.fallback_model = app.config.live_fallback_model.clone();
+        }
         deps.data_dir = app.config.data_dir.clone();
         deps.usage_phase = app.config.usage_phase;
         if let Ok(effort) = std::env::var("SCORING_EFFORT")
@@ -679,13 +690,14 @@ async fn final_board(deps: &ScoringDeps, input: &ScoringInput) -> Option<Vec<u8>
 
 /// Loads, scores and returns the report (no storing). One attempt.
 pub async fn score(deps: &ScoringDeps, session_id: Uuid) -> anyhow::Result<Scored> {
-    score_attempt(deps, session_id, &report::CardSlot::default()).await
+    score_attempt(deps, session_id, &deps.model, &report::CardSlot::default()).await
 }
 
 /// One attempt of a scoring run; `card` carries the headset card across the run's attempts.
 pub async fn score_attempt(
     deps: &ScoringDeps,
     session_id: Uuid,
+    model: &str,
     card: &report::CardSlot,
 ) -> anyhow::Result<Scored> {
     let mut input = load_scoring_input(&deps.db, session_id, &deps.catalog)
@@ -723,10 +735,11 @@ pub async fn score_attempt(
         llm: deps.llm.as_ref(),
         catalog: &deps.catalog,
         schema: &deps.schema,
-        model: &deps.model,
+        model,
         effort: &deps.effort,
         max_tokens: deps.max_tokens,
         card_model: &deps.card_model,
+        card_fallback_model: &deps.card_fallback_model,
         timeout: deps.model_timeout,
         card_timeout: report::CARD_TIMEOUT,
         meeting_timeout: report::MEETING_TIMEOUT,
@@ -828,11 +841,14 @@ async fn score_session_inner(deps: &ScoringDeps, session_id: Uuid) -> anyhow::Re
     let started = Instant::now();
     let card = report::CardSlot::default();
     let mut last_err = anyhow!("no scoring attempt left");
+    // The first attempt on the scoring model; after it failed because that model was unavailable, the next one
+    // runs on the fallback.
+    let mut model = deps.model.clone();
     while let Some(attempt) = claim_attempt(deps, session_id).await? {
         let unreported = Arc::new(Mutex::new(Vec::new()));
         let result = report::collecting_unreported(
             unreported.clone(),
-            score_attempt(deps, session_id, &card),
+            score_attempt(deps, session_id, &model, &card),
         )
         .await;
         let mut calls = match &result {
@@ -856,7 +872,7 @@ async fn score_session_inner(deps: &ScoringDeps, session_id: Uuid) -> anyhow::Re
                 &deps.db,
                 session_id,
                 &scored.report,
-                scored.model_called.then_some(deps.model.as_str()),
+                scored.model_called.then_some(model.as_str()),
             )
             .await
             .map(|_| scored)
@@ -884,7 +900,10 @@ async fn score_session_inner(deps: &ScoringDeps, session_id: Uuid) -> anyhow::Re
                 return Ok(scored.report);
             }
             Err(err) => {
-                tracing::warn!(session_id = %session_id, error = %format!("{err:#}"), "scoring attempt failed");
+                tracing::warn!(session_id = %session_id, model = %model, error = %format!("{err:#}"), "scoring attempt failed");
+                if report::model_unavailable(&err) && deps.fallback_model != model {
+                    model = deps.fallback_model.clone();
+                }
                 last_err = err;
             }
         }

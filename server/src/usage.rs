@@ -189,6 +189,38 @@ fn spawn_record(
     });
 }
 
+/// Records a model call that failed as a zero-cost `model_error` row: which call (`call`), which model, and the
+/// error's class only (`overloaded`, `rate_limited`, `network`, `bad_request`, `refusal`, `timeout`, ...), never its
+/// text. Outages can then be rebuilt from the ledger. Charged to the current session (`LLM_SESSION`) when there is
+/// one; recorded for unmetered calls too (it costs nothing).
+pub fn note_failure(
+    db: PgPool,
+    phase: UsagePhase,
+    call: &'static str,
+    model: String,
+    error: &'static str,
+) {
+    let session = current_session();
+    let Ok(rt) = tokio::runtime::Handle::try_current() else {
+        return;
+    };
+    rt.spawn(async move {
+        let res = sqlx::query(
+            "insert into usage_events (identity_id, session_id, provider, kind, model, usage_phase, cost_usd, meta) \
+             values ((select identity_id from sessions where id = $1), $1, 'anthropic', 'model_error', $2, $3, 0, $4)",
+        )
+        .bind(session)
+        .bind(&model)
+        .bind(phase.as_str())
+        .bind(json!({"call": call, "error": error}))
+        .execute(&db)
+        .await;
+        if let Err(err) = res {
+            tracing::warn!(error = %err, call, "could not record a failed model call");
+        }
+    });
+}
+
 /// Rough usage of a streamed call that ended before its usage arrived: the newest message as fresh input, the
 /// rest of the prompt as a cache read, and about 4 characters per token.
 fn estimate(req: &MessagesRequest, out_chars: usize) -> Usage {
@@ -222,11 +254,35 @@ impl MeteredLlm {
 #[async_trait]
 impl LlmApi for MeteredLlm {
     async fn create(&self, req: &MessagesRequest) -> Result<MessagesResponse, ClaudeError> {
+        let call = if req.max_tokens == 0 {
+            "prewarm"
+        } else {
+            "model_call"
+        };
         if unmetered() {
-            return self.inner.create(req).await;
+            let res = self.inner.create(req).await;
+            if let Err(e) = &res {
+                note_failure(
+                    self.db.clone(),
+                    self.phase,
+                    call,
+                    req.model.clone(),
+                    e.kind(),
+                );
+            }
+            return res;
         }
         let session = current_session();
         let res = self.inner.create(req).await;
+        if let Err(e) = &res {
+            note_failure(
+                self.db.clone(),
+                self.phase,
+                call,
+                req.model.clone(),
+                e.kind(),
+            );
+        }
         if let Ok(r) = &res {
             let model = if r.model.is_empty() {
                 req.model.clone()
@@ -254,11 +310,24 @@ impl LlmApi for MeteredLlm {
         &self,
         req: &MessagesRequest,
     ) -> Result<BoxStream<'static, Result<StreamEvent, ClaudeError>>, ClaudeError> {
+        let opened = self.inner.stream(req).await;
+        let inner = match opened {
+            Ok(inner) => inner,
+            Err(e) => {
+                note_failure(
+                    self.db.clone(),
+                    self.phase,
+                    "stream",
+                    req.model.clone(),
+                    e.kind(),
+                );
+                return Err(e);
+            }
+        };
         if unmetered() {
-            return self.inner.stream(req).await;
+            return Ok(inner);
         }
         let session = current_session();
-        let inner = self.inner.stream(req).await?;
         Ok(Box::pin(MeteredStream {
             inner,
             meter: Meter {
@@ -310,6 +379,11 @@ impl Stream for MeteredStream {
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let next = self.inner.as_mut().poll_next(cx);
+        if let Poll::Ready(Some(Err(e))) = &next {
+            // An error event after the stream opened (an overload mid-stream): its usage comes as an estimate.
+            let m = &self.meter;
+            note_failure(m.db.clone(), m.phase, "stream", m.model.clone(), e.kind());
+        }
         if let Poll::Ready(Some(Ok(ev))) = &next {
             match ev {
                 StreamEvent::TextDelta(t) => self.meter.out_chars += t.len(),

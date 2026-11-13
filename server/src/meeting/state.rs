@@ -481,6 +481,8 @@ pub struct ModelDecision {
 #[derive(Clone, Debug)]
 pub struct UpdateContext {
     pub model: String,
+    /// One more try on this model when `model` is unavailable (then the update is skipped).
+    pub fallback_model: Option<String>,
     pub phase_id: String,
     pub minutes_left: f64,
     pub decision_phase_started: bool,
@@ -676,8 +678,14 @@ pub fn build_update_request(
 }
 
 /// Calls the state model and returns its raw judgement (not yet bounded; see `apply_update`).
-pub async fn fetch_update(llm: &dyn LlmApi, req: &MessagesRequest) -> anyhow::Result<ModelUpdate> {
-    let resp = llm.create(req).await.map_err(|e| anyhow!("{e}"))?;
+pub async fn fetch_update(
+    llm: &dyn LlmApi,
+    req: &MessagesRequest,
+    fallback: Option<&str>,
+) -> anyhow::Result<ModelUpdate> {
+    let resp = crate::orchestrator::create_with_fallback(llm, req, fallback)
+        .await
+        .map_err(|e| anyhow!("{e}"))?;
     if matches!(
         resp.stop_reason.as_deref(),
         Some("refusal") | Some("max_tokens")
@@ -711,7 +719,7 @@ pub async fn update(
         .prompt("meeting-state")
         .ok_or_else(|| anyhow!("content has no prompts/meeting-state.md"))?;
     let req = build_update_request(template, state, last_exchange, ctx);
-    let raw = fetch_update(llm, &req).await?;
+    let raw = fetch_update(llm, &req, ctx.fallback_model.as_deref()).await?;
     Ok(apply_update(
         state,
         &raw,

@@ -68,6 +68,8 @@ pub struct ScoreEnv<'a> {
     pub max_tokens: u32,
     /// Model of the quick headset card call.
     pub card_model: &'a str,
+    /// The card's one more try when `card_model` is unavailable.
+    pub card_fallback_model: &'a str,
     /// Ceiling for the main call.
     pub timeout: Duration,
     /// Ceiling for the headset card call (its picks are optional).
@@ -119,6 +121,8 @@ pub struct CardDone {
     pub card: Option<Value>,
     pub items: Vec<Value>,
     pub usage: Option<Usage>,
+    /// The model that answered (the card model, or its fallback).
+    pub model: Option<String>,
 }
 
 impl CardSlot {
@@ -177,14 +181,25 @@ pub async fn score_with_card(
         slot.0
             .get_or_init(|| async {
                 let req = card_request(env, input, round, &lines);
-                match run_model(env, &input.session_id, &req, false, env.card_timeout, "scoring_card").await {
+                let mut res = run_model(env, &input.session_id, &req, false, env.card_timeout, "scoring_card").await;
+                let mut model = req.model.clone();
+                if let Err(err) = &res
+                    && model_unavailable(err)
+                    && env.card_fallback_model != req.model
+                {
+                    tracing::warn!(session_id = %input.session_id, model = %req.model, fallback = %env.card_fallback_model, "headset card model unavailable; one try on the fallback");
+                    let req = crate::orchestrator::retarget(&req, env.card_fallback_model);
+                    model = req.model.clone();
+                    res = run_model(env, &input.session_id, &req, false, env.card_timeout, "scoring_card").await;
+                }
+                match res {
                     Ok((text, usage)) => {
                         let out: Value = serde_json::from_str(text.trim()).unwrap_or(Value::Null);
                         let (card, items) = build_card(&out, &lines);
                         if let Some(card) = &card {
                             env.events.card(&input.session_id, card).await;
                         }
-                        CardDone { card, items, usage: Some(usage) }
+                        CardDone { card, items, usage: Some(usage), model: Some(model) }
                     }
                     Err(err) => {
                         tracing::warn!(session_id = %input.session_id, error = %format!("{err:#}"), "headset card failed");
@@ -251,7 +266,10 @@ pub async fn score_with_card(
     let mut calls = Vec::new();
     if card_fresh && let Some(usage) = card_done.usage.clone() {
         calls.push(CallUsage {
-            model: env.card_model.to_string(),
+            model: card_done
+                .model
+                .clone()
+                .unwrap_or_else(|| env.card_model.to_string()),
             kind: "scoring_card",
             usage,
         });
@@ -1394,6 +1412,15 @@ impl Drop for PendingCall {
     }
 }
 
+/// The scoring model could not answer (overloaded or another 5xx, rate limited, connection failed): the next try
+/// goes to the fallback model.
+pub fn model_unavailable(err: &anyhow::Error) -> bool {
+    err.chain().any(|c| {
+        c.downcast_ref::<crate::claude::ClaudeError>()
+            .is_some_and(crate::claude::ClaudeError::is_unavailable)
+    })
+}
+
 async fn run_model(
     env: &ScoreEnv<'_>,
     session_id: &str,
@@ -1408,11 +1435,11 @@ async fn run_model(
             .llm
             .stream(req)
             .await
-            .map_err(|e| anyhow!("scoring call failed: {e}"))?;
+            .map_err(|e| anyhow::Error::new(e).context("scoring call failed"))?;
         let mut text = String::new();
         let mut last_pct = 20u8;
         while let Some(ev) = stream.next().await {
-            match ev.map_err(|e| anyhow!("scoring stream failed: {e}"))? {
+            match ev.map_err(|e| anyhow::Error::new(e).context("scoring stream failed"))? {
                 StreamEvent::TextDelta(t) => {
                     text.push_str(&t);
                     pending.out_chars = text.len();

@@ -63,6 +63,9 @@ pub struct Config {
     pub fish_llm_secret: String,
     pub live_model: String,
     pub fast_model: String,
+    /// `LIVE_FALLBACK_MODEL`: the second attempt of a fast call whose model is unavailable (overloaded, 5xx, 429,
+    /// no answer in time). Never the live or fast model, so an overload of one model family is ridden out.
+    pub live_fallback_model: String,
     pub scoring_model: String,
     /// `output_config.effort` for live turns (`LIVE_EFFORT`, default `low`).
     pub live_effort: String,
@@ -86,6 +89,8 @@ pub struct Config {
 pub const DEFAULT_MODEL: &str = "claude-opus-5-5";
 /// Live voice and fast calls: the most capable model under the voice latency target (research/09-voice-spike.md).
 pub const DEFAULT_LIVE_MODEL: &str = "claude-sonnet-5-5";
+/// The fallback for live and fast calls when their model is unavailable.
+pub const DEFAULT_LIVE_FALLBACK_MODEL: &str = "claude-haiku-5-5";
 pub const DEFAULT_CSP_CONNECT_EXTRA: &str =
     "https://*.fish.audio wss://*.fish.audio https://*.livekit.cloud wss://*.livekit.cloud";
 
@@ -228,6 +233,8 @@ impl Config {
             fish_llm_secret,
             live_model: get("LIVE_MODEL").unwrap_or_else(|| DEFAULT_LIVE_MODEL.into()),
             fast_model: get("FAST_MODEL").unwrap_or_else(|| DEFAULT_LIVE_MODEL.into()),
+            live_fallback_model: get("LIVE_FALLBACK_MODEL")
+                .unwrap_or_else(|| DEFAULT_LIVE_FALLBACK_MODEL.into()),
             scoring_model: get("SCORING_MODEL").unwrap_or_else(|| DEFAULT_MODEL.into()),
             live_effort,
             usage_phase,
@@ -327,6 +334,7 @@ impl fmt::Debug for Config {
             .field("fish_llm_secret", &REDACTED)
             .field("live_model", &self.live_model)
             .field("fast_model", &self.fast_model)
+            .field("live_fallback_model", &self.live_fallback_model)
             .field("scoring_model", &self.scoring_model)
             .field("live_effort", &self.live_effort)
             .field("usage_phase", &self.usage_phase)
@@ -386,6 +394,7 @@ mod tests {
         assert_eq!(cfg.model_daily_cap_usd, 40.0);
         assert_eq!(cfg.live_model, "claude-sonnet-5-5");
         assert_eq!(cfg.fast_model, "claude-sonnet-5-5");
+        assert_eq!(cfg.live_fallback_model, "claude-haiku-5-5");
         assert_eq!(cfg.scoring_model, "claude-opus-5-5");
         assert_eq!(cfg.live_effort, "low");
         assert_eq!(cfg.google_client_id, None);

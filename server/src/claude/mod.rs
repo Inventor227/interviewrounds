@@ -298,6 +298,28 @@ pub enum ClaudeError {
     Network(String),
 }
 
+impl ClaudeError {
+    /// The model could not answer right now (overloaded or another 5xx, rate limited, the connection failed): worth
+    /// one more try on a different model. Bad requests and refusals are not.
+    pub fn is_unavailable(&self) -> bool {
+        matches!(
+            self,
+            ClaudeError::Overloaded | ClaudeError::RateLimited { .. } | ClaudeError::Network(_)
+        )
+    }
+
+    /// The error's class for the ledger (never its text).
+    pub fn kind(&self) -> &'static str {
+        match self {
+            ClaudeError::RateLimited { .. } => "rate_limited",
+            ClaudeError::Overloaded => "overloaded",
+            ClaudeError::BadRequest(_) => "bad_request",
+            ClaudeError::Refusal => "refusal",
+            ClaudeError::Network(_) => "network",
+        }
+    }
+}
+
 /// Thinking setting for the cheapest fast reply on each model family.
 /// Opus 5.5 always thinks (send nothing, control depth with effort); Sonnet 5.5 turns thinking off with
 /// `between_tools`; Haiku 5.5 accepts `disabled` at effort `high` or below.

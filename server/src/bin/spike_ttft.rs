@@ -240,6 +240,7 @@ fn new_state(catalog: &Catalog, round: &str, model: &str) -> anyhow::Result<Sess
         LiveSettings {
             model: model.into(),
             fast_model: model.into(),
+            fallback_model: ir_server::config::DEFAULT_LIVE_FALLBACK_MODEL.into(),
             effort: "low".into(),
             max_tokens: 300,
         },

@@ -88,12 +88,19 @@ pub enum SessionStatus {
     Abandoned,
 }
 
+/// Live turns in a row that fail (even after the fallback) before the round counts as degraded.
+pub const DEGRADED_AFTER: u32 = 3;
+
 /// Model settings for the live voice turns.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LiveSettings {
     pub model: String,
-    /// Used once when the live model fails before saying anything, and for the director.
+    /// Used once when the live model fails before saying anything (unless it is the model that failed), and for
+    /// the director.
     pub fast_model: String,
+    /// The retry when a model is unavailable (overloaded, 5xx, 429, no answer in time), or when the fast model is
+    /// the one that failed: a second attempt never goes to the model that just failed.
+    pub fallback_model: String,
     pub effort: String,
     pub max_tokens: u32,
 }
@@ -103,8 +110,19 @@ impl LiveSettings {
         LiveSettings {
             model: cfg.live_model.clone(),
             fast_model: cfg.fast_model.clone(),
+            fallback_model: cfg.live_fallback_model.clone(),
             effort: cfg.live_effort.clone(),
             max_tokens: 300,
+        }
+    }
+
+    /// The model of the one retry after a live call that said nothing: the fallback when the model was unavailable
+    /// or when the fast model is the one that failed, the fast model otherwise.
+    pub fn retry_model(&self, failed: &str, unavailable: bool) -> &str {
+        if unavailable || self.fast_model == failed {
+            &self.fallback_model
+        } else {
+            &self.fast_model
         }
     }
 }
@@ -287,6 +305,11 @@ pub struct SessionState {
     pub status: SessionStatus,
     /// Bumped on every move into or out of a user pause: the voice release only acts on the pause it saw.
     pub pause_epoch: u64,
+    /// Live turns in a row that failed even after the fallback (the hold line was said instead).
+    pub failed_turns: u32,
+    /// The model has been unavailable for `DEGRADED_AFTER` turns in a row: the round clock is held (as in a pause)
+    /// until a turn gets through. Shown in `round.state`.
+    pub degraded: bool,
     /// When the current user pause began (wall clock, kept in the snapshot so a restart keeps the release time).
     pub paused_wall: Option<chrono::DateTime<chrono::Utc>>,
     pub brief: Option<Brief>,
@@ -494,6 +517,8 @@ impl SessionState {
             status: SessionStatus::Live,
             pause_epoch: 0,
             paused_wall: None,
+            failed_turns: 0,
+            degraded: false,
             brief: None,
             closing_line: None,
             live,
@@ -565,6 +590,34 @@ impl SessionState {
         self.panelist(panelist_id)
             .map(|p| p.persona.display_name.clone())
             .unwrap_or_else(|| panelist_id.to_string())
+    }
+
+    /// Counts a finished live turn: failed (the hold line) or answered. Returns `Some(true)` when the round just
+    /// became degraded (its clock stops), `Some(false)` when it just recovered (its clock runs again unless the round
+    /// is paused), `None` when nothing changed.
+    pub fn note_live_turn(&mut self, failed: bool, now: Instant) -> Option<bool> {
+        if failed {
+            self.failed_turns += 1;
+            if self.failed_turns >= DEGRADED_AFTER && !self.degraded {
+                self.degraded = true;
+                if self.paused_since.is_none() {
+                    self.paused_since = Some(now);
+                }
+                return Some(true);
+            }
+            return None;
+        }
+        self.failed_turns = 0;
+        if !self.degraded {
+            return None;
+        }
+        self.degraded = false;
+        if self.status == SessionStatus::Live
+            && let Some(since) = self.paused_since.take()
+        {
+            self.paused_total_ms += now.saturating_duration_since(since).as_millis() as u64;
+        }
+        Some(false)
     }
 
     /// The user paused (the headset came off, the page was hidden, the pause button): the status moves and a new
@@ -640,6 +693,7 @@ impl SessionState {
             phase_remaining_s: (self.phase_minutes_left(now).max(0.0) * 60.0) as u64,
             brief: self.brief.clone().unwrap_or_default(),
             floor: self.floor.clone(),
+            degraded: self.degraded,
         }
     }
 

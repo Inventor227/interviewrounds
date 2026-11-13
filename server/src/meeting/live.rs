@@ -617,6 +617,7 @@ pub fn next_job(st: &SessionState, seq: u64, now: Instant) -> Option<UpdateJob> 
         exchange,
         ctx: UpdateContext {
             model: st.live.fast_model.clone(),
+            fallback_model: Some(st.live.fallback_model.clone()),
             phase_id: st.current_phase().id.clone(),
             minutes_left: st.round_minutes_left(now),
             decision_phase_started: decision_started(&st.round, st.phase_idx),
@@ -694,7 +695,11 @@ async fn run_updates(
 
         let started = Instant::now();
         let req = build_update_request(&template, &job.state, &job.exchange, &job.ctx);
-        let result = tokio::time::timeout(UPDATE_TIMEOUT, fetch_update(llm.as_ref(), &req)).await;
+        let result = tokio::time::timeout(
+            UPDATE_TIMEOUT,
+            fetch_update(llm.as_ref(), &req, job.ctx.fallback_model.as_deref()),
+        )
+        .await;
 
         let Some(handle) = session.upgrade() else {
             return;

@@ -760,8 +760,8 @@ fn round_state_value(hub: &Hub, mut v: Value, time_check_due: bool) -> Value {
 /// What makes a `round.state` a change (the clock fields are not).
 fn sig(v: &Value) -> String {
     format!(
-        "{}|{}|{}|{}|{}",
-        v["status"], v["phase_index"], v["floor"], v["brief"], v["voices_released"]
+        "{}|{}|{}|{}|{}|{}",
+        v["status"], v["phase_index"], v["floor"], v["brief"], v["voices_released"], v["degraded"]
     )
 }
 
@@ -777,8 +777,11 @@ pub fn stop_clock(st: &mut SessionState, now: Instant) {
     }
 }
 
-/// Restarts the round clock.
+/// Restarts the round clock (not while the model is down: the clock then waits for a turn that gets through).
 pub fn run_clock(st: &mut SessionState, now: Instant) {
+    if st.degraded {
+        return;
+    }
     if let Some(since) = st.paused_since.take() {
         st.paused_total_ms += now.saturating_duration_since(since).as_millis() as u64;
     }

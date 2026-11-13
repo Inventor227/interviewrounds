@@ -652,3 +652,36 @@ async fn scribe_quadrants_and_cleared_slots_need_to_be_asked_for() {
     );
     assert_eq!(one_call(&code, "clear the time slot", clear).await.len(), 1);
 }
+
+#[tokio::test]
+async fn scribe_retries_once_on_the_fallback_model_then_skips() {
+    let board = hld();
+    let said = vec!["call that the booking service".to_string()];
+    let mut s = scribe();
+    s.fallback_model = Some("claude-haiku-5-5".into());
+    // Overloaded, then the fallback answers.
+    let llm = FakeLlm::new(vec![
+        Reply::Fail(ClaudeError::Overloaded),
+        Reply::Json(json!({"confidence": 0.9, "ops": [
+            {"op": "item.label", "args": {"id": "n2", "text": "Booking service"}}
+        ]})),
+    ]);
+    let ghosts = s.suggest(&llm, &input(&board, &said)).await;
+    assert_eq!(ghosts.len(), 1);
+    let seen = llm.seen.lock().unwrap().clone();
+    assert_eq!(seen.len(), 2);
+    assert_eq!(seen[0].model, "fast-model");
+    assert_eq!(seen[1].model, "claude-haiku-5-5");
+    // Both down: one try each, then nothing (silently).
+    let llm = FakeLlm::new(vec![
+        Reply::Fail(ClaudeError::Overloaded),
+        Reply::Fail(ClaudeError::Overloaded),
+        Reply::Json(json!({"confidence": 0.9, "ops": []})),
+    ]);
+    assert!(s.suggest(&llm, &input(&board, &said)).await.is_empty());
+    assert_eq!(llm.seen.lock().unwrap().len(), 2);
+    // A bad request is not retried.
+    let llm = FakeLlm::new(vec![Reply::Fail(ClaudeError::BadRequest("x".into()))]);
+    assert!(s.suggest(&llm, &input(&board, &said)).await.is_empty());
+    assert_eq!(llm.seen.lock().unwrap().len(), 1);
+}

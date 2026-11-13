@@ -237,6 +237,7 @@ fn pitch_plan(catalog: &Catalog) -> (MeetingSetup, MeetingPlan) {
 
 fn live() -> LiveSettings {
     LiveSettings {
+        fallback_model: "claude-haiku-5-5".into(),
         model: "claude-sonnet-5-5".into(),
         fast_model: "claude-sonnet-5-5".into(),
         effort: "low".into(),
@@ -516,6 +517,7 @@ async fn state_update_moves_stance_within_bounds() {
     ];
     let ctx = UpdateContext {
         model: "claude-sonnet-5-5".into(),
+        fallback_model: None,
         phase_id: "questions".into(),
         minutes_left: 5.0,
         decision_phase_started: false,
@@ -1701,6 +1703,7 @@ fn walk_away_never_reaches_attendee_text() {
     ];
     let ctx = UpdateContext {
         model: "m".into(),
+        fallback_model: None,
         phase_id: "questions".into(),
         minutes_left: 4.0,
         decision_phase_started: false,
@@ -1777,6 +1780,7 @@ fn user_text_is_marked_as_data_and_resolutions_need_evidence() {
     ];
     let ctx = UpdateContext {
         model: "m".into(),
+        fallback_model: None,
         phase_id: "questions".into(),
         minutes_left: 4.0,
         decision_phase_started: false,
@@ -2045,6 +2049,7 @@ async fn non_ascii_text_around_tags_never_breaks_a_prompt() {
     ];
     let ctx = UpdateContext {
         model: "m".into(),
+        fallback_model: None,
         phase_id: "questions".into(),
         minutes_left: 4.0,
         decision_phase_started: false,
@@ -2141,4 +2146,187 @@ fn user_typed_fields_cannot_hide_part_of_the_live_prompt() {
             .any(|p| p.system[0].text.contains("Saw the deck")),
         "the typed text itself stays, minus the marker"
     );
+}
+
+// ---------- overload fallback (R62) ----------
+
+/// Sonnet is down (every call overloaded); any other model answers.
+#[derive(Default)]
+struct SonnetDown {
+    streamed: Mutex<Vec<String>>,
+    created: Mutex<Vec<String>>,
+    n: Mutex<usize>,
+}
+
+#[async_trait]
+impl LlmApi for SonnetDown {
+    async fn create(&self, req: &MessagesRequest) -> Result<MessagesResponse, ClaudeError> {
+        self.created.lock().unwrap().push(req.model.clone());
+        if req.model.starts_with("claude-sonnet") {
+            return Err(ClaudeError::Overloaded);
+        }
+        Err(ClaudeError::BadRequest("not scripted".into()))
+    }
+
+    async fn stream(
+        &self,
+        req: &MessagesRequest,
+    ) -> Result<BoxStream<'static, Result<StreamEvent, ClaudeError>>, ClaudeError> {
+        self.streamed.lock().unwrap().push(req.model.clone());
+        if req.model.starts_with("claude-sonnet") {
+            return Err(ClaudeError::Overloaded);
+        }
+        let n = {
+            let mut n = self.n.lock().unwrap();
+            *n += 1;
+            *n
+        };
+        Ok(stream::iter(vec![
+            Ok(StreamEvent::TextDelta(format!("Fallback answer {n}."))),
+            Ok(StreamEvent::Stop {
+                reason: "end_turn".into(),
+                usage: Usage::default(),
+            }),
+        ])
+        .boxed())
+    }
+}
+
+#[tokio::test]
+async fn three_person_meeting_with_sonnet_down_is_answered_by_the_fallback() {
+    let catalog = catalog();
+    let llm = Arc::new(SonnetDown::default());
+    let url = "postgres://nobody:nothing@127.0.0.1:1/none";
+    let pool = PgPoolOptions::new()
+        .acquire_timeout(Duration::from_millis(200))
+        .connect_lazy(url)
+        .unwrap();
+    let cfg = common::test_config(url, &common::temp_dir("public"));
+    let state = AppState::new(pool, cfg)
+        .with_llm(llm.clone())
+        .with_catalog(catalog.clone())
+        .with_orchestrator_options(OrchestratorOptions {
+            first_text_timeout: Duration::from_millis(500),
+            retry_first_text_timeout: Duration::from_millis(500),
+            confirm_speech_turns: false,
+            ..OrchestratorOptions::default()
+        });
+    let router = router(state.clone());
+    // Two attendees and Grace, who joins to chair and holds the floor.
+    let s = pitch_setup();
+    let m = parse_model(&model_plan(
+        false,
+        Some("Nobody"),
+        vec![
+            model_attendee("Rhea", &[], &["Market size"], -1),
+            model_attendee("Tom", &[], &["Churn"], 0),
+        ],
+        "Thanks for coming, everyone. Over to you.",
+    ));
+    let plan = build_plan(&catalog, &s, Some(&m)).unwrap();
+    assert_eq!(plan.chair_attendee.as_deref(), Some("Grace"));
+    let st = meeting_session("m-down", &catalog, MeetingState::from_parts(&s, &plan));
+    assert_eq!(st.panel.len(), 3);
+    let chair = st.floor.clone();
+    let session = state.registry.insert(st);
+
+    let mut history = vec![json!({"role": "user", "content": "[event: start]"})];
+    let opening = say(&router, "m-down", &chair, json!(history.clone())).await;
+    history.push(json!({"role": "assistant", "content": opening}));
+    let lines = [
+        "We are asking for a partner meeting next week.",
+        "Forty thousand clinics at four hundred a month.",
+        "Churn is two percent a month on the first cohort.",
+    ];
+    for (i, line) in lines.iter().enumerate() {
+        history.push(json!({"role": "user", "content": line}));
+        let said = say(&router, "m-down", &chair, json!(history.clone())).await;
+        assert_eq!(said, format!("Fallback answer {}.", i + 1), "turn {i}");
+        history.push(json!({"role": "assistant", "content": said}));
+    }
+    let streamed = llm.streamed.lock().unwrap().clone();
+    assert_eq!(
+        streamed,
+        [
+            "claude-sonnet-5-5",
+            "claude-haiku-5-5",
+            "claude-sonnet-5-5",
+            "claude-haiku-5-5",
+            "claude-sonnet-5-5",
+            "claude-haiku-5-5"
+        ]
+    );
+    let st = session.lock().await;
+    assert!(!st.degraded);
+    assert_eq!(st.failed_turns, 0);
+}
+
+#[tokio::test]
+async fn meeting_state_update_retries_once_on_the_fallback() {
+    let catalog = catalog();
+    let llm = FakeLlm::new();
+    let (s, plan) = pitch_plan(&catalog);
+    let state = MeetingState::from_parts(&s, &plan);
+    llm.create_err();
+    llm.create_json(update_json(vec![att_update("Rhea", 1, 3, vec![])], false).to_string());
+    let exchange = vec![Turn {
+        speaker: "candidate".into(),
+        text: "We grew fifteen percent a month.".into(),
+        at_ms: 1000,
+        interrupted: false,
+        heard: None,
+    }];
+    let ctx = UpdateContext {
+        model: "claude-sonnet-5-5".into(),
+        fallback_model: Some("claude-haiku-5-5".into()),
+        phase_id: "questions".into(),
+        minutes_left: 5.0,
+        decision_phase_started: false,
+    };
+    let next = update(llm.as_ref(), &catalog, &state, &exchange, &ctx)
+        .await
+        .unwrap();
+    assert_eq!(next.updates, state.updates + 1);
+    let created = llm.created();
+    assert_eq!(created.len(), 2);
+    assert_eq!(created[1].model, "claude-haiku-5-5");
+    // Both down: the update fails (the runner skips it), after exactly two tries.
+    let llm = FakeLlm::new();
+    llm.create_err();
+    llm.create_err();
+    assert!(
+        update(llm.as_ref(), &catalog, &state, &exchange, &ctx)
+            .await
+            .is_err()
+    );
+    assert_eq!(llm.created().len(), 2);
+}
+
+#[tokio::test]
+async fn prepare_retries_once_on_sonnet_then_uses_the_rules() {
+    let catalog = catalog();
+    let s = pitch_setup();
+    let model_json = model_plan(
+        false,
+        Some("Rhea"),
+        vec![
+            model_attendee("Rhea", &[], &["Market size"], -1),
+            model_attendee("Tom", &[], &["Churn"], 0),
+        ],
+        "Thanks for coming in. Over to you.",
+    );
+    let llm = FakeLlm::new();
+    llm.create_err();
+    llm.create_json(model_json.to_string());
+    let plan = prepare(llm.as_ref(), &catalog, &s).await.unwrap();
+    assert_eq!(plan.opening_line, "Thanks for coming in. Over to you.");
+    let created = llm.created();
+    assert_eq!(created[0].model, "claude-opus-5-5");
+    assert_eq!(created[1].model, "claude-sonnet-5-5");
+    // Both down: two tries, then a plan from the rules alone.
+    let llm = FakeLlm::new();
+    llm.create_err();
+    llm.create_err();
+    assert!(prepare(llm.as_ref(), &catalog, &s).await.is_ok());
+    assert_eq!(llm.created().len(), 2);
 }

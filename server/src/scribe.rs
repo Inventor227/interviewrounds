@@ -117,6 +117,8 @@ fn system_blocks(prompt: &str) -> Vec<SystemBlock> {
 #[derive(Clone, Debug)]
 pub struct Scribe {
     pub model: String,
+    /// One more try on this model when the Scribe's model is unavailable (then the suggestion is skipped).
+    pub fallback_model: Option<String>,
     /// `scribe.md` with comments stripped.
     pub template: String,
     pub timeout: Duration,
@@ -156,6 +158,7 @@ impl Scribe {
     pub fn new(model: impl Into<String>, template: impl Into<String>) -> Self {
         Scribe {
             model: model.into(),
+            fallback_model: None,
             template: template.into(),
             timeout: DEFAULT_TIMEOUT,
         }
@@ -243,7 +246,11 @@ impl Scribe {
         }
         let req = self.build_request(input);
         let started = Instant::now();
-        let res = tokio::time::timeout(self.timeout, llm.create(&req)).await;
+        let res = tokio::time::timeout(
+            self.timeout,
+            crate::orchestrator::create_with_fallback(llm, &req, self.fallback_model.as_deref()),
+        )
+        .await;
         let ms = started.elapsed().as_millis() as u64;
         let resp = match res {
             Err(_) => {

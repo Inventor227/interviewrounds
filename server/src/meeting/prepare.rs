@@ -34,6 +34,8 @@ use crate::orchestrator::prompt::fill;
 
 /// Meeting prepare runs on the most capable model; the user waits on the setup page.
 pub const PREPARE_MODEL: &str = "claude-opus-5-5";
+/// The second try when `PREPARE_MODEL` is unavailable.
+pub const PREPARE_FALLBACK_MODEL: &str = crate::config::DEFAULT_LIVE_MODEL;
 pub const PREPARE_EFFORT: &str = "medium";
 const PREPARE_MAX_TOKENS: u32 = 12_000;
 const PREPARE_TIMEOUT: Duration = Duration::from_secs(120);
@@ -135,7 +137,9 @@ async fn call_model(
     req: &MessagesRequest,
 ) -> (Option<ModelPlan>, Option<(String, Usage)>) {
     let started = std::time::Instant::now();
-    let resp = match tokio::time::timeout(PREPARE_TIMEOUT, llm.create(req)).await {
+    // Opus overloaded: one try on Sonnet, then the rules alone.
+    let call = crate::orchestrator::create_with_fallback(llm, req, Some(PREPARE_FALLBACK_MODEL));
+    let resp = match tokio::time::timeout(PREPARE_TIMEOUT, call).await {
         Ok(Ok(resp)) => resp,
         Ok(Err(e)) => {
             tracing::warn!(error = %e, "meeting prepare call failed; using the rules alone");

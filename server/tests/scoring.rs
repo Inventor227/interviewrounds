@@ -57,11 +57,16 @@ struct ScriptedLlm {
     /// Side calls that never answer.
     hang_card: bool,
     hang_meeting: bool,
+    /// The card's model is overloaded (its fallback answers).
+    card_model_down: bool,
     requests: Mutex<Vec<MessagesRequest>>,
 }
 
 fn is_card(req: &MessagesRequest) -> bool {
-    req.model.starts_with("claude-sonnet")
+    req.output_config
+        .as_ref()
+        .and_then(|o| o.format.as_ref())
+        .is_some_and(|f| f["schema"]["properties"].get("one_line").is_some())
 }
 
 fn is_meeting(req: &MessagesRequest) -> bool {
@@ -106,6 +111,25 @@ impl ScriptedLlm {
             .iter()
             .filter(|r| is_card(r))
             .count()
+    }
+    /// The models of the main scorecard calls, in order.
+    fn main_models(&self) -> Vec<String> {
+        self.requests
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|r| !is_card(r) && !is_meeting(r))
+            .map(|r| r.model.clone())
+            .collect()
+    }
+    fn card_models(&self) -> Vec<String> {
+        self.requests
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|r| is_card(r))
+            .map(|r| r.model.clone())
+            .collect()
     }
     fn all_calls(&self) -> usize {
         self.requests.lock().unwrap().len()
@@ -167,6 +191,9 @@ impl LlmApi for ScriptedLlm {
         };
         if (self.hang_card && is_card(req)) || (self.hang_meeting && is_meeting(req)) {
             return Ok(Box::pin(stream::pending()));
+        }
+        if self.card_model_down && is_card(req) && req.model == "claude-sonnet-5-5" {
+            return Err(ClaudeError::Overloaded);
         }
         if let Some(reply) = side {
             return reply
@@ -406,6 +433,7 @@ impl Env {
             effort: "high",
             max_tokens: 16_000,
             card_model: "claude-sonnet-5-5",
+            card_fallback_model: "claude-haiku-5-5",
             timeout: Duration::from_secs(10),
             card_timeout: report::CARD_TIMEOUT,
             meeting_timeout: report::MEETING_TIMEOUT,
@@ -2374,11 +2402,18 @@ async fn a_scored_session_is_ledgered_once_even_through_the_metered_client() {
     .fetch_all(&db)
     .await
     .unwrap();
-    // One row per model call: the main call, and the card call (it failed, so an estimate). Nothing from the
-    // metered client.
-    assert_eq!(rows.len(), 2, "one row per call: {rows:?}");
-    assert_eq!(rows[0], ("scoring".to_string(), Some(9000)));
-    assert_eq!(rows[1].0, "scoring_card");
+    // One priced row per model call: the main call, and the card call (it failed, so an estimate). The metered
+    // client adds only the zero-cost record of the card's failure (its error kind).
+    let priced: Vec<_> = rows
+        .iter()
+        .filter(|r| r.0 != "model_error")
+        .cloned()
+        .collect();
+    assert_eq!(priced.len(), 2, "one row per call: {rows:?}");
+    assert_eq!(priced[0], ("scoring".to_string(), Some(9000)));
+    assert_eq!(priced[1].0, "scoring_card");
+    let failures = rows.iter().filter(|r| r.0 == "model_error").count();
+    assert_eq!(failures, 1, "{rows:?}");
 }
 
 #[tokio::test]
@@ -2414,4 +2449,54 @@ async fn a_scoring_call_that_fails_still_counts_in_the_ledger() {
         );
         assert!(*cost > 0.0, "and priced, so the caps see it: {rows:?}");
     }
+}
+
+// ---------- overload fallback (R62) ----------
+
+#[tokio::test]
+async fn second_attempt_runs_on_sonnet_after_an_overload() {
+    let _serial = db_lock().lock().await;
+    let db = pool().await;
+    let data = common::temp_dir("data");
+    let id = insert_session(&db, &long_design_input()).await;
+    let llm = ScriptedLlm::new(vec![
+        Err(ClaudeError::Overloaded),
+        Ok(model_output().to_string()),
+    ]);
+    let d = deps(&db, llm.clone(), &data);
+    scoring::score_session(&d, id).await.unwrap();
+    assert_eq!(llm.main_models(), ["claude-opus-5-5", "claude-sonnet-5-5"]);
+    assert_eq!(status(&db, id).await, "scored");
+    // A bad answer (not an outage) keeps the scoring model for the second attempt.
+    let id = insert_session(&db, &long_design_input()).await;
+    let llm = ScriptedLlm::new(vec![
+        Ok("{\"headline\": ".into()),
+        Ok(model_output().to_string()),
+    ]);
+    let d = deps(&db, llm.clone(), &data);
+    scoring::score_session(&d, id).await.unwrap();
+    assert_eq!(llm.main_models(), ["claude-opus-5-5", "claude-opus-5-5"]);
+}
+
+#[tokio::test]
+async fn headset_card_retries_on_the_fallback_when_its_model_is_down() {
+    let env = Env::new();
+    let llm = Arc::new(ScriptedLlm {
+        replies: Mutex::new(vec![Ok(model_output().to_string())].into()),
+        card: Mutex::new(Some(card_reply().to_string())),
+        card_model_down: true,
+        ..ScriptedLlm::default()
+    });
+    let slot = report::CardSlot::default();
+    let input = design_input();
+    let senv = env.score_env(llm.as_ref());
+    let scored = report::score_with_card(&senv, &input, &slot).await.unwrap();
+    assert_eq!(llm.card_models(), ["claude-sonnet-5-5", "claude-haiku-5-5"]);
+    assert!(env.events.0.lock().unwrap().contains(&"card".to_string()));
+    let card = scored
+        .calls
+        .iter()
+        .find(|c| c.kind == "scoring_card")
+        .expect("card call ledgered");
+    assert_eq!(card.model, "claude-haiku-5-5");
 }

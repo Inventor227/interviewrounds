@@ -283,3 +283,82 @@ async fn settings_round_trip_and_validate() {
         .unwrap();
     assert_eq!(n, 0);
 }
+
+/// A model that is always overloaded.
+struct Down;
+
+#[async_trait::async_trait]
+impl ir_server::orchestrator::LlmApi for Down {
+    async fn create(
+        &self,
+        _req: &ir_server::claude::MessagesRequest,
+    ) -> Result<ir_server::claude::MessagesResponse, ir_server::claude::ClaudeError> {
+        Err(ir_server::claude::ClaudeError::Overloaded)
+    }
+
+    async fn stream(
+        &self,
+        _req: &ir_server::claude::MessagesRequest,
+    ) -> Result<
+        futures::stream::BoxStream<
+            'static,
+            Result<ir_server::claude::StreamEvent, ir_server::claude::ClaudeError>,
+        >,
+        ir_server::claude::ClaudeError,
+    > {
+        Err(ir_server::claude::ClaudeError::RateLimited { retry_after: None })
+    }
+}
+
+#[tokio::test]
+async fn failed_model_calls_are_ledgered_at_zero_cost_with_the_error_kind() {
+    use ir_server::orchestrator::LlmApi;
+    let app = live::test_app(Options::default()).await;
+    let db = &app.state.db;
+    let id = guest(db).await;
+    let session = scored_session(db, id, 10, "sde.system_design.short").await;
+    let llm = usage::MeteredLlm::new(std::sync::Arc::new(Down), db.clone(), UsagePhase::Build);
+    let req = ir_server::claude::MessagesRequest {
+        model: "claude-sonnet-5-5".into(),
+        max_tokens: 100,
+        messages: vec![ir_server::claude::Message::user_text("secret words")],
+        ..Default::default()
+    };
+    usage::LLM_SESSION
+        .scope(session, async {
+            assert!(llm.create(&req).await.is_err());
+            assert!(llm.stream(&req).await.is_err());
+        })
+        .await;
+    let rows: Vec<(String, String, f64, serde_json::Value)> = {
+        let mut rows = Vec::new();
+        for _ in 0..50 {
+            rows = sqlx::query_as(
+                "select kind, model, cost_usd::float8, meta from usage_events \
+                 where session_id = $1 and kind = 'model_error' order by meta->>'call'",
+            )
+            .bind(session)
+            .fetch_all(db)
+            .await
+            .unwrap();
+            if rows.len() == 2 {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        rows
+    };
+    assert_eq!(rows.len(), 2, "{rows:?}");
+    assert_eq!(rows[0].1, "claude-sonnet-5-5");
+    assert_eq!(rows[0].2, 0.0);
+    assert_eq!(
+        rows[0].3,
+        json!({"call": "model_call", "error": "overloaded"})
+    );
+    assert_eq!(
+        rows[1].3,
+        json!({"call": "stream", "error": "rate_limited"})
+    );
+    // The error's class only: no request or error text.
+    assert!(!rows.iter().any(|r| r.3.to_string().contains("secret")));
+}

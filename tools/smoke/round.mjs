@@ -141,6 +141,9 @@ function send(t, d) {
 // ---------- the voice turn (what the voice platform would send) ----------
 // Each panelist has its own voice session, so its own transcript.
 const histories = {};
+/** The server's hold line, said when the model call failed (R62: the fallback model should answer instead). */
+const HOLD_LINE = /give me a second/i;
+const holdReplies = [];
 async function turn(sessionId, token, text, label, panelist = "p1") {
   const history = (histories[panelist] ??= []);
   const messages = [...history, { role: "user", content: text }];
@@ -183,6 +186,8 @@ async function turn(sessionId, token, text, label, panelist = "p1") {
   record("turn", label, { panelist, user: text, reply, ttft_ms: ttft, total_ms: total });
   say(`${label}: first text ${ttft} ms, ${total} ms: "${reply}"`);
   if (TOOL_WORDS.test(reply)) toolSpeech.push({ label, reply });
+  // The hold line means the model (and its fallback) failed: never a passing turn.
+  if (HOLD_LINE.test(reply)) holdReplies.push({ label, reply });
   return { reply, ttft, total };
 }
 
@@ -256,6 +261,7 @@ async function main() {
     }
   }
   check("no tool names in speech", toolSpeech.length === 0, toolSpeech.length ? toolSpeech : undefined);
+  check("no hold lines (every turn got a real reply)", holdReplies.length === 0, holdReplies.length ? holdReplies : undefined);
   summary.ok = Object.values(summary.checks).every((c) => c.ok);
   summary.total_s = Math.round(now() / 100) / 10;
   writeFileSync(join(OUT, "summary.json"), JSON.stringify(summary, null, 2) + "\n");
