@@ -676,6 +676,15 @@ async fn final_board(deps: &ScoringDeps, input: &ScoringInput) -> Option<Vec<u8>
 
 /// Loads, scores and returns the report (no storing). One attempt.
 pub async fn score(deps: &ScoringDeps, session_id: Uuid) -> anyhow::Result<Scored> {
+    score_attempt(deps, session_id, &report::CardSlot::default()).await
+}
+
+/// One attempt of a scoring run; `card` carries the headset card across the run's attempts.
+pub async fn score_attempt(
+    deps: &ScoringDeps,
+    session_id: Uuid,
+    card: &report::CardSlot,
+) -> anyhow::Result<Scored> {
     let mut input = load_scoring_input(&deps.db, session_id, &deps.catalog)
         .await?
         .ok_or_else(|| anyhow!("session {session_id} not found"))?;
@@ -716,9 +725,12 @@ pub async fn score(deps: &ScoringDeps, session_id: Uuid) -> anyhow::Result<Score
         max_tokens: deps.max_tokens,
         card_model: &deps.card_model,
         timeout: deps.model_timeout,
+        card_timeout: report::CARD_TIMEOUT,
+        meeting_timeout: report::MEETING_TIMEOUT,
+        side_grace: report::SIDE_GRACE,
         events: deps.events.as_ref(),
     };
-    report::score(&env, &input).await
+    report::score_with_card(&env, &input, card).await
 }
 
 /// Scoring attempts a session may use: two, counted since the last human re-score.
@@ -786,19 +798,24 @@ pub async fn mark_failed(deps: &ScoringDeps, session_id: Uuid) {
             .bind(session_id)
             .execute(&deps.db)
             .await;
-    if let Err(err) = res {
-        tracing::warn!(session_id = %session_id, error = %err, "could not mark the session failed");
+    match res {
+        // Only when this call failed it: a report stored meanwhile (another server) is not a failure.
+        Ok(done) if done.rows_affected() == 1 => deps.events.failed(&session_id.to_string()).await,
+        Ok(_) => {}
+        Err(err) => {
+            tracing::warn!(session_id = %session_id, error = %err, "could not mark the session failed")
+        }
     }
-    deps.events.failed(&session_id.to_string()).await;
 }
 
 /// Scores a session within its attempt budget (two, then `failed`) and stores the report. Every attempt is
 /// ledgered first, so a crash, a store error or a restart never buys more than two model runs.
 pub async fn score_session(deps: &ScoringDeps, session_id: Uuid) -> anyhow::Result<Value> {
     let started = Instant::now();
+    let card = report::CardSlot::default();
     let mut last_err = anyhow!("no scoring attempt left");
     while let Some(attempt) = claim_attempt(deps, session_id).await? {
-        let result = score(deps, session_id).await;
+        let result = score_attempt(deps, session_id, &card).await;
         let calls = match &result {
             Ok(s) => s.calls.clone(),
             Err(e) => e
@@ -821,6 +838,13 @@ pub async fn score_session(deps: &ScoringDeps, session_id: Uuid) -> anyhow::Resu
         };
         match stored {
             Ok(scored) => {
+                if !scored.model_called {
+                    // Not enough signal: no model call was made, so the attempt's ledger row goes.
+                    let _ = sqlx::query("delete from usage_events where id = $1")
+                        .bind(attempt)
+                        .execute(&deps.db)
+                        .await;
+                }
                 let id = session_id.to_string();
                 deps.events.progress(&id, "done", 100).await;
                 deps.events.ready(&id).await;
