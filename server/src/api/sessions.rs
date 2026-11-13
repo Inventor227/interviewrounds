@@ -266,34 +266,32 @@ async fn mint_voices(
     app: &AppState,
     session_id: Uuid,
     specs: Vec<MintSpec>,
-    entries: &mut Vec<FishEntry>,
 ) -> AppResult<Vec<(String, Value, String)>> {
     let mut out = Vec::new();
     for spec in specs {
         let (token, entry) = mint_fish(app, &spec, None).await?;
-        entries.push(entry);
-        persist::save_fish_entries(&app.db, session_id, entries).await?;
+        track(app, session_id, &entry).await?;
         out.push((spec.panelist_id, fish_voice(&token), token.session_id));
     }
     Ok(out)
+}
+
+/// Adds a just-minted Fish session to the session's list. When the round ended meanwhile (settlement may already
+/// have run), the new Fish session is ended at once and the caller gets 409.
+async fn track(app: &AppState, session_id: Uuid, entry: &FishEntry) -> AppResult<()> {
+    if persist::append_fish_entry(&app.db, session_id, entry).await? {
+        return Ok(());
+    }
+    if let Err(err) = persist::end_fish(app, &entry.fish_session_id).await {
+        tracing::error!(fish_session_id = %entry.fish_session_id, error = %err, "could not end a Fish session minted after the end");
+    }
+    Err(AppError::Conflict("This session has ended.".into()))
 }
 
 fn remember_voices(hub: &Hub, voices: &[(String, Value, String)]) {
     let mut cache = hub.voices.lock().unwrap_or_else(|e| e.into_inner());
     for (pid, voice, fish_id) in voices {
         cache.insert(pid.clone(), (fish_id.clone(), voice.clone()));
-    }
-}
-
-/// Ends Fish sessions in the background (each one is retried; settlement retries what is still open).
-fn end_in_background(app: &AppState, ids: Vec<String>) {
-    for fid in ids {
-        let app = app.clone();
-        tokio::spawn(async move {
-            if let Err(err) = persist::end_fish(&app, &fid).await {
-                tracing::warn!(fish_session_id = %fid, error = %err, "could not end Fish session");
-            }
-        });
     }
 }
 
@@ -518,13 +516,12 @@ async fn create_inner(
     let (token, _, _) = persist::issue_token(&mut tx, session_id, false).await?;
     tx.commit().await?;
 
-    let mut entries = Vec::new();
     let voices = if fish {
         let specs = voiced(&st, mode)
             .iter()
             .map(|pid| mint_spec(app, &st, pid))
             .collect::<AppResult<Vec<_>>>()?;
-        match mint_voices(app, session_id, specs, &mut entries).await {
+        match mint_voices(app, session_id, specs).await {
             Ok(v) => v,
             Err(err) => {
                 // Failed sessions do not count; whatever was minted is ended and settled.
@@ -655,27 +652,19 @@ async fn resume_inner(app: &AppState, identity: &Identity, id: &str) -> AppResul
         PanelMode::Swap
     };
 
-    let mut tx = app.db.begin().await?;
-    let (token, _, revoked) = persist::issue_token(&mut tx, row.id, true).await?;
-    tx.commit().await?;
-    hub.kick(revoked);
-
-    // New voices: the old Fish sessions went with the page, so they are ended; re-read under the Fish lock.
+    // New voices first (a failed mint leaves the old token and voices working), then the token rotates. The old
+    // Fish sessions went with the page: they are ended once the new ones exist.
     let voices = if row.voice == "fish" {
         let _fish = hub.fish_lock.lock().await;
         let fresh = persist::fetch_session(&app.db, row.id)
             .await?
             .ok_or(AppError::NotFound)?;
-        let mut entries = fresh.fish_entries();
-        let now = Utc::now();
-        let mut stale = Vec::new();
-        for e in entries.iter_mut().filter(|e| e.ended_at.is_none()) {
-            e.ended_at = Some(now);
-            stale.push(e.fish_session_id.clone());
-        }
-        persist::save_fish_entries(&app.db, row.id, &entries).await?;
-        end_in_background(app, stale);
-        hub.voices.lock().unwrap_or_else(|e| e.into_inner()).clear();
+        let stale: Vec<String> = fresh
+            .fish_entries()
+            .into_iter()
+            .filter(|e| e.ended_at.is_none())
+            .map(|e| e.fish_session_id)
+            .collect();
         let specs = {
             let st = handle.lock().await;
             voiced(&st, mode)
@@ -683,12 +672,31 @@ async fn resume_inner(app: &AppState, identity: &Identity, id: &str) -> AppResul
                 .map(|pid| mint_spec(app, &st, pid))
                 .collect::<AppResult<Vec<_>>>()?
         };
-        let voices = mint_voices(app, row.id, specs, &mut entries).await?;
+        let voices = match mint_voices(app, row.id, specs).await {
+            Ok(v) => v,
+            Err(err) => {
+                // This try does not count.
+                let _ = sqlx::query(
+                    "update sessions set resume_count = greatest(resume_count - 1, 0) where id = $1",
+                )
+                .bind(row.id)
+                .execute(&app.db)
+                .await;
+                return Err(err);
+            }
+        };
+        persist::end_in_background(app, row.id, stale);
+        hub.voices.lock().unwrap_or_else(|e| e.into_inner()).clear();
         remember_voices(&hub, &voices);
         voices
     } else {
         Vec::new()
     };
+
+    let mut tx = app.db.begin().await?;
+    let (token, _, revoked) = persist::issue_token(&mut tx, row.id, true).await?;
+    tx.commit().await?;
+    hub.kick(revoked);
 
     let res = {
         let mut st = handle.lock().await;
@@ -765,7 +773,7 @@ pub async fn join(
     let fresh = persist::fetch_session(&app.db, row.id)
         .await?
         .ok_or(AppError::NotFound)?;
-    let mut entries = fresh.fish_entries();
+    let entries = fresh.fish_entries();
     if !fake {
         // Already holding a live voice: the same one again, nothing new is minted or said.
         let cached = hub
@@ -786,22 +794,17 @@ pub async fn join(
     let voice = match spec {
         None => json!({"transport": "fake"}),
         Some(spec) => {
-            // One voice at a time: every open Fish session ends (including a stale one of this panelist).
-            let now = Utc::now();
-            let mut stale = Vec::new();
-            for e in entries.iter_mut().filter(|e| e.ended_at.is_none()) {
-                e.ended_at = Some(now);
-                stale.push(e.fish_session_id.clone());
-            }
-            persist::save_fish_entries(&app.db, row.id, &entries).await?;
-            end_in_background(&app, stale);
-            {
-                let mut cache = hub.voices.lock().unwrap_or_else(|e| e.into_inner());
-                cache.clear();
-            }
+            // One voice at a time: every other open Fish session ends (including a stale one of this
+            // panelist), once Fish confirms; settlement ends whatever is left.
+            let stale: Vec<String> = entries
+                .iter()
+                .filter(|e| e.ended_at.is_none())
+                .map(|e| e.fish_session_id.clone())
+                .collect();
+            hub.voices.lock().unwrap_or_else(|e| e.into_inner()).clear();
             let (token, entry) = mint_fish(&app, &spec, line.clone()).await?;
-            entries.push(entry);
-            persist::save_fish_entries(&app.db, row.id, &entries).await?;
+            track(&app, row.id, &entry).await?;
+            persist::end_in_background(&app, row.id, stale);
             let voice = fish_voice(&token);
             remember_voices(&hub, &[(pid.clone(), voice.clone(), token.session_id)]);
             voice

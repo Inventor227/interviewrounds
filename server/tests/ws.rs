@@ -719,3 +719,103 @@ async fn board_focus_keeps_the_latest_item() {
     assert_eq!(frame_of(&mut ws, "pong", WAIT).await.unwrap()["ack"], 3);
     assert_eq!(stored().await, None);
 }
+
+#[tokio::test]
+async fn a_silent_client_is_closed_even_while_the_server_talks() {
+    let app = live::test_app(Options {
+        timing: SessionTiming {
+            read_timeout: Duration::from_millis(500),
+            ..quick()
+        },
+        ..Options::default()
+    })
+    .await;
+    let base = app.serve().await;
+    let (_, id, token) = new_session(&app, "fake").await;
+
+    // A client that pings stays connected well past the timeout, with round.state flowing every 50 ms.
+    let mut ws = hello(&base, &id, &token, 0).await;
+    let deadline = tokio::time::Instant::now() + Duration::from_millis(1500);
+    while tokio::time::Instant::now() < deadline {
+        send(&mut ws, "ping", 0, json!({})).await;
+        frame_of(&mut ws, "pong", WAIT).await.expect("still open");
+        tokio::time::sleep(Duration::from_millis(150)).await;
+    }
+
+    // A silent one is closed with 1001, although the server keeps sending to it.
+    let started = std::time::Instant::now();
+    let mut seen = 0;
+    let code = loop {
+        match live::next(&mut ws, WAIT).await.expect("closed in time") {
+            Next::Frame(_) => seen += 1,
+            Next::Closed(code) => break code,
+        }
+    };
+    assert_eq!(code, Some(1001));
+    assert!(seen > 3, "the server was sending meanwhile ({seen} frames)");
+    assert!(started.elapsed() < Duration::from_secs(2));
+}
+
+#[tokio::test]
+async fn a_replay_burst_after_hello_is_not_refused() {
+    let app = live::test_app(Options::default()).await;
+    let base = app.serve().await;
+    let (_, id, token) = new_session(&app, "fake").await;
+    let mut ws = hello(&base, &id, &token, 0).await;
+    frame_of(&mut ws, "round.state", WAIT).await.unwrap();
+    // 300 queued frames arrive at once after a reconnect: well above 60 a second, inside the opening burst.
+    for seq in 1..=300u64 {
+        send(
+            &mut ws,
+            "transcript.mark",
+            seq,
+            json!({"segment_id": format!("s{seq}"), "panelist_id": "p1",
+            "first_at_ms": 1, "final_at_ms": 2, "text": "x"}),
+        )
+        .await;
+    }
+    send(&mut ws, "ping", 0, json!({})).await;
+    let pong = frame_of(&mut ws, "pong", Duration::from_secs(10))
+        .await
+        .expect("not closed");
+    assert_eq!(pong["ack"], 300);
+    // Sending them all again (duplicates) costs nothing either.
+    for seq in 1..=300u64 {
+        send(
+            &mut ws,
+            "transcript.mark",
+            seq,
+            json!({"segment_id": format!("s{seq}")}),
+        )
+        .await;
+    }
+    send(&mut ws, "ping", 0, json!({})).await;
+    assert!(
+        frame_of(&mut ws, "pong", Duration::from_secs(10))
+            .await
+            .is_some()
+    );
+}
+
+#[tokio::test]
+async fn an_abandoned_round_closes_without_the_report_hold() {
+    // The default 120 s hold applies only when a report is coming.
+    let app = live::test_app(Options::default()).await;
+    let base = app.serve().await;
+    let (cookie, id, token) = new_session(&app, "fake").await;
+    let mut ws = hello(&base, &id, &token, 0).await;
+    frame_of(&mut ws, "round.state", WAIT).await.unwrap();
+    let res = app
+        .call(
+            Method::POST,
+            &format!("/api/sessions/{id}/end"),
+            Some(&cookie),
+            Some(json!({"reason": "user_ended"})),
+        )
+        .await;
+    assert_eq!(res.status, StatusCode::ACCEPTED);
+    frame_of(&mut ws, "round.ended", WAIT)
+        .await
+        .expect("round.ended");
+    assert_eq!(live::close_code(&mut ws, WAIT).await, Some(4409));
+}

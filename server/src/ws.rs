@@ -168,8 +168,10 @@ pub struct Hub {
     acks: std::sync::Mutex<HashMap<i64, u64>>,
     /// `uses_whiteboard` per phase, for the `round.state` phases list.
     whiteboard: Vec<bool>,
-    /// Serialises Fish bookkeeping (join, resume) for this session.
+    /// Serialises Fish bookkeeping (join, resume, settlement) for this session.
     pub fish_lock: Mutex<()>,
+    /// Keeps numbered frames in seq order.
+    emit_lock: Mutex<()>,
     /// Voice handed out per panelist for its open Fish session (a repeated join gets the same one).
     pub voices: std::sync::Mutex<HashMap<String, (String, Value)>>,
     /// Last prompt cache prewarm.
@@ -186,9 +188,15 @@ fn frame(t: &str, seq: u64, d: Value) -> Value {
 impl Hub {
     /// Sends a numbered frame (stored, then broadcast; replayed after reconnects). Returns its seq.
     pub async fn emit(&self, db: &PgPool, t: &str, d: Value) -> u64 {
-        let mut h = self.inner.lock().await;
-        let seq = h.next_seq;
-        h.next_seq += 1;
+        // Emits run one at a time (seq order = broadcast order); the state lock is held only briefly, so a slow
+        // database does not stall the driver or the socket bookkeeping.
+        let _order = self.emit_lock.lock().await;
+        let seq = {
+            let mut h = self.inner.lock().await;
+            let seq = h.next_seq;
+            h.next_seq += 1;
+            seq
+        };
         let f = Arc::new(frame(t, seq, d));
         // Stored before it is broadcast, so a socket replaying from the database cannot miss it.
         let res = sqlx::query(
@@ -202,6 +210,7 @@ impl Hub {
         if let Err(err) = res {
             tracing::warn!(session_id = %self.session_id, error = %err, "could not store a server frame");
         }
+        let mut h = self.inner.lock().await;
         h.buffer.push_back(f.clone());
         while h.buffer.len() > BUFFER_FRAMES {
             h.buffer.pop_front();
@@ -217,7 +226,8 @@ impl Hub {
 
     /// The round is over: `round.ended` now; the sockets stay for the report and close with 4409 once it is
     /// done (`send_to_session` with `report.ready`) or after `scoring_hold`.
-    pub async fn finish(self: &Arc<Self>, app: &AppState, reason: &str) {
+    /// `report_coming`: false for a round with nothing to score (the sockets close right away).
+    pub async fn finish(self: &Arc<Self>, app: &AppState, reason: &str, report_coming: bool) {
         {
             let mut h = self.inner.lock().await;
             if h.ended {
@@ -229,9 +239,11 @@ impl Hub {
             .await;
         let (hub, app) = (self.clone(), app.clone());
         tokio::spawn(async move {
-            tokio::select! {
-                _ = hub.report_done.notified() => {}
-                _ = tokio::time::sleep(app.timing.scoring_hold) => {}
+            if report_coming {
+                tokio::select! {
+                    _ = hub.report_done.notified() => {}
+                    _ = tokio::time::sleep(app.timing.scoring_hold) => {}
+                }
             }
             hub.close_all(CLOSE_ENDED, "session ended");
             app.hubs.remove(&hub.session_id.to_string());
@@ -471,6 +483,7 @@ pub async fn attach(app: &AppState, id: Uuid, handle: Arc<Mutex<SessionState>>) 
         acks: std::sync::Mutex::new(HashMap::new()),
         whiteboard,
         fish_lock: Mutex::new(()),
+        emit_lock: Mutex::new(()),
         voices: std::sync::Mutex::new(HashMap::new()),
         last_prewarm: std::sync::Mutex::new(None),
         focus: std::sync::Mutex::new(focus),
@@ -985,21 +998,35 @@ async fn disconnect(app: &AppState, hub: &Hub, handle: &Mutex<SessionState>) {
     }
 }
 
-/// Counts frames per second on one socket.
+/// Client frames allowed on one socket: a burst for the replay after `hello` (the client keeps up to 1,000
+/// unacked frames), then `FRAMES_PER_SECOND`.
 struct FrameBudget {
-    window: Instant,
-    count: u32,
+    tokens: f64,
+    last: Instant,
 }
 
 impl FrameBudget {
+    const BURST: f64 = 1000.0;
+    const STEADY_CAP: f64 = 2.0 * FRAMES_PER_SECOND as f64;
+
+    fn new() -> Self {
+        FrameBudget {
+            tokens: Self::BURST,
+            last: Instant::now(),
+        }
+    }
+
     fn take(&mut self) -> bool {
         let now = Instant::now();
-        if now.duration_since(self.window) >= Duration::from_secs(1) {
-            self.window = now;
-            self.count = 0;
+        let refill = now.duration_since(self.last).as_secs_f64() * FRAMES_PER_SECOND as f64;
+        self.last = now;
+        // Refill up to the steady cap; the opening burst is not topped up again once spent.
+        self.tokens = (self.tokens + refill).min(self.tokens.max(Self::STEADY_CAP));
+        if self.tokens < 1.0 {
+            return false;
         }
-        self.count += 1;
-        self.count <= FRAMES_PER_SECOND
+        self.tokens -= 1.0;
+        true
     }
 }
 
@@ -1044,11 +1071,17 @@ where
 {
     hub.set_ack(record.token_id, record.last_client_seq);
     let mut sent_up_to = replay(app, hub, record.token_id, last_seq, sink).await?;
+    // Only frames from the client count as signs of life; our own sends do not.
+    let mut last_client = tokio::time::Instant::now();
     loop {
         tokio::select! {
-            incoming = tokio::time::timeout(app.timing.read_timeout, stream.next()) => {
-                match incoming {
-                    Ok(Some(Ok(WsMessage::Text(t)))) => {
+            _ = tokio::time::sleep_until(last_client + app.timing.read_timeout) => {
+                return Some(close(CLOSE_GOING_AWAY, "no frames"));
+            }
+            incoming = stream.next() => {
+                last_client = tokio::time::Instant::now();
+                match incoming.map(|r| r.map_err(|_| ())) {
+                    Some(Ok(WsMessage::Text(t))) => {
                         if let Ok(env) = serde_json::from_str::<Envelope>(t.as_str())
                             && env.t == "ping"
                         {
@@ -1056,9 +1089,8 @@ where
                             if sink.send(text(&pong)).await.is_err() { return None; }
                         }
                     }
-                    Ok(Some(Ok(WsMessage::Close(_)))) | Ok(None) | Ok(Some(Err(_))) => return None,
-                    Ok(Some(Ok(_))) => {}
-                    Err(_) => return Some(close(CLOSE_GOING_AWAY, "no frames")),
+                    Some(Ok(WsMessage::Close(_))) | None | Some(Err(())) => return None,
+                    Some(Ok(_)) => {}
                 }
             }
             out = rx.recv() => match out {
@@ -1118,27 +1150,32 @@ where
         return None;
     }
 
-    let mut budget = FrameBudget {
-        window: Instant::now(),
-        count: 0,
-    };
+    let mut budget = FrameBudget::new();
+    // Only frames from the client count as signs of life; our own sends (the 1 s round.state) do not.
+    let mut last_client = tokio::time::Instant::now();
     loop {
         tokio::select! {
-            incoming = tokio::time::timeout(app.timing.read_timeout, stream.next()) => {
+            _ = tokio::time::sleep_until(last_client + app.timing.read_timeout) => {
+                return Some(close(CLOSE_GOING_AWAY, "no frames"));
+            }
+            incoming = stream.next() => {
+                last_client = tokio::time::Instant::now();
                 let msg = match incoming {
-                    Err(_) => return Some(close(CLOSE_GOING_AWAY, "no frames")),
-                    Ok(Some(Ok(m))) => m,
-                    Ok(_) => return None,
+                    Some(Ok(m)) => m,
+                    _ => return None,
                 };
                 let raw = match msg {
                     WsMessage::Text(t) => t.as_str().to_string(),
                     WsMessage::Close(_) => return None,
                     _ => continue,
                 };
-                if !budget.take() {
+                let parsed = serde_json::from_str::<Envelope>(&raw);
+                // A replayed frame we already processed costs nothing.
+                let duplicate = parsed.as_ref().is_ok_and(|e| e.seq > 0 && e.seq <= hub.ack_for(token_id));
+                if !duplicate && !budget.take() {
                     return Some(close(CLOSE_POLICY, "too many frames"));
                 }
-                let Ok(env) = serde_json::from_str::<Envelope>(&raw) else {
+                let Ok(env) = parsed else {
                     let f = with_ack(&error_frame("bad_frame", "Frames are JSON {t, seq, d}.", None), hub.ack_for(token_id));
                     if sink.send(text(&f)).await.is_err() { return None; }
                     continue;
@@ -1262,6 +1299,10 @@ async fn process(
 ) -> anyhow::Result<Vec<Value>> {
     let id = hub.session_id;
     let d = &env.d;
+    if hub.is_ended().await {
+        // The round is over: frames are acked (so the client stops resending) but nothing more is stored.
+        return Ok(Vec::new());
+    }
     match env.t.as_str() {
         "board.op" => {
             let (Some(op_id), Some(src), Some(op)) = (

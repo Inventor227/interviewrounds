@@ -513,7 +513,7 @@ pub async fn end_session(app: &AppState, id: Uuid, reason: &str) -> anyhow::Resu
     tracing::info!(session_id = %id, reason, status, "session ended");
     // The socket stays open through scoring (report.progress / report.ready); the hub closes itself after.
     if let Some(hub) = app.hubs.get(&key) {
-        hub.finish(app, reason).await;
+        hub.finish(app, reason, spoke).await;
     }
     app.registry.remove(&key);
     let app = app.clone();
@@ -525,32 +525,28 @@ pub async fn end_session(app: &AppState, id: Uuid, reason: &str) -> anyhow::Resu
     Ok(true)
 }
 
-/// Fish's newest assistant line across the session's Fish sessions (what was played last), if Fish answers
+/// Fish's newest assistant line from the newest Fish session (the voice that spoke last), if Fish answers
 /// within 3 seconds.
 async fn fish_last_line(app: &AppState, row: &SessionRow) -> Option<String> {
-    let mut best: Option<(i64, String)> = None;
-    for e in row.fish_entries() {
-        let detail = tokio::time::timeout(
-            Duration::from_secs(3),
-            app.fish.get_session(&e.fish_session_id),
-        )
-        .await
-        .ok()?
-        .ok()?;
-        for item in detail
-            .items
-            .iter()
-            .filter(|i| i.role.as_deref() == Some("assistant"))
-        {
-            if let Some(text) = &item.text {
-                let at = item.created_at_ms.unwrap_or(0);
-                if best.as_ref().is_none_or(|(t, _)| at >= *t) {
-                    best = Some((at, text.clone()));
-                }
-            }
-        }
-    }
-    best.map(|(_, text)| text)
+    // The newest Fish session is the voice that spoke last.
+    let newest = row
+        .fish_entries()
+        .into_iter()
+        .max_by_key(|e| e.started_at)?;
+    let detail = tokio::time::timeout(
+        Duration::from_secs(3),
+        app.fish.get_session(&newest.fish_session_id),
+    )
+    .await
+    .ok()?
+    .ok()?;
+    detail
+        .items
+        .iter()
+        .filter(|i| i.role.as_deref() == Some("assistant"))
+        .filter_map(|i| i.text.clone().map(|t| (i.created_at_ms.unwrap_or(0), t)))
+        .max_by_key(|(at, _)| *at)
+        .map(|(_, text)| text)
 }
 
 async fn fish_minutes(app: &AppState, entry: &FishEntry, now: DateTime<Utc>) -> FishMinutes {
@@ -578,6 +574,66 @@ async fn fish_minutes(app: &AppState, entry: &FishEntry, now: DateTime<Utc>) -> 
     }
 }
 
+/// Adds a minted Fish session to the session's list, only while the round is open and unsettled. False means
+/// the round has ended (or is being settled): the caller must end the new Fish session itself.
+pub async fn append_fish_entry(
+    db: &PgPool,
+    id: Uuid,
+    entry: &FishEntry,
+) -> Result<bool, sqlx::Error> {
+    let done: Option<Uuid> = sqlx::query_scalar(
+        "update sessions set fish_sessions = fish_sessions || jsonb_build_array($2::jsonb) \
+         where id = $1 and status in ('created', 'live', 'paused') and not fish_usage_recorded returning id",
+    )
+    .bind(id)
+    .bind(json!(entry))
+    .fetch_optional(db)
+    .await?;
+    Ok(done.is_some())
+}
+
+/// Marks one Fish session ended, once Fish confirmed it (an atomic update of that entry only).
+pub async fn mark_fish_ended(
+    db: &PgPool,
+    id: Uuid,
+    fish_session_id: &str,
+    at: DateTime<Utc>,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "update sessions set fish_sessions = coalesce((select jsonb_agg(case \
+             when e->>'fish_session_id' = $2 and e->>'ended_at' is null \
+             then e || jsonb_build_object('ended_at', $3::timestamptz) else e end order by n) \
+           from jsonb_array_elements(fish_sessions) with ordinality as t(e, n)), '[]'::jsonb) \
+         where id = $1",
+    )
+    .bind(id)
+    .bind(fish_session_id)
+    .bind(at)
+    .execute(db)
+    .await?;
+    Ok(())
+}
+
+/// Ends Fish sessions in the background; each one is marked ended once Fish confirms it (settlement ends what is
+/// left).
+pub fn end_in_background(app: &AppState, id: Uuid, fish_ids: Vec<String>) {
+    for fid in fish_ids {
+        let app = app.clone();
+        tokio::spawn(async move {
+            match end_fish(&app, &fid).await {
+                Ok(()) => {
+                    if let Err(err) = mark_fish_ended(&app.db, id, &fid, Utc::now()).await {
+                        tracing::warn!(fish_session_id = %fid, error = %err, "could not mark Fish session ended");
+                    }
+                }
+                Err(err) => {
+                    tracing::warn!(fish_session_id = %fid, error = %err, "could not end Fish session; settlement retries");
+                }
+            }
+        });
+    }
+}
+
 /// Ends one Fish session, retrying twice. A session Fish no longer knows counts as ended.
 pub async fn end_fish(app: &AppState, fish_session_id: &str) -> Result<(), FishError> {
     let mut last = None;
@@ -586,7 +642,12 @@ pub async fn end_fish(app: &AppState, fish_session_id: &str) -> Result<(), FishE
             tokio::time::sleep(Duration::from_millis(300 * attempt)).await;
         }
         match app.fish.end_session(fish_session_id).await {
-            Ok(()) | Err(FishError::Http { status: 404, .. }) => return Ok(()),
+            // Gone, conflict (already ended) and gone-for-good all mean there is nothing left to stop.
+            Ok(())
+            | Err(FishError::Http {
+                status: 404 | 409 | 410,
+                ..
+            }) => return Ok(()),
             Err(err) => last = Some(err),
         }
     }
@@ -630,37 +691,93 @@ pub async fn settle_identity(app: &AppState, identity: Uuid) -> anyhow::Result<(
 
 /// Ends any open Fish sessions of an ended session and records their minutes (once).
 pub async fn settle_fish(app: &AppState, id: Uuid) -> anyhow::Result<()> {
+    // Join and resume add Fish sessions under this lock; settling under it sees every one they minted.
+    let hub = app.hubs.get(&id.to_string());
+    let _fish = match &hub {
+        Some(h) => Some(h.fish_lock.lock().await),
+        None => None,
+    };
     let Some(row) = fetch_session(&app.db, id).await? else {
         return Ok(());
     };
-    if row.voice != "fish" {
+    if row.voice != "fish" || row.is_open() {
         return Ok(());
     }
     let mut entries = row.fish_entries();
     let now = Utc::now();
-    let mut still_open = 0;
+    let mut stuck = Vec::new();
     for e in entries.iter_mut().filter(|e| e.ended_at.is_none()) {
         match end_fish(app, &e.fish_session_id).await {
             Ok(()) => e.ended_at = Some(now),
             Err(err) => {
-                still_open += 1;
                 tracing::warn!(fish_session_id = %e.fish_session_id, error = %err, "could not end Fish session");
+                stuck.push(e.fish_session_id.clone());
             }
         }
     }
-    save_fish_entries(&app.db, id, &entries).await?;
-    if still_open > 0 {
+    let give_up = if stuck.is_empty() {
+        false
+    } else {
+        let attempts: i32 = sqlx::query_scalar(
+            "update sessions set fish_settle_attempts = fish_settle_attempts + 1 where id = $1 \
+             returning fish_settle_attempts",
+        )
+        .bind(id)
+        .fetch_one(&app.db)
+        .await?;
+        // Fish stops a session by itself after its max duration; past that, or after enough tries, stop waiting.
+        let oldest = entries
+            .iter()
+            .filter(|e| e.ended_at.is_none())
+            .map(|e| e.started_at)
+            .min()
+            .unwrap_or(now);
+        attempts >= MAX_SETTLE_ATTEMPTS
+            || now - oldest > chrono::Duration::from_std(FISH_MAX_LIFETIME).unwrap_or_default()
+    };
+    if !stuck.is_empty() && !give_up {
+        save_fish_entries(&app.db, id, &entries).await?;
         // A Fish session we could not end may still be billing: settle later, with its real minutes.
-        anyhow::bail!("{still_open} Fish session(s) still open");
+        anyhow::bail!("{} Fish session(s) still open", stuck.len());
     }
     let mut minutes = Vec::with_capacity(entries.len());
     for e in &entries {
         minutes.push(fish_minutes(app, e, now).await);
     }
+    if give_up {
+        // Charge at least the reservation for a session we could never confirm ended.
+        let reserved: f64 =
+            sqlx::query_scalar("select fish_reserved_usd::float8 from sessions where id = $1")
+                .bind(id)
+                .fetch_one(&app.db)
+                .await?;
+        let measured = usage::fish_cost(
+            &minutes.iter().map(|m| m.minutes).collect::<Vec<_>>(),
+            app.config.fish_rate_per_min,
+        );
+        if reserved > measured && app.config.fish_rate_per_min > 0.0 {
+            minutes.push(FishMinutes {
+                fish_session_id: stuck.join(","),
+                panelist_id: String::new(),
+                minutes: (reserved - measured) / app.config.fish_rate_per_min,
+                source: "estimate",
+            });
+        }
+        for e in entries.iter_mut().filter(|e| e.ended_at.is_none()) {
+            e.ended_at = Some(now);
+        }
+        tracing::error!(session_id = %id, stuck = ?stuck, "gave up ending Fish sessions; recorded an estimate");
+    }
+    save_fish_entries(&app.db, id, &entries).await?;
     let cost = usage::record_fish(&app.db, &app.config, id, &minutes).await?;
     tracing::info!(session_id = %id, fish_sessions = minutes.len(), cost_usd = cost, "Fish minutes recorded");
     Ok(())
 }
+
+/// Settlement tries before it gives up on a Fish session that will not end.
+pub const MAX_SETTLE_ATTEMPTS: i32 = 10;
+/// Fish ends an agent session by itself after its max duration (1800 s); a margin on top.
+pub const FISH_MAX_LIFETIME: Duration = Duration::from_secs(35 * 60);
 
 /// Background sweep: ends open sessions nobody holds in memory once they have been offline too long (after a
 /// restart), and retries Fish settlement for ended sessions.
@@ -676,7 +793,16 @@ pub fn spawn_janitor(app: AppState, every: Duration) {
     });
 }
 
+/// Both sweeps. Each item that fails is logged and skipped; the next run tries it again.
 pub async fn sweep(app: &AppState) -> anyhow::Result<()> {
+    let stale = sweep_stale(app).await;
+    let settle = sweep_settle(app).await;
+    stale.and(settle)
+}
+
+/// Ends open sessions nobody holds in memory once they have been offline past the window (after a restart).
+/// Fast: their Fish settlement runs in the background.
+pub async fn sweep_stale(app: &AppState) -> anyhow::Result<()> {
     let offline = app.timing.offline_limit.as_secs_f64();
     let never = app.timing.start_limit.as_secs_f64();
     let stale: Vec<Uuid> = sqlx::query_scalar(
@@ -690,10 +816,17 @@ pub async fn sweep(app: &AppState) -> anyhow::Result<()> {
     .fetch_all(&app.db)
     .await?;
     for id in stale {
-        if app.registry.get(&id.to_string()).is_none() {
-            end_session(app, id, "disconnected").await?;
+        if app.registry.get(&id.to_string()).is_none()
+            && let Err(err) = end_session(app, id, "disconnected").await
+        {
+            tracing::warn!(session_id = %id, error = %format!("{err:#}"), "could not end a stale session");
         }
     }
+    Ok(())
+}
+
+/// Retries Fish settlement for ended sessions.
+pub async fn sweep_settle(app: &AppState) -> anyhow::Result<()> {
     let unsettled: Vec<Uuid> = sqlx::query_scalar(
         "select id from sessions where voice = 'fish' and not fish_usage_recorded \
            and status in ('scoring', 'scored', 'failed', 'abandoned') \
@@ -702,7 +835,9 @@ pub async fn sweep(app: &AppState) -> anyhow::Result<()> {
     .fetch_all(&app.db)
     .await?;
     for id in unsettled {
-        settle_fish(app, id).await?;
+        if let Err(err) = settle_fish(app, id).await {
+            tracing::warn!(session_id = %id, error = %format!("{err:#}"), "Fish settlement will be retried");
+        }
     }
     Ok(())
 }

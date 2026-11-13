@@ -466,7 +466,17 @@ async fn resume_keeps_state_and_mints_new_tokens() {
         .unwrap();
     assert_eq!(row.status, "live");
     assert_eq!(row.fish_entries().len(), 2);
-    assert!(row.fish_entries()[0].ended_at.is_some());
+    // Marked ended once Fish confirmed the end.
+    live::eventually("old entry marked ended", Duration::from_secs(3), || async {
+        persist::fetch_session(&app.state.db, uuid)
+            .await
+            .unwrap()
+            .unwrap()
+            .fish_entries()[0]
+            .ended_at
+            .is_some()
+    })
+    .await;
 
     // Someone else's session looks like it does not exist.
     let stranger = app2.guest().await;
@@ -967,16 +977,23 @@ async fn join_twice_returns_the_same_voice() {
         .filter(|m| m.text() == "Hi, I'm Ana.")
         .count();
     assert_eq!(lines, 1, "the opening line enters the history once");
-    let row = persist::fetch_session(&app.state.db, Uuid::parse_str(&id).unwrap())
-        .await
-        .unwrap()
-        .unwrap();
-    let open: Vec<_> = row
-        .fish_entries()
-        .into_iter()
-        .filter(|e| e.ended_at.is_none())
-        .collect();
-    assert_eq!(open.len(), 1, "one live voice at a time: {open:?}");
+    let uuid = Uuid::parse_str(&id).unwrap();
+    live::eventually(
+        "one live voice at a time",
+        Duration::from_secs(3),
+        || async {
+            let row = persist::fetch_session(&app.state.db, uuid)
+                .await
+                .unwrap()
+                .unwrap();
+            row.fish_entries()
+                .iter()
+                .filter(|e| e.ended_at.is_none())
+                .count()
+                == 1
+        },
+    )
+    .await;
 }
 
 #[tokio::test]
@@ -1129,5 +1146,287 @@ async fn identity_routes_need_a_known_cookie_except_the_first_visit() {
         count(&app, "select count(*) from identities").await,
         0,
         "no guest minted"
+    );
+}
+
+/// Mounts a Fish mock that wins over the defaults: `POST {path}` answers `status` (after `delay`), with unique
+/// session ids `{prefix}-N` on a 200.
+async fn override_fish(
+    app: &live::TestApp,
+    path_str: &str,
+    status: u16,
+    delay: Duration,
+    prefix: &'static str,
+) {
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicUsize;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, ResponseTemplate};
+    let n = Arc::new(AtomicUsize::new(0));
+    Mock::given(method("POST"))
+        .and(path(path_str))
+        .respond_with(move |_: &wiremock::Request| {
+            let i = n.fetch_add(1, Ordering::SeqCst) + 1;
+            ResponseTemplate::new(status)
+                .set_delay(delay)
+                .set_body_json(json!({"session_id": format!("{prefix}-{i}"), "token": "t",
+                    "livekit_url": "wss://x", "expires_at": "2026-11-13T12:00:00Z"}))
+        })
+        .with_priority(1)
+        .mount(&app.fish)
+        .await;
+}
+
+async fn fish_ended(app: &live::TestApp, fish_id: &str) -> bool {
+    app.fish_paths("POST")
+        .await
+        .iter()
+        .any(|p| p.ends_with(&format!("{fish_id}/end")))
+}
+
+#[tokio::test]
+async fn a_resume_racing_the_end_leaves_no_fish_session_running() {
+    let app = live::test_app(Options::default()).await;
+    let cookie = app.guest().await;
+    let res = app.create(&cookie, short_req("fish")).await;
+    let id = res.body["session_id"].as_str().unwrap().to_string();
+    // From here on, minting takes 800 ms.
+    override_fish(
+        &app,
+        "/v1/agent/sessions",
+        200,
+        Duration::from_millis(800),
+        "slow",
+    )
+    .await;
+    let resume_path = format!("/api/sessions/{id}/resume");
+    let resume = app.call(Method::POST, &resume_path, Some(&cookie), None);
+    let end = async {
+        // End once the slow mint has reached Fish, so the end lands inside it.
+        live::eventually("the resume is minting", Duration::from_secs(5), || async {
+            app.fish_calls("POST", "/v1/agent/sessions").await.len() == 2
+        })
+        .await;
+        app.call(
+            Method::POST,
+            &format!("/api/sessions/{id}/end"),
+            Some(&cookie),
+            Some(json!({"reason": "user_ended"})),
+        )
+        .await
+    };
+    let (resumed, ended) = tokio::join!(resume, end);
+    assert_eq!(ended.status, StatusCode::ACCEPTED);
+    // The round ended while the new voice was being minted: the resume is refused and that voice ended at once.
+    assert_eq!(resumed.status, StatusCode::CONFLICT, "{}", resumed.body);
+    assert!(
+        fish_ended(&app, "slow-1").await,
+        "the voice minted after the end was ended: {} {:?}",
+        resumed.body,
+        app.fish_paths("POST").await
+    );
+    // The original voice is ended and billed by settlement; nothing is left open.
+    live::eventually("settled", Duration::from_secs(5), || async {
+        count(
+            &app,
+            "select count(*) from usage_events where provider = 'fish'",
+        )
+        .await
+            == 1
+    })
+    .await;
+    assert!(fish_ended(&app, "fish-1").await);
+    let row = persist::fetch_session(&app.state.db, Uuid::parse_str(&id).unwrap())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        row.fish_entries().iter().all(|e| e.ended_at.is_some()),
+        "{:?}",
+        row.fish_entries()
+    );
+}
+
+#[tokio::test]
+async fn an_old_voice_that_will_not_end_stays_open_for_settlement() {
+    let app = live::test_app(Options::default()).await;
+    let cookie = app.guest().await;
+    let res = app.create(&cookie, full_req("fish")).await;
+    let id = res.body["session_id"].as_str().unwrap().to_string();
+    let uuid = Uuid::parse_str(&id).unwrap();
+    // Fish refuses to end the floor's first voice.
+    override_fish(
+        &app,
+        "/v1/agent/sessions/fish-1/end",
+        500,
+        Duration::ZERO,
+        "x",
+    )
+    .await;
+    let res = app
+        .call(
+            Method::POST,
+            &format!("/api/sessions/{id}/panelists/p2/join"),
+            Some(&cookie),
+            Some(json!({})),
+        )
+        .await;
+    assert_eq!(res.status, StatusCode::OK);
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    let row = persist::fetch_session(&app.state.db, uuid)
+        .await
+        .unwrap()
+        .unwrap();
+    let first = row
+        .fish_entries()
+        .into_iter()
+        .find(|e| e.fish_session_id == "fish-1")
+        .unwrap();
+    assert!(
+        first.ended_at.is_none(),
+        "not marked ended without Fish's confirmation"
+    );
+    // The end and its settlement keep it open (and unbilled) while Fish still refuses.
+    persist::end_session(&app.state, uuid, "user_ended")
+        .await
+        .unwrap();
+    assert!(persist::settle_fish(&app.state, uuid).await.is_err());
+    assert_eq!(
+        count(
+            &app,
+            "select count(*) from usage_events where provider = 'fish'"
+        )
+        .await,
+        0
+    );
+}
+
+#[tokio::test]
+async fn the_sweep_skips_a_stuck_session_and_gives_up_after_enough_tries() {
+    let app = live::test_app(Options::default()).await;
+    let cookie = app.guest().await;
+    let mut ids = Vec::new();
+    for _ in 0..2 {
+        let res = app.create(&cookie, short_req("fish")).await;
+        ids.push(Uuid::parse_str(res.body["session_id"].as_str().unwrap()).unwrap());
+    }
+    // Both ended a while ago and not settled yet; Fish will never end the first one's voice (fish-1).
+    sqlx::query(
+        "update sessions set status = 'abandoned', ended_at = now() - interval '2 minutes'",
+    )
+    .execute(&app.state.db)
+    .await
+    .unwrap();
+    override_fish(
+        &app,
+        "/v1/agent/sessions/fish-1/end",
+        500,
+        Duration::ZERO,
+        "x",
+    )
+    .await;
+    persist::sweep(&app.state).await.unwrap();
+    let settled = |id: Uuid| {
+        let db = app.state.db.clone();
+        async move {
+            sqlx::query_as::<_, (bool, i32)>(
+                "select fish_usage_recorded, fish_settle_attempts from sessions where id = $1",
+            )
+            .bind(id)
+            .fetch_one(&db)
+            .await
+            .unwrap()
+        }
+    };
+    assert_eq!(
+        settled(ids[0]).await,
+        (false, 1),
+        "the stuck one is retried later"
+    );
+    assert!(settled(ids[1]).await.0, "the next one was not held up");
+
+    // After enough tries the reservation is recorded as the estimate and the session is settled.
+    sqlx::query("update sessions set fish_settle_attempts = $2 where id = $1")
+        .bind(ids[0])
+        .bind(persist::MAX_SETTLE_ATTEMPTS - 1)
+        .execute(&app.state.db)
+        .await
+        .unwrap();
+    persist::sweep(&app.state).await.unwrap();
+    assert!(settled(ids[0]).await.0);
+    let (cost, reserved): (f64, f64) = sqlx::query_as(
+        "select e.cost_usd::float8, s.fish_reserved_usd::float8 from usage_events e join sessions s on s.id = e.session_id \
+         where e.session_id = $1 and e.provider = 'fish'",
+    )
+    .bind(ids[0])
+    .fetch_one(&app.state.db)
+    .await
+    .unwrap();
+    assert!(cost >= reserved - 1e-9, "{cost} < {reserved}");
+}
+
+#[tokio::test]
+async fn fish_saying_gone_counts_as_ended() {
+    let app = live::test_app(Options::default()).await;
+    let cookie = app.guest().await;
+    let res = app.create(&cookie, short_req("fish")).await;
+    let uuid = Uuid::parse_str(res.body["session_id"].as_str().unwrap()).unwrap();
+    override_fish(
+        &app,
+        "/v1/agent/sessions/fish-1/end",
+        410,
+        Duration::ZERO,
+        "x",
+    )
+    .await;
+    persist::end_session(&app.state, uuid, "user_ended")
+        .await
+        .unwrap();
+    persist::settle_fish(&app.state, uuid).await.unwrap();
+    live::eventually("billed", Duration::from_secs(3), || async {
+        count(
+            &app,
+            "select count(*) from usage_events where provider = 'fish'",
+        )
+        .await
+            == 1
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_failed_resume_mint_keeps_the_old_token_and_does_not_count() {
+    let app = live::test_app(Options::default()).await;
+    let cookie = app.guest().await;
+    let res = app.create(&cookie, short_req("fish")).await;
+    let id = res.body["session_id"].as_str().unwrap().to_string();
+    let uuid = Uuid::parse_str(&id).unwrap();
+    let token = res.body["client_token"].as_str().unwrap().to_string();
+    override_fish(&app, "/v1/agent/sessions", 500, Duration::ZERO, "x").await;
+    let res = app
+        .call(
+            Method::POST,
+            &format!("/api/sessions/{id}/resume"),
+            Some(&cookie),
+            None,
+        )
+        .await;
+    assert_eq!(res.status, StatusCode::SERVICE_UNAVAILABLE, "{}", res.body);
+    assert!(
+        persist::check_token(&app.state.db, uuid, &token)
+            .await
+            .unwrap()
+            .is_some(),
+        "old token still works"
+    );
+    let used: i32 = sqlx::query_scalar("select resume_count from sessions where id = $1")
+        .bind(uuid)
+        .fetch_one(&app.state.db)
+        .await
+        .unwrap();
+    assert_eq!(used, 0);
+    assert!(
+        !fish_ended(&app, "fish-1").await,
+        "the old voice was not ended"
     );
 }

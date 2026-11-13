@@ -262,6 +262,7 @@ pub async fn resumable(app: &AppState, identity: Uuid) -> Result<Option<Value>, 
     let rows: Vec<(Uuid, Option<String>, Option<DateTime<Utc>>)> = sqlx::query_as(
         "select id, round_id, last_socket_at from sessions \
          where identity_id = $1 and status in ('live', 'paused') and started_at is not null \
+           and resume_count < 3 \
          order by started_at desc limit 5",
     )
     .bind(identity)

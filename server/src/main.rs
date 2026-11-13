@@ -61,8 +61,9 @@ async fn serve() -> anyhow::Result<()> {
     let pool = connect_with_retry(&config).await?;
     let port = config.port;
     let state = AppState::new(pool, config).with_catalog(catalog);
-    // Rounds left open by the previous process: those offline past the resume window end now.
-    if let Err(err) = persist::sweep(&state).await {
+    // Rounds left open by the previous process: those offline past the resume window end now. Their Fish
+    // settlement runs in the background (the janitor's first run starts at once).
+    if let Err(err) = persist::sweep_stale(&state).await {
         tracing::warn!(error = %format!("{err:#}"), "startup sweep failed");
     }
     persist::spawn_janitor(state.clone(), state.timing.janitor);
