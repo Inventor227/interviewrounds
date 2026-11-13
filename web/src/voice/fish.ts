@@ -8,7 +8,7 @@
 //   echoes typed turns back as user transcripts; marker echoes are dropped here.
 
 import type { AgentSessionCallbacks, SessionToken as LiveKitSessionToken } from '@fishaudio/agent-client';
-import type { Panelist } from '../shared/types';
+import type { FishSession, Panelist } from '../shared/types';
 import { Emitter, isMarker, VoiceError, type TransportEvents, type VoiceErrorCode, type VoiceTransport } from './transport';
 
 /** The AgentSession methods this transport uses (the SDK class satisfies it). */
@@ -50,27 +50,21 @@ const sdkStart = async (opts: FishStartOptions): Promise<FishSessionLike> => {
 };
 
 /**
- * Our server hands out `{session_token, livekit_url}`. The SDK wants Fish's whole session
- * response; when the server passes that through as JSON we use it as is, otherwise we build it
- * from the bare LiveKit token (the SDK only connects with `livekit_url` and `token`).
+ * The server passes Fish's whole session response through (`{session_id, token, livekit_url,
+ * expires_at, max_duration_seconds, ...}`, docs/protocol.md); the SDK gets all of it. Fields
+ * the SDK's type wants and Fish left out get neutral values (it connects with `livekit_url` and
+ * `token`, and skips the expiry check when the date does not parse).
  */
-export function toSessionToken(fish: { session_token: string; livekit_url: string }): LiveKitSessionToken {
-  try {
-    const parsed = JSON.parse(fish.session_token) as Partial<LiveKitSessionToken>;
-    if (parsed && typeof parsed === 'object' && typeof parsed.token === 'string') {
-      return { ...parsed, livekit_url: parsed.livekit_url ?? fish.livekit_url } as LiveKitSessionToken;
-    }
-  } catch {
-    // a bare token
-  }
+export function toSessionToken(fish: FishSession): LiveKitSessionToken {
   return {
+    ...fish,
     transport: 'livekit',
-    session_id: '',
-    expires_at: '',
-    max_duration_seconds: 0,
+    session_id: fish.session_id ?? '',
+    expires_at: fish.expires_at == null ? '' : String(fish.expires_at),
+    max_duration_seconds: typeof fish.max_duration_seconds === 'number' ? fish.max_duration_seconds : 0,
     livekit_url: fish.livekit_url,
-    token: fish.session_token,
-  };
+    token: fish.token,
+  } as LiveKitSessionToken;
 }
 
 const ERROR_CODES: Record<string, VoiceErrorCode> = {

@@ -688,8 +688,23 @@ export interface CreateSessionReq {
   parent_session_id?: string;
 }
 
+/**
+ * Fish's session response, passed through by the server unchanged (give all of it to the voice SDK).
+ * Fish may send more fields; they ride along.
+ */
+export interface FishSession {
+  session_id: string;
+  token: string;
+  livekit_url: string;
+  /** Join deadline (date-time text, or seconds as Fish sent it). */
+  expires_at?: string | number | null;
+  max_duration_seconds?: number;
+  transport?: string;
+  [extra: string]: unknown;
+}
+
 export type PanelistVoice =
-  | { transport: 'fish'; fish: { session_token: string; livekit_url: string } }
+  | { transport: 'fish'; fish: FishSession }
   | { transport: 'fake' }
   | { transport: 'fish_pending' };
 
