@@ -89,7 +89,7 @@ export function fakeMe(scenario: string): Me {
   me.streak = { current: 3, best: 5, today_done: false };
   me.daily = { round_id: 'sde.system_design.short', title: 'System design' };
   if (scenario === 'resume') {
-    me.resumable = { session_id: 's_resume', round_title: 'System design', expires_at: iso(161_000) };
+    me.resumable = { session_id: 's_resume', round_title: 'System design', expires_at: iso(161_000), paused: false };
   }
   if (scenario === 'capped') {
     me.limits = { short_left_today: 0, full_left: 1, resets_at: nextMidnight(), reason: 'guest_daily_limit' };
