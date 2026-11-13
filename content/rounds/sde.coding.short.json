@@ -5,8 +5,8 @@
   "role": "sde",
   "round_type": "coding",
   "length": "short",
-  "target_minutes": 7,
-  "hard_stop_minutes": 8,
+  "target_minutes": 8,
+  "hard_stop_minutes": 9,
   "silence_wait_seconds": 60,
   "interrupt_after_seconds": 120,
   "panel": {
@@ -34,7 +34,7 @@
     {
       "id": "dry_run",
       "title": "Dry run",
-      "minutes": 2,
+      "minutes": 3,
       "goal": "The code panel shows the solution lines shuffled with one or two decoys. Ask them to order the lines, set aside the decoys, and walk one small input through.",
       "uses_whiteboard": true
     },

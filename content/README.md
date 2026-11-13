@@ -23,7 +23,7 @@ elsewhere) and `node --test tools/content-check.test.mjs`.
 
 | Round | Short | Full | Panel (full) | Hands | Board kit |
 |---|---|---|---|---|---|
-| `sde.coding` | 7 min, Maya | 30 min, Maya | none | `code_panel` | `coding` |
+| `sde.coding` | 8 min, Maya | 30 min, Maya | none | `code_panel` | `coding` |
 | `sde.system_design` | 8 min, Daniel | 30 min | Daniel, then Ana from `deep_dive` | `whiteboard` | `hld` |
 | `sde.object_design` | 7 min, Maya | 30 min, Maya | none | `class_cards` | `lld` |
 | `sde.behavioral` | 6 min, Sam | 25 min, Sam | none | `none` | none |
