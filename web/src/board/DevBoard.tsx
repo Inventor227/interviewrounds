@@ -43,6 +43,8 @@ export interface DevBoardHandle {
   toClient(x: number, y: number): [number, number];
   /** Same path as the text box: a voice line labels the selected card. */
   say(text: string): string;
+  /** The board, tray and bin rendered offscreen at `pxPerCm`, as a PNG data URL. */
+  snapshot(pxPerCm?: number): string;
 }
 
 declare global {
@@ -127,6 +129,12 @@ export function DevBoard() {
         }
         setStatus(msg);
         return msg;
+      },
+      snapshot(px = 20) {
+        const c = document.createElement('canvas');
+        const v = new BoardView(c, { pxPerCm: px, originCm: { x: kit.view.x, y: kit.view.y }, widthCm: kit.view.w, heightCm: kit.view.h, kit });
+        v.draw(store.board, { highlight: input.hover, overlays: input.overlays });
+        return c.toDataURL('image/png');
       },
     };
     api.current = handle;

@@ -582,8 +582,8 @@ function exitPoint(r: Rect, tx: number, ty: number, gap: number): Pt {
 function arrowHead(p: Pen, tip: Pt, from: Pt, color: string): void {
   const { ctx, k } = p;
   const ang = Math.atan2(tip[1] - from[1], tip[0] - from[0]);
-  const len = 0.75;
-  const half = 0.3;
+  const len = 0.9;
+  const half = 0.38;
   const bx = tip[0] - len * Math.cos(ang);
   const by = tip[1] - len * Math.sin(ang);
   ctx.beginPath();

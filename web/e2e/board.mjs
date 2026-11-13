@@ -52,7 +52,8 @@ async function step(name, body) {
   const file = path.join(HERE, `board-step-${n}.mjs`);
   writeFileSync(
     file,
-    `export default async function ({ page, frame }) {
+    `const NAME = ${JSON.stringify(name)};
+export default async function ({ page, frame }) {
   // Offset of the app frame inside the page (0 when the app is the page itself).
   let ox = 0, oy = 0;
   const fe = await frame.frameElement().catch(() => null);
@@ -74,7 +75,18 @@ async function step(name, body) {
   };
   const board = () => frame.evaluate(() => JSON.parse(JSON.stringify(window.__board.store.board)));
   const status = () => frame.evaluate(() => document.querySelector('[data-test="status"]')?.textContent ?? '');
-  ${body}
+  // A crisp render of the board itself (the managed browser window is small).
+  const hires = async () => {
+    const url = await frame.evaluate(() => window.__board?.snapshot(20) ?? '');
+    if (!url || !process.env.EMU_SHOTS) return;
+    const { writeFileSync } = await import('node:fs');
+    writeFileSync(process.env.EMU_SHOTS + '/' + NAME + '-board.png', Buffer.from(url.split(',')[1], 'base64'));
+  };
+  try {
+    ${body}
+  } finally {
+    await hires().catch(() => {});
+  }
 }
 `,
   );
