@@ -64,6 +64,11 @@ describe('api', () => {
     expect(calls).toHaveLength(1);
   });
 
+  it('non_json_success_is_a_bad_response', async () => {
+    stubFetch(200, '<!doctype html><title>app</title>', 'text/html');
+    await expect(api.me()).rejects.toMatchObject({ status: 200, code: 'bad_response' });
+  });
+
   it('network_failure_is_an_api_error', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => Promise.reject(new TypeError('Failed to fetch'))));
     await expect(api.catalog()).rejects.toMatchObject({ status: 0, code: 'network' });
