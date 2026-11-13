@@ -52,7 +52,10 @@ export function createXRPort(app: XRAppLike): XRPort & { dispose(): void } {
     onGesture: (cb: () => void) => app.onSelect?.((_hand, phase) => phase === 'end' && cb()) ?? (() => {}),
     ui: {
       setRoundState(s: RoundStatePayload & { controller: ControllerState }) {
-        const status = s.controller === 'paused' ? 'paused' : s.status;
+        // The controller knows first when the round is over: the last snapshot can still say "live" when the
+        // scorecard arrives, and a live bar would take the summary card down again.
+        const over = s.controller === 'scoring' || s.controller === 'summary' || s.controller === 'failed';
+        const status = s.controller === 'paused' ? 'paused' : over && (s.status === 'live' || s.status === 'paused' || s.status === 'created') ? 'scoring' : s.status;
         show({
           status,
           elapsed_s: s.elapsed_s,

@@ -127,6 +127,20 @@ describe('createXRPort', () => {
     expect(app.ui.showSummary).toHaveBeenCalledWith(r);
   });
 
+  it('a_finished_round_never_shows_as_live_even_with_a_stale_snapshot', () => {
+    const { app } = fakeApp();
+    const port = createXRPort(app);
+    // The scorecard beat the server's last snapshot: the controller is in the summary, the snapshot still says live.
+    port.ui.setRoundState({ ...ROUND, status: 'live', controller: 'summary' });
+    expect(app.ui.setRoundState).toHaveBeenLastCalledWith(expect.objectContaining({ status: 'scoring' }));
+    port.ui.setRoundState({ ...ROUND, status: 'live', controller: 'scoring' });
+    expect(app.ui.setRoundState).toHaveBeenLastCalledWith(expect.objectContaining({ status: 'scoring' }));
+    port.ui.setRoundState({ ...ROUND, status: 'scored', controller: 'summary' });
+    expect(app.ui.setRoundState).toHaveBeenLastCalledWith(expect.objectContaining({ status: 'scored' }));
+    port.ui.setRoundState({ ...ROUND, status: 'live', controller: 'ending' });
+    expect(app.ui.setRoundState).toHaveBeenLastCalledWith(expect.objectContaining({ status: 'live' }));
+  });
+
   it('the_quick_card_reaches_the_summary_card', () => {
     const { app } = fakeApp();
     const card = { one_line: 'Clear on scale.', top_strength: null, top_fix: null };
