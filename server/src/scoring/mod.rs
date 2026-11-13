@@ -219,6 +219,9 @@ pub struct ScoringDeps {
     pub board_wait: Duration,
     /// Ceiling for one model call.
     pub model_timeout: Duration,
+    /// The wait before the second attempt when the first failed because its model was unavailable (an overload
+    /// often clears within seconds).
+    pub retry_backoff: Duration,
     in_flight: Arc<Mutex<HashSet<Uuid>>>,
 }
 
@@ -257,6 +260,7 @@ impl ScoringDeps {
             events: Arc::new(LogEvents),
             board_wait: Duration::from_secs(5),
             model_timeout: Duration::from_secs(90),
+            retry_backoff: RETRY_BACKOFF,
             in_flight: Arc::default(),
         }
     }
@@ -748,6 +752,8 @@ pub async fn score_attempt(
 
 /// Scoring attempts a session may use: two, counted since the last human re-score.
 pub const MAX_ATTEMPTS: i64 = 2;
+/// Default wait before the second attempt after an outage (`ScoringDeps::retry_backoff`).
+pub const RETRY_BACKOFF: Duration = Duration::from_secs(4);
 /// Re-scores a person may ask for, per session per day.
 pub const MAX_RESCORES_PER_DAY: i64 = 2;
 
@@ -841,7 +847,22 @@ async fn score_session_inner(deps: &ScoringDeps, session_id: Uuid) -> anyhow::Re
     // The first attempt on the scoring model; after it failed because that model was unavailable, the next one
     // runs on the fallback.
     let mut model = deps.model.clone();
-    while let Some(attempt) = claim_attempt(deps, session_id).await? {
+    let mut backoff = false;
+    loop {
+        // After an outage the next attempt waits a moment first; it is only claimed after the wait, so a crash
+        // meanwhile never spends it.
+        if std::mem::take(&mut backoff)
+            && !deps.retry_backoff.is_zero()
+            && attempts_used(&deps.db, session_id)
+                .await
+                .unwrap_or(MAX_ATTEMPTS)
+                < MAX_ATTEMPTS
+        {
+            tokio::time::sleep(deps.retry_backoff).await;
+        }
+        let Some(attempt) = claim_attempt(deps, session_id).await? else {
+            break;
+        };
         let unreported = Arc::new(Mutex::new(Vec::new()));
         let result = report::collecting_unreported(
             unreported.clone(),
@@ -898,8 +919,11 @@ async fn score_session_inner(deps: &ScoringDeps, session_id: Uuid) -> anyhow::Re
             }
             Err(err) => {
                 tracing::warn!(session_id = %session_id, model = %model, error = %format!("{err:#}"), "scoring attempt failed");
-                if report::model_unavailable(&err) && deps.fallback_model != model {
-                    model = deps.fallback_model.clone();
+                if report::model_unavailable(&err) {
+                    backoff = true;
+                    if deps.fallback_model != model {
+                        model = deps.fallback_model.clone();
+                    }
                 }
                 last_err = err;
             }

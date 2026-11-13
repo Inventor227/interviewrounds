@@ -1630,6 +1630,7 @@ fn deps(db: &PgPool, llm: Arc<dyn LlmApi>, data_dir: &Path) -> ScoringDeps {
     );
     d.data_dir = data_dir.to_path_buf();
     d.board_wait = Duration::from_millis(300);
+    d.retry_backoff = Duration::from_millis(20);
     d
 }
 
@@ -2476,6 +2477,59 @@ async fn second_attempt_runs_on_sonnet_after_an_overload() {
     let d = deps(&db, llm.clone(), &data);
     scoring::score_session(&d, id).await.unwrap();
     assert_eq!(llm.main_models(), ["claude-opus-5-5", "claude-opus-5-5"]);
+}
+
+#[tokio::test]
+async fn an_outage_backs_off_once_then_ends_in_try_again_not_a_hang() {
+    let _serial = db_lock().lock().await;
+    let db = pool().await;
+    let data = common::temp_dir("data");
+    let id = insert_session(&db, &long_design_input()).await;
+    // Both models overloaded for the whole run.
+    let llm = ScriptedLlm::new(vec![
+        Err(ClaudeError::Overloaded),
+        Err(ClaudeError::Overloaded),
+        Ok(model_output().to_string()),
+    ]);
+    let events = Arc::new(RecordedEvents::default());
+    let mut d = deps(&db, llm.clone(), &data).with_events(events.clone());
+    d.retry_backoff = Duration::from_millis(600);
+    let started = Instant::now();
+    let res = tokio::time::timeout(Duration::from_secs(20), scoring::score_session(&d, id))
+        .await
+        .expect("scoring gives up in time, it never hangs");
+    let took = started.elapsed();
+    assert!(res.is_err());
+    // Two attempts inside the budget, the second on the fallback after the backoff; no wait after the last one.
+    assert_eq!(llm.main_models(), ["claude-opus-5-5", "claude-sonnet-5-5"]);
+    assert!(took >= Duration::from_millis(600), "{took:?}");
+    assert!(
+        took < Duration::from_millis(600) + Duration::from_secs(5),
+        "{took:?}"
+    );
+    assert_eq!(scoring::attempts_used(&db, id).await.unwrap(), 2);
+    // The clear end state: failed, and the socket is told so (the page offers Try again).
+    assert_eq!(status(&db, id).await, "failed");
+    let seen = events.0.lock().unwrap().clone();
+    assert_eq!(
+        seen.iter().filter(|e| *e == "failed").count(),
+        1,
+        "{seen:?}"
+    );
+    assert!(!seen.contains(&"ready".to_string()));
+
+    // A bad answer (not an outage) is retried at once.
+    let id = insert_session(&db, &long_design_input()).await;
+    let llm = ScriptedLlm::new(vec![
+        Ok("{\"headline\": ".into()),
+        Ok(model_output().to_string()),
+    ]);
+    let mut d = deps(&db, llm.clone(), &data);
+    d.retry_backoff = Duration::from_secs(30);
+    let started = Instant::now();
+    scoring::score_session(&d, id).await.unwrap();
+    assert!(started.elapsed() < Duration::from_secs(10));
+    assert_eq!(status(&db, id).await, "scored");
 }
 
 #[tokio::test]
