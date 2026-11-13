@@ -33,8 +33,8 @@ export const SOUND_NAMES: readonly SoundName[] = [
   'resume',
 ];
 
-/** The names that have a recorded sample in public/sfx (`<name>.ogg`); the rest are always synthesized. */
-export const SAMPLED: readonly SoundName[] = ['click', 'flap', 'chime', 'snap', 'pen', 'erase'];
+/** The names that have a recorded sample in public/sfx (`<name>.ogg`); any other name is always synthesized. */
+export const SAMPLED: readonly SoundName[] = SOUND_NAMES;
 
 export interface Sounds {
   click(): void;

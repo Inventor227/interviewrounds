@@ -82,19 +82,16 @@ describe('createSounds', () => {
     expect(f.oscillators()).toBe(0);
   });
 
-  it('has_a_method_for_every_name_and_synthesizes_names_without_a_sample', async () => {
+  it('has_a_recorded_sample_and_a_method_for_every_name', async () => {
     const { s, f, urls } = sampled();
     await s.preload();
-    const unsampled = SOUND_NAMES.filter((n) => !SAMPLED.includes(n));
-    expect(unsampled).toEqual(['start', 'tick', 'ghost', 'handover', 'pause', 'resume']);
-    for (const n of unsampled) {
-      expect(typeof s[n]).toBe('function');
-      expect(urls.some((u) => u.endsWith(`/${n}.ogg`))).toBe(false);
-      const before = f.oscillators() + f.sources.length;
+    expect([...SAMPLED].sort()).toEqual([...SOUND_NAMES].sort());
+    for (const n of ['start', 'tick', 'ghost', 'handover', 'pause', 'resume'] as const) {
+      expect(urls).toContain(`/sfx/${n}.ogg`);
       s[n]();
-      expect(f.oscillators() + f.sources.length).toBeGreaterThan(before);
+      expect((f.sources.at(-1)!.buffer as { name: string }).name).toBe(`/sfx/${n}.ogg`);
     }
-    expect(f.sources.every((x) => !(x.buffer as { name?: string } | null)?.name)).toBe(true);
+    expect(f.oscillators()).toBe(0);
   });
 
   it('preload_is_safe_before_any_audio_context_exists', async () => {
@@ -118,6 +115,17 @@ describe('createSounds', () => {
     expect(f.sources).toHaveLength(0);
     s.click();
     expect(f.sources).toHaveLength(1); // the others still use their samples
+  });
+
+  it('synthesizes_every_name_when_no_sample_loads', async () => {
+    const { s, f } = sampled([...SOUND_NAMES]);
+    await s.preload();
+    for (const n of SOUND_NAMES) {
+      const before = f.oscillators() + f.sources.length;
+      s.play(n);
+      expect(f.oscillators() + f.sources.length, n).toBeGreaterThan(before);
+    }
+    expect(f.sources.every((x) => !(x.buffer as { name?: string } | null)?.name)).toBe(true);
   });
 
   it('applies_the_settings_volume_to_samples', async () => {
