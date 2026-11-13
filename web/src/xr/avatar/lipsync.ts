@@ -79,6 +79,8 @@ export interface VisemeSource {
   /** Active viseme id in HeadAudio order, or -1 for silence. */
   active: number;
   update(dtMs: number): void;
+  /** Clears buffered audio when a new voice is wired in (optional). */
+  reset?(): void;
   dispose(): void;
 }
 
@@ -92,8 +94,36 @@ export interface LipSyncOptions {
 export type LipSyncEngine = 'none' | 'visemes' | 'rms';
 
 const workletLoads = new WeakMap<BaseAudioContext, Promise<void>>();
+/** HeadAudio's model record: 2 header words, a 12-float mean and a 78-float inverse covariance (bytes). */
+const MODEL_RECORD_BYTES = (2 + 12 + 78) * 4;
+let modelBlobUrl: Promise<string> | null = null;
 
-/** HeadAudio on an AudioWorklet. Rejects when anything is missing, so the caller falls back to RMS. */
+/** True if the bytes can be a HeadAudio model (not the SPA's index.html answering a missing hashed asset). */
+export function checkModel(bytes: ArrayBuffer, contentType: string | null): boolean {
+  if (contentType?.includes('text/html')) return false;
+  return bytes.byteLength > 0 && bytes.byteLength % MODEL_RECORD_BYTES === 0;
+}
+
+/** Fetches and checks the viseme model once per page; every HeadAudio node loads it from a blob URL. */
+function modelOnce(): Promise<string> {
+  if (!modelBlobUrl) {
+    modelBlobUrl = (async () => {
+      const r = await fetch(modelUrl);
+      const bytes = await r.arrayBuffer();
+      if (!r.ok || !checkModel(bytes, r.headers.get('content-type'))) throw new Error('viseme model missing or invalid');
+      return URL.createObjectURL(new Blob([bytes], { type: 'application/octet-stream' }));
+    })();
+    modelBlobUrl.catch(() => (modelBlobUrl = null));
+  }
+  return modelBlobUrl;
+}
+
+/**
+ * HeadAudio on an AudioWorklet. Rejects when anything is missing, so the caller falls back to RMS.
+ *
+ * Its processor always asks to stay alive, so the audio thread keeps it until the AudioContext closes, even after
+ * disconnect(). Build one per LipSync and keep it across voice swaps (LipSync does); never one per attach.
+ */
 export async function headAudioSource(ctx: AudioContext, speakerHz: number): Promise<VisemeSource> {
   if (typeof AudioWorkletNode === 'undefined' || !ctx.audioWorklet) throw new Error('no AudioWorklet');
   let load = workletLoads.get(ctx);
@@ -102,16 +132,18 @@ export async function headAudioSource(ctx: AudioContext, speakerHz: number): Pro
     workletLoads.set(ctx, load);
     load.catch(() => workletLoads.delete(ctx));
   }
-  await load;
-  const { HeadAudio } = await import('@met4citizen/headaudio/dist/headaudio.min.mjs');
-  const ha = new HeadAudio(ctx, {
+  const timeout = new Promise<never>((_, rej) =>
+    setTimeout(() => rej(new Error('viseme model timeout')), MODEL_TIMEOUT_MS),
+  );
+  const [, model, mod] = await Promise.race([
+    Promise.all([load, modelOnce(), import('@met4citizen/headaudio/dist/headaudio.min.mjs')]),
+    timeout,
+  ]);
+  const ha = new mod.HeadAudio(ctx, {
     parameterData: { vadGateActiveDb: -45, vadGateInactiveDb: -55, silMode: 0, speakerMeanHz: speakerHz },
   });
   try {
-    await Promise.race([
-      ha.loadModel(modelUrl),
-      new Promise((_, rej) => setTimeout(() => rej(new Error('viseme model timeout')), MODEL_TIMEOUT_MS)),
-    ]);
+    await Promise.race([ha.loadModel(model), timeout]);
   } catch (e) {
     ha.disconnect();
     ha.port.close();
@@ -123,6 +155,10 @@ export async function headAudioSource(ctx: AudioContext, speakerHz: number): Pro
       return ha.visemeActive;
     },
     update: () => {},
+    reset: () => {
+      ha.visemeActive = -1;
+      ha.port.postMessage({ event: 'reset' });
+    },
     dispose: () => {
       ha.disconnect();
       ha.port.close();
@@ -141,7 +177,12 @@ export class LipSync {
   private readonly target: Record<string, number> = {};
   private src: AudioNode | null = null;
   private analyser: AnalyserNode | null = null;
+  /** The viseme node in use for the current voice (null while detached or in RMS mode). */
   private visemes: VisemeSource | null = null;
+  /** The one viseme node of this LipSync, built on first attach and kept across voice swaps. */
+  private source: Promise<VisemeSource | null> | null = null;
+  private sourceCtx: BaseAudioContext | null = null;
+  private built: VisemeSource | null = null;
   private time: Float32Array<ArrayBuffer> = new Float32Array(0);
   private freq: Uint8Array<ArrayBuffer> = new Uint8Array(0);
   private binHz = 0;
@@ -170,26 +211,49 @@ export class LipSync {
     this.freq = new Uint8Array(an.frequencyBinCount);
     this.binHz = ctx.sampleRate / an.fftSize;
     this.engine = 'rms';
-    try {
-      const make = this.opts.createVisemeSource ?? headAudioSource;
-      const vs = await make(ctx, this.opts.speakerHz ?? 160);
-      if (gen !== this.gen) {
-        vs.dispose();
-        return;
-      }
-      src.connect(vs.node);
-      this.visemes = vs;
-      this.engine = 'visemes';
-    } catch (e) {
-      if (gen === this.gen) console.warn('lip sync: viseme model unavailable, using loudness only', e);
-    }
+    const vs = await this.visemeSource(ctx);
+    if (gen !== this.gen || !vs) return;
+    vs.reset?.();
+    src.connect(vs.node);
+    this.visemes = vs;
+    this.engine = 'visemes';
   }
 
+  /** The viseme node for ctx: built once, reused by later attaches; null means RMS only. */
+  private visemeSource(ctx: AudioContext): Promise<VisemeSource | null> {
+    if (this.source && this.sourceCtx === ctx) return this.source;
+    this.releaseSource(); // a different context (rare): its node cannot be reused
+    this.sourceCtx = ctx;
+    const make = this.opts.createVisemeSource ?? headAudioSource;
+    const p: Promise<VisemeSource | null> = make(ctx, this.opts.speakerHz ?? 160).then(
+      (vs) => {
+        if (this.source === p) this.built = vs;
+        else vs.dispose(); // released while it was being built
+        return vs;
+      },
+      (e) => {
+        console.warn('lip sync: viseme model unavailable, using loudness only', e);
+        if (this.source === p) this.source = null; // let a later attach try again
+        return null;
+      },
+    );
+    this.source = p;
+    return p;
+  }
+
+  private releaseSource(): void {
+    // A node still being built disposes itself when it resolves (source no longer matches).
+    this.built?.dispose();
+    this.built = null;
+    this.source = null;
+    this.sourceCtx = null;
+  }
+
+  /** Stops analysing the current voice. The viseme node stays for the next attach (see dispose). */
   detach(): void {
     this.gen++;
     this.src?.disconnect();
     this.analyser?.disconnect();
-    this.visemes?.dispose();
     this.src = this.analyser = null;
     this.visemes = null;
     this.engine = 'none';
@@ -197,6 +261,12 @@ export class LipSync {
     this.isSpeaking = false;
     this.quietS = Infinity;
     for (const k in this.out) this.out[k] = this.target[k] = 0;
+  }
+
+  /** Detaches and releases the viseme node (when the avatar goes away). */
+  dispose(): void {
+    this.detach();
+    this.releaseSource();
   }
 
   /**

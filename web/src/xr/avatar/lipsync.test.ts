@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { LipSync, VISEMES, type VisemeSource } from './lipsync';
+import { LipSync, VISEMES, checkModel, type VisemeSource } from './lipsync';
 
 // A fake AudioContext: records the graph so the test can prove nothing reaches the speakers, and feeds the
 // analyser from a signal function of time.
@@ -161,5 +161,52 @@ describe('lipsync', () => {
     expect(ls.engine).toBe('none');
     const out = ls.update(16);
     expect(out.jawOpen ?? 0).toBe(0);
+  });
+
+  it('lipsync_reuses_one_viseme_node_across_voice_swaps', async () => {
+    const ctx = new FakeCtx();
+    let made = 0;
+    let resets = 0;
+    let disposed = 0;
+    const node = new FakeNode('worklet');
+    const ls = new LipSync({
+      createVisemeSource: async () => {
+        made++;
+        return {
+          node: node as unknown as AudioNode,
+          active: -1,
+          update() {},
+          reset: () => resets++,
+          dispose: () => disposed++,
+        };
+      },
+    });
+    await ls.attach(stream, ctxOf(ctx));
+    await ls.attach(stream, ctxOf(ctx));
+    ls.detach();
+    await ls.attach(stream, ctxOf(ctx));
+    // One worklet node (one model load) for the avatar's lifetime; swaps only rewire the source and clear buffers.
+    expect(made).toBe(1);
+    expect(disposed).toBe(0);
+    expect(resets).toBeGreaterThanOrEqual(2);
+    expect(ls.engine).toBe('visemes');
+    const sources = ctx.nodes.filter((n) => n.kind === 'source');
+    expect(sources).toHaveLength(3);
+    // Old sources are disconnected; only the newest one feeds the worklet.
+    expect(sources.filter((n) => n.outs.includes(node))).toHaveLength(1);
+    expect(sources[2]!.outs).toContain(node);
+    ls.dispose();
+    expect(disposed).toBe(1);
+    expect(ls.engine).toBe('none');
+  });
+
+  it('lipsync_rejects_a_model_that_is_not_one', () => {
+    const model = new ArrayBuffer(368 * 39);
+    expect(checkModel(model, 'application/octet-stream')).toBe(true);
+    expect(checkModel(model, null)).toBe(true);
+    // The SPA fallback: index.html with a 200.
+    expect(checkModel(new TextEncoder().encode('<!doctype html><html></html>').buffer as ArrayBuffer, 'text/html')).toBe(false);
+    expect(checkModel(new ArrayBuffer(368 * 39 + 5), 'application/octet-stream')).toBe(false);
+    expect(checkModel(new ArrayBuffer(0), 'application/octet-stream')).toBe(false);
   });
 });
