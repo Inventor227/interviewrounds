@@ -103,7 +103,11 @@ await sleep(1000);
 let b = await board();
 stage('two boxes', b);
 if (!b || b.items.filter((i) => i.kind === 'component').length < 2) await fail('the two boxes did not become cards', b);
-const [c1, c2] = b.items.filter((i) => i.kind === 'component');
+// The two boxes the hand just drew (no label yet), not a card a suggestion put there; the line between them runs
+// below the suggestions' row, so no pending suggestion takes the pinch.
+const drawn = b.items.filter((i) => i.kind === 'component' && i.label === null);
+if (drawn.length < 2) await fail('the hand-drawn boxes are missing', b);
+const [c1, c2] = drawn;
 await draw(L.along([[c1.x + c1.w + 0.4, c1.y + c1.h / 2], [c2.x + 1.5, c2.y + c2.h / 2]], 1.5));
 await sleep(1200);
 b = await board();
