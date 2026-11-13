@@ -1765,3 +1765,30 @@ async fn director_calls_of_an_unplayed_reply_are_dropped() {
         "the unplayed transition never moved the phase"
     );
 }
+
+#[tokio::test]
+async fn playback_reported_while_the_reply_streams_commits_it_when_done() {
+    let mut st = new_state("s1", "sde.system_design.short", VoiceKind::Fish);
+    // The voice starts speaking from the first words, before the stream ends and the reply is parked.
+    assert!(!st.confirm_spoken("p1", "Okay. Let's", Instant::now()));
+    let draft = ir_server::orchestrator::prompt::draft_turn(
+        &st,
+        "p1",
+        &UserInput::Speech("That covers it.".into()),
+        Instant::now(),
+    );
+    let id = st.new_turn_id();
+    st.park(ir_server::orchestrator::Provisional {
+        id,
+        panelist_id: "p1".into(),
+        input: UserInput::Speech("That covers it.".into()),
+        draft: Some(draft),
+        extra: Vec::new(),
+        reply: vec![ContentBlock::text("Okay. Let's move on.")],
+        spoken: "Okay. Let's move on.".into(),
+        tool_calls: Vec::new(),
+    });
+    assert!(st.provisional.is_empty());
+    assert_eq!(user_texts(&st.history), vec!["That covers it."]);
+    assert!(st.recent_commits.contains(&id));
+}

@@ -261,6 +261,9 @@ pub struct SessionState {
     /// Ids of recently committed turns (a director that finishes after the commit applies its calls then).
     pub recent_commits: std::collections::VecDeque<u64>,
     pub next_turn_id: u64,
+    /// Playback reported before its reply finished streaming (the voice starts speaking from the first words):
+    /// panelist, words heard, when. The reply is committed as soon as it is parked.
+    pub early_confirm: Option<(String, String, Instant)>,
     /// Dev voice spike only: this many next replies are sent empty (to observe the voice platform).
     pub dev_empty_replies: u8,
 }
@@ -370,6 +373,7 @@ impl SessionState {
             provisional: Vec::new(),
             recent_commits: std::collections::VecDeque::new(),
             next_turn_id: 1,
+            early_confirm: None,
             dev_empty_replies: 0,
         })
     }
@@ -518,8 +522,19 @@ impl SessionState {
         events
     }
 
-    /// Parks a spoken turn until the voice platform confirms it.
+    /// Parks a spoken turn until the voice platform confirms it (at once, if playback was already reported).
     pub fn park(&mut self, p: Provisional) {
+        if let Some((panelist, heard, at)) = self.early_confirm.take() {
+            let fresh = at.elapsed() < std::time::Duration::from_secs(15);
+            if fresh
+                && panelist == p.panelist_id
+                && compare_spoken(&p.spoken, &heard) != Heard::Unknown
+            {
+                tracing::info!(session_id = %self.id, panelist_id = %panelist, turn_id = p.id, "reply confirmed by playback before it finished");
+                self.commit_parked(p, None, Instant::now());
+                return;
+            }
+        }
         self.provisional.push(p);
     }
 
@@ -585,6 +600,15 @@ impl SessionState {
         let Some(i) = self.provisional.iter().rposition(|p| {
             p.panelist_id == panelist_id && compare_spoken(&p.spoken, heard) != Heard::Unknown
         }) else {
+            // The reply may still be streaming: remember the report for when it is parked (unless it is about the
+            // line already committed, such as a reply to a typed event).
+            let committed = self
+                .last_agent_text
+                .get(panelist_id)
+                .is_some_and(|last| compare_spoken(last, heard) != Heard::Unknown);
+            if !committed {
+                self.early_confirm = Some((panelist_id.to_string(), heard.to_string(), now));
+            }
             return false;
         };
         // Older parked turns were superseded by this one.
