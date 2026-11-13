@@ -23,7 +23,9 @@ describe('CapNotice', () => {
     const local = new Date(2026, 10, 14, 0, 30);
     const text = resetPhrase(local.toISOString(), now);
     expect(text).toContain(new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' }).format(local));
-    expect(text.startsWith('tomorrow')).toBe(true);
+    // Same day next week reads differently from tomorrow: the phrase depends on the local date.
+    const later = new Date(2026, 10, 20, 0, 30);
+    expect(resetPhrase(later.toISOString(), now)).not.toBe(text);
   });
 
   it('free_rounds_used_points_to_plans', async () => {

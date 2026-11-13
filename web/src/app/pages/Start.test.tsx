@@ -216,6 +216,22 @@ describe('Start', () => {
     expect(launchState().status).toBe('idle');
   });
 
+  it('a_held_mic_survives_rerenders', async () => {
+    useFakeServer({ scenario: '1' });
+    micThat('grant');
+    withHeadset(true);
+    const track = { stop: vi.fn() };
+    const { holdMic } = await import('../components/Ready');
+    holdMic({ state: 'on', stream: { getTracks: () => [track] } as unknown as MediaStream });
+    const root = await renderApp('/round/sde.system_design.short');
+    expect($(root, 'mic-step')?.dataset.state).toBe('on');
+    // Re-render the page a few times (Adjust changes): the held stream must stay live.
+    await click(root.querySelector('[data-test="level-senior"]'));
+    await click(root.querySelector('[data-test="style-warm"]'));
+    expect($(root, 'mic-step')?.dataset.state).toBe('on');
+    expect(track.stop).not.toHaveBeenCalled();
+  });
+
   it('start_shows_cap_notice_instead_of_enter', async () => {
     useFakeServer({ scenario: 'capped' });
     micThat('grant');

@@ -321,8 +321,8 @@ a {
 /* Quest Browser: dimmed so the page does not glare in the headset (no background brighter than
    about #DADADA). Text colours are darkened to keep 4.5:1. */
 :root[data-device='quest'] {
-  --bg: #d9d5ce;
-  --surface: #e3dfd8;
+  --bg: #d2cec6;
+  --surface: #dad6cf;
   --ink: #1c1b1a;
   --ink-2: #2e2c29;
   --muted: #4f4b45;
@@ -337,8 +337,8 @@ a {
   --good-soft: #cbd9cd;
   --warn-soft: #e0d4bd;
   --bad-soft: #dfcbc4;
-  --desk: #cfc9bf;
-  --track: #cbc4b8;
+  --desk: #c8c2b8;
+  --track: #c4bdb1;
   --shadow: none;
   --shadow-lift: 0 1px 0 rgba(28, 27, 26, 0.06);
   --base: 18px;

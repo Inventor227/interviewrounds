@@ -391,7 +391,7 @@ function Share(props: { r: ReportData }) {
   const [withTranscript, setWithTranscript] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  const [copied, setCopied] = useState(false);
+  const [copied, setCopied] = useState<'no' | 'yes' | 'manual'>('no');
 
   const create = async (transcript: boolean) => {
     setBusy(true);
@@ -474,13 +474,26 @@ function Share(props: { r: ReportData }) {
           <button
             type="button"
             class="btn btn-small"
-            onClick={() => {
-              void navigator.clipboard?.writeText(url).then(() => setCopied(true));
+            onClick={(e) => {
+              const input = (e.currentTarget.parentElement?.querySelector('input') ?? null) as HTMLInputElement | null;
+              const fallback = () => {
+                input?.focus();
+                input?.select();
+                setCopied('manual');
+              };
+              if (!navigator.clipboard) return fallback();
+              navigator.clipboard.writeText(url).then(() => setCopied('yes'), fallback);
             }}
+            data-test="share-copy"
           >
-            {copied ? 'Copied' : 'Copy link'}
+            {copied === 'yes' ? 'Copied' : 'Copy link'}
           </button>
         </div>
+      )}
+      {on && copied === 'manual' && (
+        <p class="fine" role="status" data-test="share-copy-manual">
+          Copying is blocked here. The link is selected: copy it from the box.
+        </p>
       )}
     </div>
   );

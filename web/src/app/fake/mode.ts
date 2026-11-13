@@ -24,6 +24,8 @@ export function fakeScenario(search: string = globalThis.location?.search ?? '')
 
 /** Resolves once the fake fetch is in place (at once when fake mode is off). */
 export const fakeReady: Promise<void> = (() => {
+  // A static guard, so production builds drop the fixture chunk (every round, persona and template).
+  if (!import.meta.env.DEV) return Promise.resolve();
   const scenario = fakeScenario();
   if (!scenario) return Promise.resolve();
   return import('./server').then((m) => m.installFake(scenario, () => fakeScenario())).catch(() => undefined);

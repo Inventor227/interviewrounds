@@ -214,7 +214,8 @@ export function MicStep(props: { mic: Mic; action?: ComponentChildren; handedOve
         {s === 'unsupported' && (
           <div class="help" data-test="mic-unsupported">
             <p>
-              Open this page from its secure address in a current browser, such as the Quest Browser, Chrome, Edge or Safari.
+              Open this page from its secure address in a current browser, such as the Quest Browser, Chrome, Edge or Safari.{' '}
+              <a href="/not-supported">What works</a>
             </p>
           </div>
         )}

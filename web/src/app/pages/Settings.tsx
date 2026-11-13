@@ -104,12 +104,19 @@ function Account(props: { me: Me }) {
 function DeleteData(props: { onDeleted: () => void }) {
   const [step, setStep] = useState<'idle' | 'confirm' | 'busy' | 'error'>('idle');
   const box = useRef<HTMLDivElement>(null);
+  const btn = useRef<HTMLButtonElement>(null);
+  const opened = useRef(false);
   useEffect(() => {
-    if (step === 'confirm') box.current?.focus();
+    if (step === 'confirm') {
+      opened.current = true;
+      box.current?.focus();
+    }
+    // Back from the confirm ("Keep my data"): focus returns to the button that opened it.
+    if (step === 'idle' && opened.current) btn.current?.focus();
   }, [step]);
   if (step === 'idle') {
     return (
-      <button type="button" class="btn btn-danger-quiet" onClick={() => setStep('confirm')} data-test="delete-data">
+      <button type="button" ref={btn} class="btn btn-danger-quiet" onClick={() => setStep('confirm')} data-test="delete-data">
         Delete my data
       </button>
     );

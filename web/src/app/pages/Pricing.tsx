@@ -30,7 +30,7 @@ const PLANS: Plan[] = [
     price: '$25',
     per: 'once, for 14 days',
     minutes: '90 live minutes',
-    points: ['About eleven quick rounds, or three full ones', 'Daily round and streak', 'Retry any answer'],
+    points: ['About eleven quick rounds', 'Daily round and streak', 'Retry any answer'],
   },
   {
     id: 'pro',
@@ -106,8 +106,8 @@ export function Pricing() {
       <div class="plan-notes">
         <p id="checkout-soon">Checkout opens soon. Until then, guests get free quick rounds every day with no sign in.</p>
         <p>
-          A panel uses minutes for each person in it: an 8 minute round with two interviewers uses 16 minutes. Quick rounds are one
-          on one.
+          Quick rounds are one on one. A panel uses minutes for each person in it: a 30 minute full round with two interviewers
+          uses 60 minutes.
         </p>
       </div>
     </Page>

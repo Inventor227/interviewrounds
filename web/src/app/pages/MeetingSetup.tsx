@@ -160,7 +160,7 @@ export function validate(d: Draft): SetupErrors {
 
 // ---------- Editing ----------
 
-function PersonCard(props: { p: Person; i: number; onChange: (p: Person) => void; onRemove?: () => void }) {
+function PersonCard(props: { p: Person; i: number; onChange: (p: Person) => void; onRemove?: () => void; invalid?: boolean }) {
   const { p, i } = props;
   const set = <K extends keyof Person>(k: K, v: Person[K]) => props.onChange({ ...p, [k]: v });
   const id = (f: string) => `p${i}-${f}`;
@@ -171,7 +171,15 @@ function PersonCard(props: { p: Person; i: number; onChange: (p: Person) => void
         <div class="person-names">
           <label class="mini">
             <span>Name</span>
-            <input id={id('name')} value={p.name} maxLength={24} onInput={(e) => set('name', e.currentTarget.value)} data-test="attendee-name" />
+            <input
+              id={id('name')}
+              value={p.name}
+              maxLength={24}
+              onInput={(e) => set('name', e.currentTarget.value)}
+              aria-invalid={props.invalid ? 'true' : undefined}
+              aria-describedby={props.invalid ? 'people-err' : undefined}
+              data-test="attendee-name"
+            />
           </label>
           <label class="mini">
             <span>Role</span>
@@ -480,16 +488,17 @@ function SetupForm(props: { catalog: Catalog; me?: Me }) {
           <input id="user-role" value={d.userRole} maxLength={80} placeholder="Founder" onInput={(e) => set('userRole', e.currentTarget.value)} />
         </div>
         {errors.people && (
-          <p class="field-err" data-test="people-error" role="alert">
+          <p class="field-err" id="people-err" data-test="people-error" role="alert">
             {errors.people}
           </p>
         )}
-        <ul class="people-edit" aria-invalid={errors.people ? 'true' : undefined} tabIndex={errors.people ? -1 : undefined}>
+        <ul class="people-edit">
           {d.people.map((p, i) => (
             <PersonCard
               key={i}
               p={p}
               i={i}
+              invalid={i === 0 && !!errors.people}
               onChange={(np) => set('people', d.people.map((x, j) => (j === i ? np : x)))}
               onRemove={d.people.length > 1 ? () => set('people', d.people.filter((_, j) => j !== i)) : undefined}
             />

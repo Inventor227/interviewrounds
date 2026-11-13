@@ -72,6 +72,7 @@ describe('Settings', () => {
     expect(server.calls.some((c) => c.method === 'DELETE')).toBe(false);
     await click($(root, 'delete-cancel'));
     expect($(root, 'delete-confirm')).toBeNull();
+    expect(document.activeElement).toBe($(root, 'delete-data'));
     await click($(root, 'delete-data'));
     await click($(root, 'delete-confirm-yes'));
     expect(server.calls.some((c) => c.method === 'DELETE' && c.path === '/api/me')).toBe(true);

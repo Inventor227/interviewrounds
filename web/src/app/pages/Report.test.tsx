@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'preact/test-utils';
 import { fakeReport } from '../fake/server';
-import { $, $$, cleanup, click, renderApp, settle, useFakeServer } from '../test-utils';
+import { $, $$, cleanup, click, renderApp, settle, stubNavigator, useFakeServer } from '../test-utils';
 
 const sections = (root: HTMLElement) =>
   [...root.querySelectorAll<HTMLElement>('[data-test^="report-section-"]')].map((s) => s.dataset.test!.replace('report-section-', ''));
@@ -88,6 +88,20 @@ describe('Report', () => {
     expect([...server.state.shares.values()]).toEqual([{ session_id: 'demo', include_transcript: false }]);
     await click($(root, 'share-toggle'));
     expect(server.state.shares.size).toBe(0);
+  });
+
+  it('report_copy_falls_back_to_selecting_the_link', async () => {
+    useFakeServer();
+    const restore = stubNavigator('clipboard', { writeText: () => Promise.reject(new Error('blocked')) });
+    try {
+      const root = await renderApp('/report/demo');
+      await click($(root, 'share-toggle'));
+      await click($(root, 'share-copy'));
+      expect($(root, 'share-copy-manual')).not.toBeNull();
+      expect(document.activeElement).toBe($(root, 'share-link')!.querySelector('input'));
+    } finally {
+      restore();
+    }
   });
 
   it('report_meeting_without_details_shows_no_decision', async () => {

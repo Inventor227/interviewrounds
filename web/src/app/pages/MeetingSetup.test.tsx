@@ -99,6 +99,26 @@ describe('MeetingSetup', () => {
     }
   });
 
+  it('setup_opens_the_template_named_in_the_link', async () => {
+    const server = useFakeServer();
+    const root = await renderApp('/meeting/new?template=exec_update');
+    expect((root.querySelector('[data-test="template-exec_update"]') as HTMLInputElement).checked).toBe(true);
+    await click($(root, 'prepare'));
+    expect(prepares(server)[0]!.template_id).toBe('exec_update');
+  });
+
+  it('setup_people_error_points_at_the_first_name', async () => {
+    useFakeServer();
+    const root = await renderApp('/meeting/new');
+    await click(root.querySelector('[data-test="template-custom"]'));
+    await typeInto($(root, 'goal'), 'A pilot');
+    await click($(root, 'prepare'));
+    const name = $(root, 'attendee-name')!;
+    expect(name.getAttribute('aria-invalid')).toBe('true');
+    expect(name.getAttribute('aria-describedby')).toBe('people-err');
+    expect(root.querySelector('ul[aria-invalid]')).toBeNull();
+  });
+
   it('setup_shows_a_cap_when_prepare_is_refused', async () => {
     useFakeServer({
       routes: {

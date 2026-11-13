@@ -1,6 +1,6 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { fakeMe } from '../fake/server';
-import { $, cleanup, click, renderApp, useFakeServer } from '../test-utils';
+import { $, cleanup, click, renderApp, settle, stubNavigator, useFakeServer } from '../test-utils';
 
 describe('Home', () => {
   afterEach(cleanup);
@@ -51,6 +51,25 @@ describe('Home', () => {
     const root = await renderApp('/');
     expect($(root, 'today-start')?.getAttribute('href')).toBe('/round/sde.system_design.short');
     expect($(root, 'streak')?.dataset.current).toBe('3');
+  });
+
+  it('home_tap_does_not_pull_the_user_back_after_they_left', async () => {
+    useFakeServer({ scenario: '1' });
+    let answer!: (s: MediaStream) => void;
+    const track = { stop: vi.fn() };
+    const restore = stubNavigator('mediaDevices', { getUserMedia: () => new Promise<MediaStream>((r) => (answer = r)) });
+    try {
+      const root = await renderApp('/');
+      await click($(root, 'try-quick'));
+      await click(root.querySelector('a[href="/history"]'));
+      expect(location.pathname).toBe('/history');
+      answer({ getTracks: () => [track] } as unknown as MediaStream);
+      await settle();
+      expect(location.pathname).toBe('/history');
+      expect(track.stop).toHaveBeenCalled();
+    } finally {
+      restore();
+    }
   });
 
   it('home_hides_sign_in_when_unavailable', async () => {
