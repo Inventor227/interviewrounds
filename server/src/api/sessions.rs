@@ -466,6 +466,10 @@ async fn create_inner(
     .map_err(|e| AppError::BadRequest(format!("This round cannot start: {e}")))?;
     // Nothing runs until the browser's socket says hello.
     st.status = SessionStatus::Created;
+    // The problem is on the brief card from the first frame, before the opener says so.
+    if st.brief.is_none() {
+        st.brief = crate::orchestrator::initial_brief(&st.question);
+    }
     st.paused_since = Some(now);
 
     let mode = app.config.panel_mode;
