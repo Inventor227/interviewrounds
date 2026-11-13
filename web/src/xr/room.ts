@@ -259,7 +259,8 @@ function makeSheet(): Mesh<PlaneGeometry, MeshBasicMaterial> {
   const tex = sheetTexture();
   const mesh = new Mesh(g, new MeshBasicMaterial({ map: tex, toneMapped: false, transparent: true, opacity: 0.96 }));
   mesh.name = 'sheet-placeholder';
-  mesh.renderOrder = 1;
+  // Before the panels that lie on it (the brief card), which do not write depth.
+  mesh.renderOrder = -2;
   return mesh;
 }
 

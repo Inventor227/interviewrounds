@@ -5,7 +5,7 @@ import { UIKitDocument } from '@iwsdk/core';
 import { Group } from 'three';
 import { INK_MUTED, panel, set, text, TEXT_SECONDARY } from './style';
 
-export const CAPTIONS_WIDTH_CM = 56;
+export const CAPTIONS_WIDTH_CM = 62;
 /** Keep about two lines at this width. */
 const MAX_CHARS = 120;
 
@@ -30,7 +30,7 @@ export class Captions {
     this.group.name = 'captions';
     const root = panel({ width: CAPTIONS_WIDTH_CM, padding: 1.2, gap: 0.4, borderRadius: 1.6 });
     this.who = text('', { fontSize: TEXT_SECONDARY, color: INK_MUTED, fontWeight: 'medium' });
-    this.line = text('', { fontSize: 1.6, lineHeight: '125%' });
+    this.line = text('', { fontSize: 1.8, lineHeight: '125%' });
     root.add(this.who, this.line);
     this.doc = new UIKitDocument(root);
     this.group.add(this.doc);

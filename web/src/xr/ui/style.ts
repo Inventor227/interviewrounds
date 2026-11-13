@@ -24,8 +24,8 @@ export const GOOD = '#4FB27A';
 export const BAD = '#D9705E';
 
 export const TEXT_PRIMARY = 1.6;
-export const TEXT_BODY = 1.35;
-export const TEXT_SECONDARY = 1.1;
+export const TEXT_BODY = 1.5;
+export const TEXT_SECONDARY = 1.15;
 export const TEXT_SMALL = 0.9;
 
 export type Props = Record<string, unknown>;

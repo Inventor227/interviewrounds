@@ -28,7 +28,7 @@ export class BriefCard {
     head.add(this.heading, this.toggle.root);
     this.body = col({ gap: 0.7, width: '100%' });
     this.question = text('', { fontSize: 1.5, fontWeight: 'medium', lineHeight: '125%' });
-    this.lines = text('', { fontSize: TEXT_BODY - 0.15, color: INK_MUTED, lineHeight: '130%' });
+    this.lines = text('', { fontSize: TEXT_SECONDARY + 0.1, color: INK_MUTED, lineHeight: '130%' });
     this.body.add(this.question, this.lines);
     root.add(head, this.body);
     this.doc = new UIKitDocument(root);

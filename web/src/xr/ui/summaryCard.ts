@@ -82,8 +82,8 @@ export class SummaryCard {
     const bars = col({ gap: 0.9, width: '100%' });
     for (let i = 0; i < BARS; i++) {
       const r = row({ gap: 1.2, width: '100%' });
-      const name = text('', { fontSize: TEXT_BODY, width: 18, wordBreak: 'keep-all' });
-      const b = bar(20);
+      const name = text('', { fontSize: TEXT_BODY, width: 20, wordBreak: 'keep-all' });
+      const b = bar(17);
       const score = text('', { fontSize: TEXT_SECONDARY, color: INK_MUTED, width: 4 });
       r.add(name, b.root, score);
       bars.add(r);

@@ -38,16 +38,18 @@ export function layoutDesk(desk: DeskFrame): Record<PanelName, PanelPose> {
       yaw: desk.yaw,
       tilt: -(90 * DEG - SHEET_TILT),
     },
-    status: standing(0.7, 0.4, 8),
-    summary: standing(0.7, 0.38, 8),
+    // Close enough that 1.5 cm type reads like 1.1 cm caps at arm's length; just under the eye line.
+    status: standing(0.56, 0.36, 10),
+    summary: standing(0.56, 0.34, 10),
     captions: { ...standing(0.66, 0.1, 25) },
   };
 }
 
 /** The status card before the desk is known: in front of the head, a little low. */
 export function layoutHeadStatus(head: HeadPose): PanelPose {
-  const p = addScaled(head.pos, forwardOf(head.yaw), 0.65);
-  return { pos: v3(p.x, head.pos.y - 0.12, p.z), yaw: head.yaw, tilt: -10 * DEG };
+  // Low in view, where the eyes go when told to touch the desk; tilted to face the eyes.
+  const p = addScaled(head.pos, forwardOf(head.yaw), 0.6);
+  return { pos: v3(p.x, head.pos.y - 0.26, p.z), yaw: head.yaw, tilt: -24 * DEG };
 }
 
 /** Camera-local poses for the preview HUD, for a camera with this aspect and vertical field of view. */
