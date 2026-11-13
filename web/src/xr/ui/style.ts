@@ -72,6 +72,8 @@ export interface ButtonOpts {
   onClick?: () => void;
   onDown?: () => void;
   onUp?: () => void;
+  /** The pointer left the button (defaults to onUp). */
+  onLeave?: () => void;
 }
 
 export interface Button {
@@ -98,7 +100,7 @@ export function button(labelText: string, opts: ButtonOpts = {}): Button {
     onClick: opts.onClick,
     onPointerDown: opts.onDown,
     onPointerUp: opts.onUp,
-    onPointerLeave: opts.onUp,
+    onPointerLeave: opts.onLeave ?? opts.onUp,
   } as never);
   const label = text(labelText, { fontSize: opts.fontSize ?? TEXT_PRIMARY, fontWeight: 'medium', pointerEvents: 'none' });
   root.add(label);

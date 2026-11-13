@@ -19,6 +19,16 @@ describe('HoldToConfirm', () => {
     expect(h.progress(1500)).toBe(0);
   });
 
+  it('sliding_off_after_the_ring_fills_cancels', () => {
+    const h = new HoldToConfirm(1000);
+    h.down(0);
+    expect(h.progress(1100)).toBe(1);
+    h.cancel();
+    expect(h.holding).toBe(false);
+    expect(h.up(1200)).toBe(false);
+    expect(h.fired).toBe(false);
+  });
+
   it('fires_once', () => {
     const h = new HoldToConfirm(1000);
     h.down(0);

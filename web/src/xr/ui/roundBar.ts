@@ -49,6 +49,7 @@ export class RoundBar {
       width: W.end,
       onDown: () => this.beginHold(),
       onUp: () => this.endHold(),
+      onLeave: () => this.cancelHold(),
     });
     root.add(tbox, this.mute.root, this.pause.root, this.cc.root, this.end.root);
     this.doc = new UIKitDocument(root);
@@ -86,7 +87,13 @@ export class RoundBar {
     this.press();
   }
 
-  /** Lift (pointer up or leave): End fires only when the ring was already full. */
+  /** Slid off the button: no End, whatever the ring shows. */
+  private cancelHold(): void {
+    this.hold.cancel();
+    this.ring.set(0);
+  }
+
+  /** Lift (pointer up): End fires only when the ring was already full. */
   private endHold(): void {
     if (!this.hold.holding) return;
     const fire = this.hold.up(this.now || performance.now());

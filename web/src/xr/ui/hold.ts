@@ -1,5 +1,5 @@
 // Hold to confirm (End): the ring fills over the hold time, and the action fires when the finger lifts after the
-// ring is full. A finger that comes to rest on the button never ends the round by itself, and lifting early cancels.
+// ring is full. A finger resting on the button never ends the round by itself; lifting early or sliding off cancels.
 
 export class HoldToConfirm {
   private start: number | null = null;
@@ -18,7 +18,12 @@ export class HoldToConfirm {
     return Math.min(1, Math.max(0, (nowMs - this.start) / this.holdMs));
   }
 
-  /** Release (pointer up or leave). Returns true exactly once, when the ring was full. */
+  /** The finger slid off: drop the hold without firing, full ring or not. */
+  cancel(): void {
+    this.start = null;
+  }
+
+  /** Release (pointer up). Returns true exactly once, when the ring was full. */
   up(nowMs: number): boolean {
     if (this.start === null) return false;
     const full = this.progress(nowMs) >= 1 && !this.done;
