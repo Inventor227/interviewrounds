@@ -160,7 +160,10 @@ export function useMic(): Mic {
     ask,
     take: () => release(),
     meter: (el) => (meterEl.current = el),
-    live: !!stream.current,
+    // A getter: the page that owns the mic may not re-render when ReadyPanel does.
+    get live() {
+      return !!stream.current;
+    },
   };
 }
 

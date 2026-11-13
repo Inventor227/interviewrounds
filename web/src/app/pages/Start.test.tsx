@@ -76,6 +76,7 @@ describe('Start', () => {
     expect(launchOf(root)).toBe('ready');
     expect(enterBtn(root).disabled).toBe(false);
     expect($(root, 'hands-note')).not.toBeNull();
+    expect($(root, 'mic-meter')).toBeNull();
   });
 
   it('phase_b_requests_xr_inside_the_enter_tap', async () => {
@@ -184,6 +185,8 @@ describe('Start', () => {
     await settled(root);
     expect(launchOf(root)).toBe('failed');
     expect($(root, 'prepare-failed')).not.toBeNull();
+    // The stream went to the round and was stopped: no live level is shown.
+    expect($(root, 'mic-meter')).toBeNull();
     expect(enterBtn(root).disabled).toBe(true);
     fail = false;
     await click($(root, 'mic-allow'));
