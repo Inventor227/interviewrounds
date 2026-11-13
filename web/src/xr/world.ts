@@ -34,6 +34,7 @@ import { Room } from './room';
 import type { SeatPose } from './seats';
 import { createSounds, type Sounds } from './sound';
 import { DEFAULT_STANDINS, loadStandIn, placeStandIn, type StandIn } from './standin';
+import { SelectRelay, type SelectCallback } from './select';
 import { RoundUI } from './ui';
 
 export type XRMode = 'ar' | 'preview';
@@ -88,8 +89,16 @@ export interface XRApp {
   /** Per-frame callback after the world's systems; dt in seconds. Returns an unsubscribe. */
   onFrame(cb: (dt: number, nowMs: number) => void): () => void;
   headPose(): HeadPose;
-  /** Live hand states (updated in place each XR frame; read, do not keep or mutate). */
-  hands(): readonly Readonly<HandState>[];
+  /** Live hand states, updated in place each XR frame (read them; do not keep or mutate). */
+  hands(): HandState[];
+  /** XR selectstart / selectend per hand: a pinch on hands, the trigger on controllers. */
+  onSelect(cb: SelectCallback): () => void;
+  /** The sheet frame (Room.sheetAnchor): origin at the near edge centre, +X right, -Z far, +Y the surface normal. */
+  readonly sheetAnchor: Object3D;
+  /** The placed desk of this session, or null (same as desk$.value). */
+  desk(): DeskPose | null;
+  /** Shows a texture on the wall board (the board mirrors the sheet); null clears it. */
+  wallboardTexture(tex: Texture | null): void;
   visibility$: ReadonlySignal<VisibilityState>;
   /**
    * XRSession visibility changes (Quest system menu, headset off). The app also asks the round UI to pause by
@@ -139,13 +148,8 @@ class FrameHookSystem extends createSystem({}) {
 }
 
 function newHand(hand: 'left' | 'right'): HandState {
-  return {
-    hand,
-    tracked: false,
-    indexTip: { x: 0, y: 0, z: 0 },
-    tips: TIPS.map(() => ({ x: 0, y: 0, z: 0 })),
-    pinch: 0,
-  };
+  const tips = TIPS.map(() => ({ x: 0, y: 0, z: 0 }));
+  return { hand, tracked: false, indexTip: { x: 0, y: 0, z: 0 }, thumbTip: tips[0]!, tips, pinch: 0 };
 }
 
 /** Frees geometry, materials and their textures under an object. */
@@ -548,6 +552,7 @@ export async function createXRApp(root: HTMLElement, opts: XRAppOptions): Promis
   });
 
   // ---- session lifecycle: frame rate, foveation, visibility, end ----
+  const selects = new SelectRelay();
   const visCbs = new Set<(v: XRVisibility) => void>();
   const endCbs = new Set<(e: { byApp: boolean }) => void>();
   let exitByApp = false;
@@ -572,6 +577,7 @@ export async function createXRApp(root: HTMLElement, opts: XRAppOptions): Promis
       if (v !== 'visible') ui.systemPause();
       for (const cb of visCbs) cb(v);
     });
+    if (s) selects.attach(s);
     lifecycle.sessionStarted();
     if (enterWaiter) {
       if (enterWaiter.poll) clearInterval(enterWaiter.poll);
@@ -580,6 +586,7 @@ export async function createXRApp(root: HTMLElement, opts: XRAppOptions): Promis
     }
   };
   const onSessionEnd = () => {
+    selects.detach();
     lifecycle.sessionEnded();
     governor = null;
     targetFps = null;
@@ -655,6 +662,7 @@ export async function createXRApp(root: HTMLElement, opts: XRAppOptions): Promis
       session?.end().catch(() => {});
       renderer.xr.removeEventListener('sessionstart', onSessionStart);
       renderer.xr.removeEventListener('sessionend', onSessionEnd);
+      selects.detach();
       lifecycle.sessionEnded();
       cancelAnimationFrame(fitRaf);
       resizeObs?.disconnect();
@@ -688,6 +696,10 @@ export async function createXRApp(root: HTMLElement, opts: XRAppOptions): Promis
     },
     headPose,
     hands: () => handStates,
+    onSelect: (cb) => selects.on(cb),
+    sheetAnchor: room.sheetAnchor,
+    desk: () => desk$.value,
+    wallboardTexture: (tex) => room.wallboardTexture(tex),
     visibility$: world.visibilityState,
     desk$,
     place() {

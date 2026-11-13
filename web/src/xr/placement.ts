@@ -136,6 +136,8 @@ export interface HandState {
   tracked: boolean;
   /** Index fingertip in world space. */
   indexTip: Vec3;
+  /** Thumb tip in world space (the same object as tips[0] when tracked). */
+  thumbTip: Vec3;
   /** All five fingertips (thumb..pinky) when tracked. */
   tips: Vec3[];
   /** 0..1, thumb to index distance mapped (1 = pinched). */

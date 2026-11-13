@@ -66,7 +66,7 @@ describe('DeskPlacement', () => {
     let s = p.update(0, head, []);
     for (let t = 0; t <= 6000; t += 50) {
       const tip = { x: Math.sin(t / 100) * 0.1, y: 1.05, z: -0.35 };
-      s = p.update(t, head, [{ hand: 'left', tracked: true, indexTip: tip, tips: [tip], pinch: 0 }]);
+      s = p.update(t, head, [{ hand: 'left', tracked: true, indexTip: tip, thumbTip: tip, tips: [tip], pinch: 0 }]);
     }
     expect(s.state).toBe('done');
     expect(s.result!.source).toBe('fallback');
@@ -83,7 +83,7 @@ describe('DeskPlacement', () => {
     };
     for (let t = 0; t <= 6100; t += 1000 / 72) {
       const tip = { x: 0.12 * tri(t), y: 0.75, z: -0.4 };
-      s = p.update(t, head, [{ hand: 'right', tracked: true, indexTip: tip, tips: [tip], pinch: 0 }]);
+      s = p.update(t, head, [{ hand: 'right', tracked: true, indexTip: tip, thumbTip: tip, tips: [tip], pinch: 0 }]);
       if (s.state === 'done') break;
     }
     expect(s.state).toBe('done');
@@ -96,7 +96,7 @@ describe('DeskPlacement', () => {
     let s = p.update(0, head, []);
     const tip = { x: 0.1, y: HEAD_Y - 0.8, z: -0.3 };
     for (let t = 0; t <= 6100; t += 1000 / 72) {
-      s = p.update(t, head, [{ hand: 'right', tracked: true, indexTip: tip, tips: [tip], pinch: 0 }]);
+      s = p.update(t, head, [{ hand: 'right', tracked: true, indexTip: tip, thumbTip: tip, tips: [tip], pinch: 0 }]);
       if (s.state === 'done') break;
     }
     expect(s.result!.source).toBe('fallback');
@@ -106,7 +106,7 @@ describe('DeskPlacement', () => {
   it('a_real_dwell_past_the_timer_still_wins', () => {
     const p = new DeskPlacement(0);
     const still = { x: 0, y: 0.75, z: -0.4 };
-    const hand = (tip: typeof still) => [{ hand: 'right' as const, tracked: true, indexTip: tip, tips: [tip], pinch: 0 }];
+    const hand = (tip: typeof still) => [{ hand: 'right' as const, tracked: true, indexTip: tip, thumbTip: tip, tips: [tip], pinch: 0 }];
     // A dwell that starts at 5.6 s is half way at 6 s: it is allowed to finish.
     for (let t = 5600; t < 6000; t += 1000 / 72) p.update(t, head, hand(still));
     let s = p.update(6000, head, hand(still));
@@ -123,7 +123,7 @@ describe('DeskPlacement', () => {
     for (let k = 0; t < 12000 && s.state !== 'done'; k++) {
       const tip = { x: (k % 2) * 0.05, y: 0.75, z: -0.4 };
       for (const end = t + 450; t < end && s.state !== 'done'; t += 1000 / 72) {
-        s = p.update(t, head, [{ hand: 'right', tracked: true, indexTip: tip, tips: [tip], pinch: 0 }]);
+        s = p.update(t, head, [{ hand: 'right', tracked: true, indexTip: tip, thumbTip: tip, tips: [tip], pinch: 0 }]);
       }
     }
     expect(s.state).toBe('done');
@@ -135,7 +135,7 @@ describe('DeskPlacement', () => {
     const p = new DeskPlacement(0);
     let s = p.update(0, head, []);
     for (const smp of track(800, 0, undefined, 500)) {
-      s = p.update(smp.t_ms, head, [{ hand: 'right', tracked: true, indexTip: smp.tip, tips: [smp.tip], pinch: 0 }]);
+      s = p.update(smp.t_ms, head, [{ hand: 'right', tracked: true, indexTip: smp.tip, thumbTip: smp.tip, tips: [smp.tip], pinch: 0 }]);
       if (s.state === 'done') break;
     }
     expect(s.state).toBe('done');
@@ -148,7 +148,7 @@ describe('DeskPlacement', () => {
   it('a_dwell_in_progress_holds_off_the_fallback', () => {
     const p = new DeskPlacement(0);
     const tip = { x: 0, y: 0.75, z: -0.4 };
-    const hand = { hand: 'right' as const, tracked: true, indexTip: tip, tips: [tip], pinch: 0 };
+    const hand = { hand: 'right' as const, tracked: true, indexTip: tip, thumbTip: tip, tips: [tip], pinch: 0 };
     // Half a dwell (0.3 s of 0.6 s) is under way at 6 s: hold the fallback.
     for (let t = 5650; t < 6000; t += 1000 / 72) p.update(t, head, [hand]);
     expect(p.update(6000, head, [hand]).state).toBe('dwelling');
