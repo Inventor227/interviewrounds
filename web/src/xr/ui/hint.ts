@@ -1,5 +1,5 @@
-// A one-line hint that shows for a few seconds just below the eye line, e.g. "Put your controllers down; use your
-// hands" the first time controllers appear, or "No desk? We set one up for you." after the fallback placement.
+// A one-line hint that shows for a few seconds just below the eye line, e.g. "No desk? We set one up for you." after
+// the fallback placement. Nothing is said about controllers: hands and controllers both do everything.
 
 import { UIKitDocument } from '@iwsdk/core';
 import { Group } from 'three';

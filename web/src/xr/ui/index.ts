@@ -12,7 +12,7 @@ import { Captions } from './captions';
 import { Hint } from './hint';
 import { layoutBriefBeyondSheet, layoutDesk, layoutHeadStatus, layoutHint, layoutHud, type PanelName, type PanelPose } from './layout';
 import { RoundBar } from './roundBar';
-import { StatusCard } from './statusCard';
+import { PLACING_COPY, StatusCard } from './statusCard';
 import { quickCardFromHeadset, SummaryCard, summaryFromReport } from './summaryCard';
 import type { RoundAction, RoundUIState, StatusStage, SummaryView } from './types';
 
@@ -165,6 +165,12 @@ export class RoundUI {
     const poses = layoutHud(aspect, vfovDeg);
     const g = this.groups;
     for (const [k, p] of Object.entries(poses) as [PanelName, PanelPose][]) apply(g[k], p);
+  }
+
+  /** The desk placement prompt, worded for the input in use (hands: a finger; controllers: the tip and the trigger). */
+  showPlacing(input: 'hands' | 'controllers'): void {
+    this.lastStage = 'placing';
+    this.status.showText(PLACING_COPY[input].title, PLACING_COPY[input].detail);
   }
 
   /** A one-line hint for a few seconds, placed just below the eye line (layoutHint first). */
