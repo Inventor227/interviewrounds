@@ -15,6 +15,7 @@ function setup() {
     interrupt: vi.fn(),
     setMicMuted: vi.fn(async (m: boolean) => void session.calls.push(`mute:${m}`)),
     end: vi.fn(async () => void session.calls.push('end')),
+    startAudio: vi.fn(async () => void session.calls.push('startAudio')),
     getRoom: () => undefined,
   };
   const start = vi.fn(async (o: FishStartOptions) => {
@@ -94,5 +95,51 @@ describe('FishTransport', () => {
     await s.t.stop();
     await s.t.stop();
     expect(s.session.end).toHaveBeenCalledTimes(1);
+  });
+
+  it('stop_during_start_ends_the_session_once_connected', async () => {
+    const s = setup();
+    let connect!: () => void;
+    s.start.mockImplementationOnce(async (o: FishStartOptions) => {
+      await new Promise<void>((r) => (connect = r));
+      void o;
+      return s.session;
+    });
+    const starting = s.t.start();
+    await vi.waitFor(() => expect(connect).toBeTypeOf('function'));
+    await s.t.stop();
+    expect(s.session.end).not.toHaveBeenCalled();
+    connect();
+    await starting;
+    expect(s.session.end).toHaveBeenCalledTimes(1);
+    s.t.sendEvent('[event: start]');
+    expect(s.session.sendUserMessage).not.toHaveBeenCalled();
+  });
+
+  it('muted_before_start_publishes_no_mic', async () => {
+    const s = setup();
+    s.t.setMicMuted(true);
+    await s.t.start();
+    expect(s.opts().microphone).toBe(false);
+    const u = setup();
+    await u.t.start();
+    expect(u.opts().microphone).toBe(true);
+  });
+
+  it('exposes_start_audio_for_blocked_playback', async () => {
+    const s = setup();
+    await s.t.start();
+    await s.t.startAudio();
+    expect(s.session.startAudio).toHaveBeenCalled();
+  });
+
+  it('skips_recovered_provider_errors_and_maps_origin_errors', async () => {
+    const s = setup();
+    await s.t.start();
+    s.cb().onError?.(Object.assign(new Error('blip'), { code: 'provider_error', recovered: true }) as never);
+    expect(s.errors).toHaveLength(0);
+    s.start.mockRejectedValueOnce(Object.assign(new Error('nope'), { code: 'origin_forbidden' }));
+    const t2 = new FishTransport(panelist('p2', 1, voice), { start: s.start });
+    await expect(t2.start()).rejects.toMatchObject({ code: 'connect_failed' });
   });
 });

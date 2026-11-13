@@ -17,6 +17,7 @@ export interface FishSessionLike {
   sendUserActivity(): void;
   interrupt(): void;
   setMicMuted(muted: boolean): Promise<void>;
+  startAudio(): Promise<void>;
   end(): Promise<void>;
   getRoom(): RoomLike | undefined;
 }
@@ -44,7 +45,8 @@ export interface FishTransportOptions {
 const sdkStart = async (opts: FishStartOptions): Promise<FishSessionLike> => {
   // Loaded on demand: the 2D pages never pay for WebRTC.
   const { AgentSession } = await import('@fishaudio/agent-client');
-  return (await AgentSession.start(opts)) as unknown as FishSessionLike;
+  const session: FishSessionLike = await AgentSession.start(opts);
+  return session;
 };
 
 /**
@@ -74,6 +76,8 @@ export function toSessionToken(fish: { session_token: string; livekit_url: strin
 const ERROR_CODES: Record<string, VoiceErrorCode> = {
   mic_permission_denied: 'mic_denied',
   connection_failed: 'connect_failed',
+  origin_forbidden: 'connect_failed',
+  agent_not_public: 'connect_failed',
   session_request_failed: 'connect_failed',
   unsupported_transport: 'connect_failed',
   session_expired: 'session_expired',
@@ -127,20 +131,31 @@ export class FishTransport implements VoiceTransport {
         this.session = null;
         this.events.emit('ended', { reason });
       },
-      onError: (e) => this.events.emit('error', toVoiceError(e)),
+      onError: (e) => {
+        // The runtime still answers this turn by itself: nothing to show.
+        if (e.recovered === true) return;
+        this.events.emit('error', toVoiceError(e));
+      },
     };
+    let session: FishSessionLike;
     try {
-      this.session = await this.startFn({
+      session = await this.startFn({
         sessionToken: toSessionToken(v.fish),
         callbacks,
-        microphone: true,
+        // A panelist muted before start (swap hand-over, joined non-floor) publishes no capture
+        // until it is unmuted, so two sessions never hear the user at once.
+        microphone: !this.muted,
         wakeLock: false,
       });
     } catch (err) {
       throw toVoiceError(err);
     }
-    // The SDK starts with the mic live; keep a mute asked for before the session was up.
-    if (this.muted) this.setMicMuted(true);
+    if (this.stopping) {
+      // stop() came while we were connecting: end the session now, or it keeps billing.
+      await session.end().catch(() => undefined);
+      return;
+    }
+    this.session = session;
   }
 
   async stop(): Promise<void> {
@@ -167,6 +182,10 @@ export class FishTransport implements VoiceTransport {
 
   interrupt(): void {
     this.session?.interrupt();
+  }
+
+  async startAudio(): Promise<void> {
+    await this.session?.startAudio();
   }
 
   noteActivity(): void {

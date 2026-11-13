@@ -30,6 +30,8 @@ export interface AgentText {
 export type VoiceErrorCode =
   | 'mic_denied'
   | 'no_mic'
+  | 'mic_busy'
+  | 'audio_blocked'
   | 'connect_failed'
   | 'session_expired'
   | 'no_credit'
@@ -74,6 +76,8 @@ export interface VoiceTransport {
   interrupt?(): void;
   /** The user is busy (drawing on the board): keeps the voice service from re-engaging. */
   noteActivity?(): void;
+  /** Retries agent playback blocked by autoplay rules. Call it from a user gesture. */
+  startAudio?(): Promise<void>;
 }
 
 /** Options a transport factory gets besides the panelist. */
