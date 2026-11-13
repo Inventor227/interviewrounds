@@ -119,6 +119,10 @@ pub async fn gate(State(app): State<AppState>, req: Request, next: Next) -> Resp
             "The round is not live right now.",
         );
     }
+    // A turn means the user is in the room: a round clock held since a socket drop runs again.
+    if let Some(hub) = app.hubs.get(&id.to_string()) {
+        hub.wake(&app, &handle).await;
+    }
     if !via_secret {
         if newest_user_text(&v).chars().count() > MAX_TURN_CHARS {
             return refuse(

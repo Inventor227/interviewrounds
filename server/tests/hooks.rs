@@ -247,7 +247,7 @@ async fn board_ops_reach_the_interviewer_and_the_scribe_suggests_after_an_answer
 }
 
 #[tokio::test]
-async fn hints_and_socket_drops_are_logged_for_the_report() {
+async fn hints_drops_and_returns_are_logged_and_a_reconnect_alone_does_not_resume() {
     let app = live::test_app(Options::default()).await;
     let base = app.serve().await;
     let (_, id, token) = new_session(&app).await;
@@ -276,14 +276,57 @@ async fn hints_and_socket_drops_are_logged_for_the_report() {
             .any(|e| e["kind"] == "pause" && e["reason"] == "disconnected")
     })
     .await;
-    let _ws = hello(&base, &id, &token, 0).await;
-    live::eventually("reconnect logged as a resume", WAIT, || async {
-        events(&app, &id, "ui.event")
+    let mut ws = hello(&base, &id, &token, 0).await;
+    frame_of(&mut ws, "round.state", WAIT).await.unwrap();
+    let held = elapsed_s(&mut ws, Duration::from_millis(2500)).await;
+    let llm_turns = app.llm.requests.lock().unwrap().len();
+    // The browser reconnects at the mic tap, before the user is back: the clock stays held and nobody speaks.
+    let later = elapsed_s(&mut ws, Duration::from_millis(2500)).await;
+    assert_eq!(
+        later, held,
+        "a reconnect alone does not restart the round clock"
+    );
+    assert_eq!(app.llm.requests.lock().unwrap().len(), llm_turns);
+    assert!(
+        !events(&app, &id, "ui.event")
             .await
             .iter()
-            .any(|e| e["kind"] == "resume" && e["reason"] == "reconnected")
-    })
-    .await;
+            .any(|e| e["kind"] == "resume"),
+        "not resumed yet"
+    );
+    // The resume flow's typed turn brings the user back: the clock runs again and the return is logged.
+    assert_eq!(
+        app.turn(&token, &id, "[event: resume]").await.status,
+        StatusCode::OK
+    );
+    let after = elapsed_s(&mut ws, Duration::from_millis(2500)).await;
+    assert!(after > held, "{held} -> {after}");
+    let resumes: Vec<Value> = events(&app, &id, "ui.event")
+        .await
+        .into_iter()
+        .filter(|e| e["kind"] == "resume")
+        .collect();
+    assert_eq!(resumes.len(), 1, "{resumes:?}");
+    assert_eq!(resumes[0]["reason"], "back");
+}
+
+/// The round clock (`elapsed_s`) of the last `round.state` seen within `wait`.
+async fn elapsed_s(ws: &mut Ws, wait: Duration) -> u64 {
+    let until = tokio::time::Instant::now() + wait;
+    let mut last = None;
+    loop {
+        let left = until.saturating_duration_since(tokio::time::Instant::now());
+        if left.is_zero() {
+            break;
+        }
+        match live::next(ws, left).await {
+            Some(Next::Frame(f)) if f["t"] == "round.state" => last = f["d"]["elapsed_s"].as_u64(),
+            Some(Next::Frame(_)) => {}
+            Some(Next::Closed(c)) => panic!("closed {c:?}"),
+            None => break,
+        }
+    }
+    last.expect("a round.state")
 }
 
 #[tokio::test]

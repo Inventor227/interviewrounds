@@ -217,9 +217,12 @@ struct HubInner {
     saved_key: String,
     last_seen_saved: Option<Instant>,
     ending: Option<Ending>,
-    /// The socket dropped while the round was live: the drop was logged as a pause, and the next connect
-    /// logs the resume.
-    drop_paused: bool,
+    /// The round clock is held after the socket dropped (or the server restarted) mid-round. A reconnect alone
+    /// does not restart it (the browser reconnects at the mic tap, before the user is back in the room); the next
+    /// live turn or `ui.event resume` does (`Hub::wake`).
+    held: bool,
+    /// The hold was logged as a pause event; its end is logged as a resume.
+    held_logged: bool,
 }
 
 pub struct Hub {
@@ -374,13 +377,48 @@ impl Hub {
     /// Asks for the end: the round ends after the closing line (or `ending_limit`). Kept: the first reason.
     pub async fn request_end(&self, reason: &str, turns_now: usize, closing_done: bool) {
         let mut h = self.inner.lock().await;
-        if h.ending.is_none() {
-            h.ending = Some(Ending {
-                since: Instant::now(),
-                reason: reason.to_string(),
-                turns_at: turns_now,
-                closing_done: closing_done.then(Instant::now),
-            });
+        match h.ending.as_mut() {
+            None => {
+                h.ending = Some(Ending {
+                    since: Instant::now(),
+                    reason: reason.to_string(),
+                    turns_at: turns_now,
+                    closing_done: closing_done.then(Instant::now),
+                });
+            }
+            // The interviewer's end_round after the user asked to end: the closing line is spoken, so the
+            // round ends after the grace instead of waiting for the ending limit. The user's reason stays.
+            Some(e) if closing_done && e.closing_done.is_none() => {
+                e.closing_done = Some(Instant::now());
+            }
+            Some(_) => {}
+        }
+    }
+
+    /// The user is back (a live turn, or `ui.event resume`): a clock held since a socket drop or a restart runs
+    /// again. A reconnect alone never does this.
+    pub async fn wake(&self, app: &AppState, handle: &Mutex<SessionState>) {
+        let (logged, connected) = {
+            let mut h = self.inner.lock().await;
+            if !h.held {
+                return;
+            }
+            h.held = false;
+            (std::mem::take(&mut h.held_logged), h.connections > 0)
+        };
+        let at_ms = {
+            let mut st = handle.lock().await;
+            let now = Instant::now();
+            if st.status == SessionStatus::Live && connected {
+                run_clock(&mut st, now);
+            }
+            st.elapsed_ms(now) as i64
+        };
+        if logged {
+            let d = json!({"kind": "resume", "reason": "back", "at_ms": at_ms});
+            if let Err(err) = store_event(app, self.session_id, "ui.event", &d).await {
+                tracing::warn!(session_id = %self.session_id, error = %err, "could not log the return");
+            }
         }
     }
 
@@ -553,7 +591,9 @@ pub async fn attach(app: &AppState, id: Uuid, handle: Arc<Mutex<SessionState>>) 
             saved_key: String::new(),
             last_seen_saved: None,
             ending: None,
-            drop_paused: false,
+            // A started round loaded after a restart waits for the user like one whose socket dropped.
+            held: started_at.is_some(),
+            held_logged: false,
         }),
         acks: std::sync::Mutex::new(HashMap::new()),
         whiteboard,
@@ -1039,19 +1079,12 @@ async fn run_socket(app: AppState, id: String, socket: WebSocket) {
 
 async fn connect(app: &AppState, hub: &Hub, handle: &Mutex<SessionState>, record: TokenRecord) {
     hub.set_ack(record.token_id, record.last_client_seq);
-    let back_from_drop = {
+    let held = {
         let mut h = hub.inner.lock().await;
         h.connections += 1;
         h.disconnected_since = None;
-        std::mem::take(&mut h.drop_paused)
+        h.held
     };
-    if back_from_drop {
-        let at_ms = elapsed_ms(handle).await;
-        let d = json!({"kind": "resume", "reason": "reconnected", "at_ms": at_ms});
-        if let Err(err) = store_event(app, hub.session_id, "ui.event", &d).await {
-            tracing::warn!(session_id = %hub.session_id, error = %err, "could not log the reconnect");
-        }
-    }
     let now = Instant::now();
     let started = {
         let mut st = handle.lock().await;
@@ -1064,7 +1097,8 @@ async fn connect(app: &AppState, hub: &Hub, handle: &Mutex<SessionState>, record
                 st.status = SessionStatus::Live;
                 true
             }
-            SessionStatus::Live => {
+            // Back after a drop: the clock waits for the user's next turn or `ui.event resume`.
+            SessionStatus::Live if !held => {
                 run_clock(&mut st, now);
                 false
             }
@@ -1116,7 +1150,10 @@ async fn disconnect(app: &AppState, hub: &Hub, handle: &Mutex<SessionState>) {
         if let Some(at_ms) = live_at {
             let started = hub.inner.lock().await.wall_start.is_some();
             if started {
-                hub.inner.lock().await.drop_paused = true;
+                let mut h = hub.inner.lock().await;
+                h.held = true;
+                h.held_logged = true;
+                drop(h);
                 let d = json!({"kind": "pause", "reason": "disconnected", "at_ms": at_ms});
                 if let Err(err) = store_event(app, hub.session_id, "ui.event", &d).await {
                     tracing::warn!(session_id = %hub.session_id, error = %err, "could not log the drop");
@@ -1601,6 +1638,9 @@ async fn process(
                         set_db_status(&app.db, id, status).await;
                         hub.inner.lock().await.last_sig = Some(sig(&v));
                         hub.send0("round.state", v);
+                    }
+                    if kind == "resume" {
+                        hub.wake(app, handle).await;
                     }
                 }
                 "end" => {
