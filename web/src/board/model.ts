@@ -204,3 +204,13 @@ export const COMPONENT_NAMES: Record<ComponentType, string> = {
   note: 'Note',
   blank: 'Box',
 };
+
+/** Where an edge's chip and label sit: halfway between the centres of its two items. */
+export function edgeMid(board: Board, edge: { from: string; to: string }): Pt | null {
+  const a = findItem(board, edge.from);
+  const b = findItem(board, edge.to);
+  if (!a || !b) return null;
+  const [ax, ay] = center(itemRect(a));
+  const [bx, by] = center(itemRect(b));
+  return [(ax + bx) / 2, (ay + by) / 2];
+}
