@@ -21,6 +21,8 @@ export interface LiveRoom {
   sessionLost: boolean;
   /** Enters the headset session again and places the desk (from a tap). The round stays paused until Resume. */
   reenter(): Promise<void>;
+  /** Development builds only: handles for emulator scripts (the board store, sheet points in the room). */
+  debug?: Record<string, unknown>;
   /** The room loaded or changed what it offers (the board became available). */
   onChange(cb: () => void): () => void;
 }

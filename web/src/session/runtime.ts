@@ -197,6 +197,17 @@ export function createRoundRuntime({ preview }: RuntimeOptions): RoundController
     });
     sheetToWorld = (x, y, h) => toWorld(a.sheetAnchor, x, y, h);
     wireSocket();
+    if (import.meta.env.DEV) {
+      const { ghostRect } = await import('../board/ghosts');
+      room.debug = {
+        store: s,
+        toWorld: (pts: [number, number][], hCm = 0) => pts.map(([x, y]) => toWorld(a.sheetAnchor, x, y, hCm)),
+        ghostRect: (opId: string) => {
+          const g = s.board.ghosts.find((x) => x.op_id === opId);
+          return g ? ghostRect(s.board, g) : null;
+        },
+      };
+    }
 
     if (preview) {
       const [{ BoardView }, { MouseAdapter }] = await Promise.all([import('../board/render'), import('../board/mouse')]);
@@ -362,7 +373,11 @@ export function createRoundRuntime({ preview }: RuntimeOptions): RoundController
       app = null;
       host.remove();
       clearLiveRoom(room);
-      if (import.meta.env.DEV) delete (globalThis as { __xrApp?: XRApp }).__xrApp;
+      if (import.meta.env.DEV) {
+        delete (globalThis as { __xrApp?: XRApp }).__xrApp;
+        // The managed emulator browser needs a world on the 2D pages again.
+        if (navigator.webdriver) void import('../xr/devtools').then((m) => m.startToolingWorld()).catch(() => undefined);
+      }
     },
     ui,
     room: { seatPoses: () => port?.room.seatPoses() ?? [] },

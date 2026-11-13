@@ -13,6 +13,7 @@ import { Streak } from '../components/Streak';
 import { Monogram } from '../components/Ui';
 import { voiceChoice } from '../voiceChoice';
 import { prepareLaunch, type PrepareInput } from '../launch';
+import { prefetchRoom } from '../prefetch';
 import { HowItWorks } from './Onboarding';
 
 export function useNow(everyMs = 1000): number {
@@ -96,6 +97,8 @@ export function Home() {
   const xr = useHeadset();
   const { route } = useLocation();
   const [asking, setAsking] = useState(false);
+  // The room's code loads while this page is idle, so the first tap does not wait for it.
+  useEffect(() => prefetchRoom(), []);
 
   const m = me.data;
   const cap = capFromMe(m, 'short');
