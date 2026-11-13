@@ -63,6 +63,8 @@ pub struct Config {
 }
 
 pub const DEFAULT_MODEL: &str = "claude-opus-5-5";
+/// Live voice and fast calls: the most capable model under the voice latency target (research/09-voice-spike.md).
+pub const DEFAULT_LIVE_MODEL: &str = "claude-sonnet-5-5";
 pub const DEFAULT_CSP_CONNECT_EXTRA: &str =
     "https://*.fish.audio wss://*.fish.audio https://*.livekit.cloud wss://*.livekit.cloud";
 
@@ -173,8 +175,8 @@ impl Config {
             fish_api_key,
             fish_agent_id,
             fish_llm_secret,
-            live_model: get("LIVE_MODEL").unwrap_or_else(|| DEFAULT_MODEL.into()),
-            fast_model: get("FAST_MODEL").unwrap_or_else(|| DEFAULT_MODEL.into()),
+            live_model: get("LIVE_MODEL").unwrap_or_else(|| DEFAULT_LIVE_MODEL.into()),
+            fast_model: get("FAST_MODEL").unwrap_or_else(|| DEFAULT_LIVE_MODEL.into()),
             scoring_model: get("SCORING_MODEL").unwrap_or_else(|| DEFAULT_MODEL.into()),
             live_effort,
             live_tools,
@@ -286,8 +288,8 @@ mod tests {
         assert_eq!(cfg.fish_build_cap_usd, 14.0);
         assert_eq!(cfg.judge_cap_usd, 100.0);
         assert_eq!(cfg.fish_rate_per_min, 0.07);
-        assert_eq!(cfg.live_model, "claude-opus-5-5");
-        assert_eq!(cfg.fast_model, "claude-opus-5-5");
+        assert_eq!(cfg.live_model, "claude-sonnet-5-5");
+        assert_eq!(cfg.fast_model, "claude-sonnet-5-5");
         assert_eq!(cfg.scoring_model, "claude-opus-5-5");
         assert_eq!(cfg.live_effort, "low");
         assert_eq!(cfg.live_tools, "director");
