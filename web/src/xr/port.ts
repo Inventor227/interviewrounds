@@ -26,12 +26,19 @@ export interface XRAppLike {
 /** The controller's "audio seems blocked" line; it gets the Tap to hear button. */
 const HEAR_LINE = /hear your interviewer/i;
 
-export function createXRPort(app: XRAppLike): XRPort {
-  // The round state from the server has no mute flag: the bar keeps what the user last pressed.
+export function createXRPort(app: XRAppLike): XRPort & { dispose(): void } {
+  // The round state from the server has no mute flag: the bar keeps what the user last pressed, and shows a press
+  // at once (re-rendered from the last round state) instead of waiting for the next state push.
   let muted = false;
-  app.ui.onAction((a) => {
-    if (a === 'mute') muted = true;
-    else if (a === 'unmute') muted = false;
+  let last: RoundUIState | null = null;
+  const show = (s: RoundUIState) => {
+    last = s;
+    app.ui.setRoundState(s);
+  };
+  const off = app.ui.onAction((a) => {
+    if (a !== 'mute' && a !== 'unmute') return;
+    muted = a === 'mute';
+    if (last) show({ ...last, muted });
   });
 
   return {
@@ -41,7 +48,7 @@ export function createXRPort(app: XRAppLike): XRPort {
     ui: {
       setRoundState(s: RoundStatePayload & { controller: ControllerState }) {
         const status = s.controller === 'paused' ? 'paused' : s.status;
-        app.ui.setRoundState({
+        show({
           status,
           elapsed_s: s.elapsed_s,
           total_s: s.elapsed_s + s.remaining_s,
@@ -65,5 +72,7 @@ export function createXRPort(app: XRAppLike): XRPort {
     room: {
       seatPoses: (): SeatPoseLike[] => app.room.seatPoses().map((p) => ({ position: { ...p.pos }, yaw: p.yaw })),
     },
+    /** Removes the port's own action listener (one port per round). */
+    dispose: off,
   };
 }

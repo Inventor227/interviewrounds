@@ -85,6 +85,27 @@ describe('createXRPort', () => {
     expect(seen).toEqual(['mute', 'hear', 'end', 'retry']);
   });
 
+  it('mute_shows_on_the_bar_at_once', () => {
+    const { app, press } = fakeApp();
+    const port = createXRPort(app);
+    port.ui.setRoundState({ ...ROUND, controller: 'paused' });
+    press('mute');
+    // No wait for the next round.state: the bar re-renders with the new mute state right away.
+    expect(app.ui.setRoundState).toHaveBeenLastCalledWith(expect.objectContaining({ status: 'paused', muted: true }));
+    press('unmute');
+    expect(app.ui.setRoundState).toHaveBeenLastCalledWith(expect.objectContaining({ muted: false }));
+  });
+
+  it('dispose_removes_the_port_listener', () => {
+    const { app, press } = fakeApp();
+    const port = createXRPort(app);
+    port.ui.setRoundState({ ...ROUND, controller: 'live' });
+    port.dispose();
+    const n = app.ui.setRoundState.mock.calls.length;
+    press('mute');
+    expect(app.ui.setRoundState.mock.calls.length).toBe(n);
+  });
+
   it('seat_poses_use_position', () => {
     const { app } = fakeApp();
     expect(createXRPort(app).room.seatPoses()).toEqual([{ position: { x: 0, y: 0, z: -1.4 }, yaw: 0.1 }]);
