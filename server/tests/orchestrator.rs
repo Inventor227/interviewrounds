@@ -1510,6 +1510,20 @@ async fn directors_show_question_and_hand_over_reach_the_browser_and_the_next_vo
     assert!(st.apply_tool_calls(&[call("p2")]).is_empty());
     assert!(st.apply_tool_calls(&[call("p9")]).is_empty());
     assert_eq!(st.floor, "p2");
+    // The first panelist's second director (one per reply) hands over again to the panelist already on the floor:
+    // ignored, so the line the new panelist is about to say stays.
+    st.pending_handover.insert("p2".into(), handover.into());
+    let again = ir_server::orchestrator::tools::ToolCall {
+        id: "toolu_y".into(),
+        name: "hand_over".into(),
+        input: json!({"to": "p2", "line": "A different first line."}),
+        panelist_id: "p1".into(),
+    };
+    assert!(st.apply_tool_calls(&[again]).is_empty());
+    assert_eq!(
+        st.pending_handover.get("p2").map(String::as_str),
+        Some(handover)
+    );
 }
 
 // ---------- dev voice spike page ----------

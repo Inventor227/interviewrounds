@@ -132,6 +132,12 @@ pub fn apply(state: &mut SessionState, call: &ToolCall) -> Vec<ServerEvent> {
                 tracing::warn!(session_id = %state.id, to = %to, "hand_over to an unknown panelist ignored");
                 return Vec::new();
             }
+            // A second hand-over to the panelist who already holds the floor (two directors of the same speaker, one
+            // per reply) would replace the opening line they are about to say, or already said.
+            if state.floor == to {
+                tracing::info!(session_id = %state.id, from = %call.panelist_id, to = %to, "hand_over to the panelist on the floor ignored");
+                return Vec::new();
+            }
             state.floor = to.clone();
             if !line.is_empty() {
                 state.pending_handover.insert(to.clone(), line.clone());
