@@ -39,7 +39,8 @@ JSON; cookie `ir_id` identifies the device/user; all under same origin.
 - Client → server: `hello {client_token, last_seq}` (first frame), `board.op {op_id, rev_base, src, op, args, at_ms}`,
   `transcript.mark {segment_id, panelist_id, first_at_ms, final_at_ms, text}`, `head.samples {samples:[{t_ms, yaw, pitch,
   speaking, target}]}`, `voice.state {panelist_id, mode:"listening"|"thinking"|"speaking", at_ms}`,
-  `ui.event {kind:"pause"|"resume"|"end"|"hint"|"skip_onboarding", reason?}`, `ping`
+  `ui.event {kind:"pause"|"resume"|"end"|"hint"|"skip_onboarding", reason?}`, `board.ghost_reject {op_id}` (dismiss a
+  Scribe suggestion), `ping`
 - Server → client: `round.state {status, phase_id, phase_index, phases, elapsed_s, remaining_s, phase_remaining_s, brief:{question, lines}, floor}`,
   `panel.hand_over {from, to, opening_line}`, `board.ack {op_id, rev}`, `board.ghosts {ghosts:[GhostOp]}`,
   `board.apply {op_id, rev, src, op, args}` (server-originated ops), `avatar.point_at {panelist_id, item_id}`,
@@ -63,6 +64,12 @@ Defined by schema (mirror them field for field):
 | `Persona` | `content/schema/persona.schema.json` |
 | `Attendee` | `content/schema/attendee.schema.json` |
 | `MeetingTemplate` | `content/schema/meeting-template.schema.json` |
+| `Settings` | `content/schema/settings.schema.json` |
+| `MeetingSetup` | `content/schema/meeting-setup.schema.json` |
+| `MeetingPlan` (server side, with `attendees[].hidden`) | `content/schema/meeting-plan.schema.json` |
+| `Me` (response of `GET /api/me`) | `content/schema/me.schema.json` |
+| `Limits` (`limits` in `GET /api/me` and `CreateSessionRes`) | `me.schema.json#/$defs/limits` |
+| `Entitlements` | `me.schema.json#/$defs/entitlements` |
 
 Derived from the schemas (the server strips prompt-only fields before sending):
 
@@ -71,10 +78,24 @@ Derived from the schemas (the server strips prompt-only fields before sending):
   `silence_wait_seconds` and `interrupt_after_seconds`.
 - `PersonaPublic {id, display_name, title, avatar_id, style}`.
 
-`Settings`, `MeetingSetup`, `MeetingPlan`, `limits` and `entitlements` are added here with the endpoints that own them.
+- `MeetingPlanPublic`: what `POST /api/meetings/prepare` returns as `plan`. It is the `MeetingPlan` with every
+  `attendees[].hidden` block removed (stance, concerns, patience, persona, avatar and voice stay on the server). The
+  suggested objections the setup page shows are in each attendee's `likely_objections`, which stays.
+- `Limits {short_left_today: int|null, full_left: int|null, resets_at: date-time|null, reason: null|"guest_daily_limit"|
+  "guest_full_used"|"judge_budget_reached"|"build_budget_reached"|"free_rounds_used"}`: `null` counts mean no limit;
+  a non-null `reason` means a new session is blocked.
+- `Entitlements {plan: "guest"|"free"|"sprint"|"pro", free_rounds_left: int|null, minutes_total: int|null,
+  minutes_used: number|null, period_end: date-time|null}`.
 
 Validating with Ajv: use draft 2020-12 (`ajv/dist/2020`) with `allowUnionTypes: true`; add `ajv-formats` for `date-time`.
-`meeting-template.schema.json` references `attendee.schema.json`, so load both.
+`meeting-template`, `meeting-setup` and `meeting-plan` reference `attendee.schema.json`, and `me` references
+`settings.schema.json`, so load those alongside.
+
+## Content mapping
+
+- Persona `style` is one of `warm`, `neutral`, `tough`. Sam (described as warm-neutral) is `warm`.
+- Attendee `personality` is one of `supportive`, `neutral`, `skeptical`, `hostile`. Map other words: impatient →
+  `skeptical`; defensive → `skeptical`; friendly but firm → `neutral`.
 
 ## Board ops
 
@@ -138,8 +159,14 @@ already undone, or is itself an undo.
 
 ### Ghosts
 
-`board.ghosts` carries the full list of pending ghosts (it replaces the previous list). Accepting a ghost (pinch, or the
-4 s settle) sends `board.op` with the ghost's `op_id`, `src`, `op` and `args`; committing that `op_id` removes the ghost.
+Ghosts are Scribe suggestions (`src: "scribe"`). `board.ghosts` carries the full list of pending ghosts (it replaces the
+previous list).
+
+- **Accept** (pinch, or the 4 s settle): send the ghost's op as a normal `board.op` with the same `op_id`, `src: "scribe"`,
+  `op` and `args`. Committing that `op_id` removes the ghost.
+- **Reject** (pinch ✕, or "no / scrap that"): send `board.ghost_reject {op_id}`. The server removes the ghost (no rev
+  change), logs the ghost's op with `accepted: false`, and sends the new `board.ghosts` list. An unknown `op_id` is
+  ignored.
 
 ### Op log
 
