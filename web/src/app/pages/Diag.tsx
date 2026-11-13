@@ -143,6 +143,7 @@ export function Diag() {
   const [echoLive, setEchoLive] = useState<EchoUpdate | null>(null);
   const [echoRun, setEchoRun] = useState<EchoRun | null>(null);
   const [echoErr, setEchoErr] = useState('');
+  const [positional, setPositional] = useState(false);
   useEffect(() => () => echo?.stop(), [echo]);
 
   const startEcho = async () => {
@@ -159,7 +160,7 @@ export function Diag() {
       const { EchoTest: Test } = await import('../../diag/echo');
       const t = new Test(setEchoLive);
       setEcho(t);
-      setEchoRun(await t.start(voice));
+      setEchoRun(await t.start(voice, { positional }));
     } catch (e) {
       setEchoErr(e instanceof DiagError ? `${e.code}: ${e.message}` : String(e));
     }
@@ -383,6 +384,18 @@ export function Diag() {
           <label for="diag-key">Dev key</label>
           <input id="diag-key" type="password" autocomplete="off" value={key} onInput={(ev) => setKey(ev.currentTarget.value)} data-test="diag-key" />
         </div>
+        <div class="field field-toggle">
+          <label for="diag-positional">Second run: her voice through 3D audio (positional)</label>
+          <input
+            id="diag-positional"
+            type="checkbox"
+            role="switch"
+            class="switch-input"
+            checked={positional}
+            onChange={(ev) => setPositional(ev.currentTarget.checked)}
+            data-test="diag-positional"
+          />
+        </div>
         <div class="row">
           {!confirming && !(echoLive && !echoRun && !echoErr) && (
             <button class="btn btn-primary btn-big" data-test="diag-echo-run" disabled={!key.trim()} onClick={() => setConfirming(true)}>
@@ -419,6 +432,7 @@ export function Diag() {
           <Kv
             test="diag-echo-kv"
             rows={[
+              ['Voice path', echoRun.path === 'positional' ? '3D audio (positional)' : 'audio element'],
               ['Ended', fmt(echoRun.stopped_by), tone(echoRun.stopped_by === 'finished', true)],
               ['Error', fmt(echoRun.error), echoRun.error ? 'bad' : undefined],
               ['Voice mic echo cancel', fmt(echoRun.fish_mic?.echoCancellation), tone(echoRun.fish_mic ? echoRun.fish_mic.echoCancellation === true : null)],

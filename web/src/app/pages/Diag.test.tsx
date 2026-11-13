@@ -45,6 +45,8 @@ describe('Diag page', () => {
     for (const s of ['device', 'mic', 'autoplay', 'xr', 'hands', 'echo', 'results']) expect(q(`diag-${s}`)).not.toBeNull();
     expect(q('diag-device-kv')?.textContent).toContain('WebXR');
     expect(q('diag-autoplay-kv')?.textContent).toContain('blocked');
+    // The room code loads on demand; wait for it.
+    for (let i = 0; i < 100 && q('diag-xr-state')?.dataset.stage === 'loading'; i++) await act(async () => await new Promise((r) => setTimeout(r, 50)));
     expect(q('diag-xr-state')?.dataset.stage).toBe('none');
     expect((q('diag-xr-run') as HTMLButtonElement).disabled).toBe(true);
     // The paid echo test needs the dev key and a second tap to confirm.

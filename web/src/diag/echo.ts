@@ -17,6 +17,8 @@ export interface EchoRun {
   results: EchoResults | null;
   /** The settings of the mic track Fish captured with (echo cancellation and the rest). */
   fish_mic: Record<string, unknown> | null;
+  /** How her voice reached the speakers: the SDK's audio element (the app's path), or WebAudio with a panner. */
+  path: 'element' | 'positional';
   error: string | null;
   stopped_by: 'finished' | 'user' | 'no_speech' | 'ended' | 'error' | null;
 }
@@ -59,7 +61,8 @@ export function echoPanelist(voice: EchoVoice): Panelist {
 const NO_SPEECH_MS = 20000;
 
 export class EchoTest {
-  readonly run: EchoRun = { results: null, fish_mic: null, error: null, stopped_by: null };
+  readonly run: EchoRun = { results: null, fish_mic: null, path: 'element', error: null, stopped_by: null };
+  private panner: { src: MediaStreamAudioSourceNode; node: PannerNode } | null = null;
   private transport: FishTransport | null = null;
   private session: FishSessionLike | null = null;
   private meters: LevelMeter[] = [];
@@ -73,8 +76,9 @@ export class EchoTest {
   constructor(private readonly onUpdate: (u: EchoUpdate) => void) {}
 
   /** Runs the whole test; resolves when it ends (finished, stopped or failed). */
-  start(voice: EchoVoice): Promise<EchoRun> {
+  start(voice: EchoVoice, opts: { positional?: boolean } = {}): Promise<EchoRun> {
     if (this.finished) return this.finished;
+    this.run.path = opts.positional ? 'positional' : 'element';
     this.finished = new Promise((res) => (this.finish = res));
     void this.go(voice);
     return this.finished;
@@ -129,6 +133,7 @@ export class EchoTest {
     this.timer = setInterval(() => {
       const now = performance.now();
       // The agent's track appears once it publishes; meter it from then on.
+      if (this.run.path === 'positional' && ctx) this.positional(ctx, tr);
       const out = ctx && !this.agentMetered ? tr.outputStream() : null;
       if (ctx && out) {
         this.agentMetered = true;
@@ -142,12 +147,34 @@ export class EchoTest {
     }, 250);
   }
 
+  /**
+   * The positional path: her track through a panner (1 m ahead, a little to the right, as a seat) to the speakers,
+   * with the SDK's own audio elements muted. Chromium's echo canceller does not see WebAudio output, which is what
+   * this run measures.
+   */
+  private positional(ctx: AudioContext, tr: FishTransport): void {
+    const room = this.session?.getRoom() as
+      | { remoteParticipants?: Map<string, { trackPublications: Map<string, { track?: { attachedElements?: HTMLMediaElement[] } }> }> }
+      | undefined;
+    for (const p of room?.remoteParticipants?.values() ?? []) for (const pub of p.trackPublications.values()) for (const el of pub.track?.attachedElements ?? []) el.muted = true;
+    if (this.panner) return;
+    const out = tr.outputStream();
+    if (!out) return;
+    const src = ctx.createMediaStreamSource(out);
+    const node = new PannerNode(ctx, { panningModel: 'HRTF', distanceModel: 'inverse', refDistance: 1, positionX: 0.4, positionY: 0, positionZ: -1 });
+    src.connect(node).connect(ctx.destination);
+    this.panner = { src, node };
+  }
+
   private async end(why: NonNullable<EchoRun['stopped_by']>): Promise<void> {
     if (this.run.stopped_by) return;
     this.run.stopped_by = why;
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
     for (const m of this.meters) m.stop();
+    this.panner?.src.disconnect();
+    this.panner?.node.disconnect();
+    this.panner = null;
     this.meters = [];
     if (this.counter) this.run.results = this.counter.results(performance.now());
     const tr = this.transport;
