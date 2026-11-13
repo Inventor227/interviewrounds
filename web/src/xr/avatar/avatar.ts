@@ -405,15 +405,13 @@ export class Avatar {
 
   // ---- clips ----
 
+  /**
+   * Base clip per mode. The idle_neutral clips look around the room (head turns up to 58 degrees), which fights eye
+   * contact, so they only play in idle; listening and speaking stay on the breathing clip (head within 9 degrees)
+   * and get their variety from tilts, nods, beats and the accept one-shots.
+   */
   private baseFor(mode: AvatarMode): string {
-    switch (mode) {
-      case 'listening':
-        return this.pick([CLIPS.idle1, CLIPS.breathe, CLIPS.idle2]);
-      case 'speaking':
-        return this.pick([CLIPS.breathe, CLIPS.idle2]);
-      default:
-        return CLIPS.breathe;
-    }
+    return mode === 'idle' ? this.pick([CLIPS.breathe, CLIPS.idle1, CLIPS.idle2]) : CLIPS.breathe;
   }
 
   private pick<T>(xs: readonly T[]): T {
@@ -478,10 +476,11 @@ export class Avatar {
         this.playBase(CLIPS.thoughtful, 0.6);
       return;
     }
-    // Posture shifts: a new base clip every 14 to 26 s while listening or speaking.
+    // Every 14 to 26 s: idle may switch clips (looking around); a listener shifts the tilt of their head.
     this.baseWait -= dt;
-    if (this.baseWait <= 0 && (this._mode === 'listening' || this._mode === 'speaking')) {
-      this.playBase(this.baseFor(this._mode));
+    if (this.baseWait <= 0) {
+      this.baseWait = between(this.rng, 14, 26);
+      if (this._mode === 'idle') this.playBase(this.baseFor('idle'));
       if (this._mode === 'listening')
         this.tiltTarget = (this.rng() < 0.5 ? -1 : 1) * between(this.rng, 2.5, 4) * DEG;
     }
