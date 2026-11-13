@@ -15,6 +15,8 @@ export type Recognized =
 export const MIN_STROKE_CM = 1.5;
 /** A connector may start or end this far outside a card. */
 export const CONNECT_MARGIN_CM = 1.0;
+/** A connector may end this far outside the target card (fingertip error is about 1 to 1.5 cm). */
+export const CONNECT_END_MARGIN_CM = 1.5;
 /** Smallest card a box can become (either orientation). */
 export const MIN_RECT = { long: 3, short: 2 } as const;
 
@@ -35,8 +37,8 @@ export function recognize(stroke: readonly Pt[], board: Board): Recognized | nul
   return connector(pts, len, board) ?? closedShape(pts, len, step) ?? { kind: 'ink' };
 }
 
-function nodeNear(board: Board, p: Pt, exclude?: string): BoardItem | null {
-  const hit = nearestNode(board, p[0], p[1], CONNECT_MARGIN_CM, exclude);
+function nodeNear(board: Board, p: Pt, exclude?: string, margin = CONNECT_MARGIN_CM): BoardItem | null {
+  const hit = nearestNode(board, p[0], p[1], margin, exclude);
   if (hit) return hit;
   // Regions (groups) only when the point is inside one and no card is near.
   for (let i = board.items.length - 1; i >= 0; i--) {
@@ -80,10 +82,11 @@ function connector(pts: Pt[], len: number, board: Board): Recognized | null {
   const from = nodeNear(board, pts[0]!);
   if (!from) return null;
   const tip = hookTip(pts, len);
-  const end = tip ?? pts[pts.length - 1]!;
-  const to = nodeNear(board, end, from.id);
+  // The arrow tip names the target; if it misses, the stroke's real end still can.
+  const atTip = tip ? nodeNear(board, tip, from.id, CONNECT_END_MARGIN_CM) : null;
+  const to = atTip ?? nodeNear(board, pts[pts.length - 1]!, from.id, CONNECT_END_MARGIN_CM);
   if (!to) return null;
-  return { kind: 'connector', from: from.id, to: to.id, arrow: tip !== null };
+  return { kind: 'connector', from: from.id, to: to.id, arrow: atTip !== null };
 }
 
 /** Index where a stroke closes on its start, or -1 when it stays open. */
