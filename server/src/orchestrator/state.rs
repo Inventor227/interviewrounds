@@ -567,7 +567,6 @@ impl SessionState {
             .unwrap_or_else(|| panelist_id.to_string())
     }
 
-    /// Round time so far, pauses excluded.
     /// The user paused (the headset came off, the page was hidden, the pause button): the status moves and a new
     /// pause epoch starts. The caller stops the clock.
     pub fn enter_pause(&mut self) {
@@ -585,6 +584,7 @@ impl SessionState {
         self.paused_wall = None;
     }
 
+    /// Round time so far, pauses excluded.
     pub fn elapsed_ms(&self, now: Instant) -> u64 {
         let total = now.saturating_duration_since(self.started_at).as_millis() as u64;
         let paused = self.paused_total_ms

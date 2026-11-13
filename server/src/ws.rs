@@ -235,6 +235,8 @@ struct HubInner {
     release_pending: bool,
     /// After a release that could not end every voice: when to try again.
     release_retry_at: Option<Instant>,
+    /// Releases in a row that could not end every voice (the retry backs off: 5 ticks, doubling, at most 60 s).
+    release_failures: u32,
 }
 
 pub struct Hub {
@@ -684,6 +686,7 @@ pub async fn attach(app: &AppState, id: Uuid, handle: Arc<Mutex<SessionState>>) 
             released_epoch: None,
             release_pending: false,
             release_retry_at: None,
+            release_failures: 0,
         }),
         acks: std::sync::Mutex::new(HashMap::new()),
         whiteboard,
@@ -1039,16 +1042,21 @@ async fn drive(app: AppState, hub: Arc<Hub>, handle: Arc<Mutex<SessionState>>) {
         };
         if let Some(epoch) = release {
             let (app, hub, handle) = (app.clone(), hub.clone(), handle.clone());
-            let retry = timing.tick * 5;
+            let first_retry = timing.tick * 5;
             tokio::spawn(async move {
                 let done = release_voices(&app, &hub, &handle, epoch).await;
                 let mut h = hub.inner.lock().await;
                 h.release_pending = false;
                 if done == Release::Failed {
-                    h.release_retry_at = Some(Instant::now() + retry);
+                    let wait = first_retry
+                        .saturating_mul(1 << h.release_failures.min(4))
+                        .min(RELEASE_RETRY_MAX);
+                    h.release_failures += 1;
+                    h.release_retry_at = Some(Instant::now() + wait);
                 } else {
                     h.released_epoch = Some(epoch);
                     h.release_retry_at = None;
+                    h.release_failures = 0;
                 }
             });
         }
@@ -1077,6 +1085,9 @@ async fn drive(app: AppState, hub: Arc<Hub>, handle: Arc<Mutex<SessionState>>) {
         }
     }
 }
+
+/// The longest wait between two tries of a voice release that could not end every voice.
+const RELEASE_RETRY_MAX: Duration = Duration::from_secs(60);
 
 /// How a voice release went.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -629,12 +629,13 @@ async fn release_waits_for_a_resume_in_flight() {
     // Fish is slow: the resume holds the Fish lock while it mints, and the 45 s release comes due meanwhile.
     let guard = hub.fish_lock.lock().await;
     let resume_call = resume(&app, &cookie, &id);
+    // Generous margins so the resume queues on the lock first even on a loaded runner.
     let release = async {
-        tokio::time::sleep(Duration::from_millis(300)).await;
+        tokio::time::sleep(Duration::from_millis(1000)).await;
         ws::release_voices(&app.state, &hub, &handle, epoch).await
     };
     let unlock = async move {
-        tokio::time::sleep(Duration::from_millis(600)).await;
+        tokio::time::sleep(Duration::from_millis(1500)).await;
         drop(guard);
     };
     let (res, released, ()) = tokio::join!(resume_call, release, unlock);
@@ -880,9 +881,10 @@ async fn reloaded_paused_round_releases_on_the_original_pause_clock() {
 
 #[tokio::test]
 async fn resume_from_pause_needs_budget_left() {
+    // 32 s of pause budget, 30 s needed to resume.
     let app = live::test_app(Options {
         timing: SessionTiming {
-            pause_limit: Duration::from_secs(4),
+            pause_limit: Duration::from_secs(32),
             ..roomy()
         },
         ..Options::default()
@@ -890,14 +892,22 @@ async fn resume_from_pause_needs_budget_left() {
     .await;
     let base = app.serve().await;
     let (cookie, id, token) = new_session(&app, "fake").await;
+    // Almost all of it left: resumes.
+    let ws = paused(&base, &id, &token, 1).await;
+    let res = resume(&app, &cookie, &id).await;
+    assert_eq!(res.status, StatusCode::OK, "{}", res.body);
+    let token = res.body["client_token"].as_str().unwrap().to_string();
+    drop(ws);
+    // Paused again until under 30 s are left: refused (the user would not be back in time).
     let _ws = paused(&base, &id, &token, 1).await;
+    tokio::time::sleep(Duration::from_millis(2500)).await;
     let res = resume(&app, &cookie, &id).await;
     assert_eq!(res.status, StatusCode::CONFLICT, "{}", res.body);
     assert_eq!(res.body["code"], "resume_expired");
 }
 
 #[tokio::test]
-async fn resumes_from_pause_are_capped() {
+async fn pause_resumes_past_the_cap_use_counted_ones() {
     let app = live::test_app(Options {
         timing: roomy(),
         ..Options::default()
@@ -905,17 +915,20 @@ async fn resumes_from_pause_are_capped() {
     .await;
     let base = app.serve().await;
     let (cookie, id, mut token) = new_session(&app, "fake").await;
-    for i in 0..10 {
+    for i in 0..11 {
         let ws = paused(&base, &id, &token, 1).await;
         let res = resume(&app, &cookie, &id).await;
         assert_eq!(res.status, StatusCode::OK, "resume {i}: {}", res.body);
         token = res.body["client_token"].as_str().unwrap().to_string();
         drop(ws);
     }
-    let _ws = paused(&base, &id, &token, 1).await;
-    let res = resume(&app, &cookie, &id).await;
-    assert_eq!(res.status, StatusCode::CONFLICT, "{}", res.body);
-    assert_eq!(res.body["code"], "resume_limit");
+    // Ten free ones, then the eleventh used one of the 3.
+    let count: i32 = sqlx::query_scalar("select resume_count from sessions where id = $1")
+        .bind(Uuid::parse_str(&id).unwrap())
+        .fetch_one(&app.state.db)
+        .await
+        .unwrap();
+    assert_eq!(count, 1);
 }
 
 #[tokio::test]
@@ -942,4 +955,91 @@ async fn me_resumable_live_drop_ends_with_the_pause_budget() {
     // The pause budget ends first: not the 5 s window.
     let left = expires - Utc::now();
     assert!(left <= chrono::Duration::milliseconds(1500), "{left:?}");
+}
+
+#[tokio::test]
+async fn a_resume_that_fails_after_minting_ends_the_new_voice() {
+    let app = live::test_app(Options {
+        timing: SessionTiming {
+            voice_release: Duration::from_millis(300),
+            ..roomy()
+        },
+        ..Options::default()
+    })
+    .await;
+    let base = app.serve().await;
+    let (cookie, id, token) = new_session(&app, "fish").await;
+    let _ws = paused(&base, &id, &token, 1).await;
+    live::eventually("released", WAIT, || async {
+        marked_ended(&app, &id, "fish-1").await
+    })
+    .await;
+    // The database fails the resume after the new voice exists (its timeline row cannot be written).
+    sqlx::query(
+        "create function fail_resume() returns trigger language plpgsql as $$ \
+         begin if new.kind = 'resume' then raise exception 'no resume rows'; end if; return new; end $$",
+    )
+    .execute(&app.state.db)
+    .await
+    .unwrap();
+    sqlx::query(
+        "create trigger fail_resume before insert on session_events \
+         for each row execute function fail_resume()",
+    )
+    .execute(&app.state.db)
+    .await
+    .unwrap();
+    let res = resume(&app, &cookie, &id).await;
+    assert!(res.status.is_server_error(), "{} {}", res.status, res.body);
+    assert_eq!(
+        newest_fish(&app, &id).await,
+        "fish-2",
+        "a new voice was made"
+    );
+    live::eventually("the new voice ended", WAIT, || async {
+        marked_ended(&app, &id, "fish-2").await
+    })
+    .await;
+    // Still released: the next resume makes voices again, uncounted.
+    assert!(
+        app.state
+            .hubs
+            .get(&id)
+            .unwrap()
+            .voices_released
+            .load(std::sync::atomic::Ordering::SeqCst)
+    );
+}
+
+#[tokio::test]
+async fn join_is_refused_while_paused_with_voices_released() {
+    let app = live::test_app(Options {
+        timing: SessionTiming {
+            voice_release: Duration::from_millis(300),
+            ..roomy()
+        },
+        ..Options::default()
+    })
+    .await;
+    let base = app.serve().await;
+    let cookie = app.guest().await;
+    let res = app.create(&cookie, live::full_req("fish")).await;
+    assert_eq!(res.status, StatusCode::OK, "{}", res.body);
+    let id = res.body["session_id"].as_str().unwrap().to_string();
+    let token = res.body["client_token"].as_str().unwrap().to_string();
+    let _ws = paused(&base, &id, &token, 1).await;
+    live::eventually("released", WAIT, || async {
+        marked_ended(&app, &id, "fish-1").await
+    })
+    .await;
+    let res = app
+        .call(
+            Method::POST,
+            &format!("/api/sessions/{id}/panelists/p2/join"),
+            Some(&cookie),
+            Some(json!({"opening_line": "Hi, I'm Ana."})),
+        )
+        .await;
+    assert_eq!(res.status, StatusCode::CONFLICT, "{}", res.body);
+    assert_eq!(app.fish_calls("POST", "/v1/agent/sessions").await.len(), 1);
 }

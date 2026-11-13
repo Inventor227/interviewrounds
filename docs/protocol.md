@@ -37,10 +37,13 @@ JSON; cookie `ir_id` identifies the device/user; all under same origin. A new gu
   keep working and the try does not count. Then earlier tokens stop working and their sockets close with `4401`; the
   interviewer's next turn knows the candidate is back (it welcomes them back briefly and restates where they were in
   one sentence). A **paused** round can be resumed whether or not its socket dropped, for as long as its pause budget
-  lasts (`resume_expired` with under 5 s of it left), and such a resume does not use up one of the 3; neither does
-  the first resume after a voice release (`round.state.voices_released`), even if the round went live meanwhile.
-  These uncounted resumes are capped at 10 per round (`resume_limit`). This is how the browser gets new voices after
-  they were released (see Pause). Every resume gives the page a fresh 3-minute window to connect, and a resume from a
+  lasts (`resume_expired` with under 30 s of it left: the time until the user is back in the room still counts as
+  pause), and such a resume does not use up one of the 3; neither does the first resume after a voice release
+  (`round.state.voices_released`), even if the round went live meanwhile. After 10 such uncounted resumes a resume
+  uses up one of the 3 instead. This is how the browser gets new voices after they were released (see Pause). Two
+  resumes at once run one after the other: the later one wins (the earlier page's token closes with `4401` and its
+  voice ends), and since the first already took the round out of its pause, the later one counts against the 3. A
+  resume that fails after making new voices ends them at once. Every resume gives the page a fresh 3-minute window to connect, and a resume from a
   pause keeps the round clock stopped until the user is back (see `round.state`).
 - `POST /api/sessions/{id}/end` `{reason:"completed"|"user_ended"|"time_limit"|"disconnected"|"headset_removed"}` → 202. Ends
   the round at once with this reason (also during the goodbye after `ui.event {kind: "end"}`).
@@ -200,8 +203,8 @@ Sequencing and acks:
   - **Voice release.** After 45 s in one pause (a new pause starts the 45 s again) the server ends every voice
     session of the round (they bill per minute while idle) and sets `round.state.voices_released: true`; the browser
     also sees its voice sessions end. It survives a restart: a reloaded round keeps the time its pause began, and the
-    janitor ends the voices of a paused round nobody reloaded. A voice end that fails is tried again until Fish
-    confirms it.
+    janitor ends the voices of a paused round nobody reloaded. A voice end that fails is tried again (backing off
+    to once a minute) while the pause lasts; after that, the next resume or the round's settlement ends it.
   - **Back.** If `voices_released` is true, the browser calls `POST /resume` (new voices, not counted) and, once the
     user is back in place, sends `[event: resume]` (or `ui.event {kind: "resume"}`): the clock runs again from then.
     Otherwise (under 45 s) it sends `ui.event {kind: "resume"}`, unmutes, keeps the same voices, and sends

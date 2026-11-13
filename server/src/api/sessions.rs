@@ -46,8 +46,9 @@ const CREATE_LOCK: i64 = 0x4952_5345_5353;
 pub const MAX_RESUMES: i32 = 3;
 /// Resumes from a pause (or after a voice release) allowed per session; they do not use up `MAX_RESUMES`.
 pub const MAX_PAUSE_RESUMES: i64 = 10;
-/// A resume from a pause needs at least this much of the pause budget left (less, and it would end at once).
-pub const RESUME_MIN_BUDGET: Duration = Duration::from_secs(5);
+/// A resume from a pause needs at least this much of the pause budget left: the time until the user is back in the
+/// room (page load, entering the room) still counts as pause, so less would end the round before they are in.
+pub const RESUME_MIN_BUDGET: Duration = Duration::from_secs(30);
 /// A prewarm younger than this still holds the prompt cache (5 minutes): no need to write it again.
 const PREWARM_FRESH: Duration = Duration::from_secs(240);
 pub const DEV_KEY_HEADER: &str = "x-dev-key";
@@ -278,11 +279,20 @@ async fn mint_voices(
     session_id: Uuid,
     specs: Vec<MintSpec>,
 ) -> AppResult<Vec<(String, Value, String)>> {
-    let mut out = Vec::new();
+    let mut out: Vec<(String, Value, String)> = Vec::new();
     for spec in specs {
-        let (token, entry) = mint_fish(app, &spec, None).await?;
-        track(app, session_id, &entry).await?;
-        out.push((spec.panelist_id, fish_voice(&token), token.session_id));
+        let minted = match mint_fish(app, &spec, None).await {
+            Ok((token, entry)) => track(app, session_id, &entry).await.map(|()| token),
+            Err(err) => Err(err),
+        };
+        match minted {
+            Ok(token) => out.push((spec.panelist_id, fish_voice(&token), token.session_id)),
+            Err(err) => {
+                // Failed part way (a joined panel): the voices made so far are ended, not left billing.
+                persist::end_in_background(app, session_id, out.into_iter().map(|v| v.2).collect());
+                return Err(err);
+            }
+        }
     }
     Ok(out)
 }
@@ -833,7 +843,7 @@ async fn resume_inner(app: &AppState, identity: &Identity, id: &str) -> AppResul
     let from_pause = handle.lock().await.status == SessionStatus::Paused;
     // The voices went in a long pause and none were made since (the round may have gone live meanwhile).
     let released = hub.voices_released.load(Ordering::SeqCst);
-    let uncounted = from_pause || released;
+    let mut uncounted = from_pause || released;
     if from_pause && ws::pause_budget_left(app, &hub, &handle).await < RESUME_MIN_BUDGET {
         return Ok(refuse(
             StatusCode::CONFLICT,
@@ -841,7 +851,7 @@ async fn resume_inner(app: &AppState, identity: &Identity, id: &str) -> AppResul
             "This round can no longer be resumed.",
         ));
     }
-    let counted: Option<i32> = if uncounted {
+    if uncounted {
         let done: i64 = sqlx::query_scalar(
             "select count(*) from session_events \
              where session_id = $1 and kind = 'resume' and data->>'counted' = 'false'",
@@ -849,7 +859,11 @@ async fn resume_inner(app: &AppState, identity: &Identity, id: &str) -> AppResul
         .bind(row.id)
         .fetch_one(&app.db)
         .await?;
-        (done < MAX_PAUSE_RESUMES).then_some(0)
+        // Past the cap, the resume uses up one of the counted ones instead of being refused.
+        uncounted = done < MAX_PAUSE_RESUMES;
+    }
+    let counted: Option<i32> = if uncounted {
+        Some(0)
     } else {
         sqlx::query_scalar(
             "update sessions set resume_count = resume_count + 1 \
@@ -875,7 +889,7 @@ async fn resume_inner(app: &AppState, identity: &Identity, id: &str) -> AppResul
 
     // New voices first (a failed mint leaves the old token and voices working), then the token rotates. The old
     // Fish sessions went with the page: they are ended once the new ones exist.
-    let voices = if row.voice == "fish" {
+    let (voices, stale) = if row.voice == "fish" {
         let fresh = persist::fetch_session(&app.db, row.id)
             .await?
             .ok_or(AppError::NotFound)?;
@@ -906,51 +920,52 @@ async fn resume_inner(app: &AppState, identity: &Identity, id: &str) -> AppResul
                 return Err(err);
             }
         };
-        persist::end_in_background(app, row.id, stale);
-        hub.voices.lock().unwrap_or_else(|e| e.into_inner()).clear();
-        remember_voices(&hub, &voices);
-        hub.voices_released.store(false, Ordering::SeqCst);
-        voices
+        (voices, stale)
     } else {
-        Vec::new()
+        (Vec::new(), Vec::new())
     };
 
-    let mut tx = app.db.begin().await?;
-    let (token, _, revoked) = persist::issue_token(&mut tx, row.id, true).await?;
-    // For the timeline and the cap on uncounted resumes; the report's pause closes when the user is back.
-    let from = if from_pause {
-        "pause"
-    } else if released {
-        "release"
-    } else {
-        "drop"
-    };
-    sqlx::query("insert into session_events (session_id, kind, data) values ($1, 'resume', $2)")
+    // From here on a failure must not leave the new voices billing: nobody got them, so they are ended at once (the
+    // old voices and the release flag stay as they were).
+    let finish = async {
+        let mut tx = app.db.begin().await?;
+        let (token, _, revoked) = persist::issue_token(&mut tx, row.id, true).await?;
+        // For the timeline and the cap on uncounted resumes; the report's pause closes when the user is back.
+        let from = if from_pause {
+            "pause"
+        } else if released {
+            "release"
+        } else {
+            "drop"
+        };
+        sqlx::query(
+            "insert into session_events (session_id, kind, data) values ($1, 'resume', $2)",
+        )
         .bind(row.id)
         .bind(json!({"from": from, "counted": !uncounted}))
         .execute(&mut *tx)
         .await?;
-    tx.commit().await?;
-    hub.kick(revoked);
-    // Before the round goes live: the driver must never see it live on the clock of an older drop.
-    hub.resumed(from_pause).await;
+        tx.commit().await?;
+        hub.kick(revoked);
+        // Before the round goes live: the driver must never see it live on the clock of an older drop.
+        hub.resumed(from_pause).await;
 
-    let res = {
-        let mut st = handle.lock().await;
-        if !st.pending_notes.iter().any(|n| n == RESUME_NOTE) {
-            st.pending_notes.push(RESUME_NOTE.to_string());
-        }
-        if st.status == SessionStatus::Paused {
-            // The clock stays stopped until the user is back (`Hub::wake`).
-            st.leave_pause();
-        }
-        let status = if st.status == SessionStatus::Created {
-            "created"
-        } else {
-            "live"
-        };
-        // A fresh offline window for the janitor too, should the server restart before the page connects.
-        sqlx::query(
+        let res = {
+            let mut st = handle.lock().await;
+            if !st.pending_notes.iter().any(|n| n == RESUME_NOTE) {
+                st.pending_notes.push(RESUME_NOTE.to_string());
+            }
+            if st.status == SessionStatus::Paused {
+                // The clock stays stopped until the user is back (`Hub::wake`).
+                st.leave_pause();
+            }
+            let status = if st.status == SessionStatus::Created {
+                "created"
+            } else {
+                "live"
+            };
+            // A fresh offline window for the janitor too, should the server restart before the page connects.
+            sqlx::query(
             "update sessions set status = $2, \
                     last_socket_at = case when started_at is null then last_socket_at else now() end \
              where id = $1 and status in ('created', 'live', 'paused')",
@@ -959,17 +974,37 @@ async fn resume_inner(app: &AppState, identity: &Identity, id: &str) -> AppResul
         .bind(status)
         .execute(&app.db)
         .await?;
-        prewarm(app, &hub, &st, row.id);
-        persist::save_live(
-            &app.db,
-            row.id,
-            &persist::snapshot(&st, Instant::now()),
-            st.turns.len(),
-        )
-        .await?;
-        let limits = current_limits(app, identity).await?;
-        create_res(&st, &token, &voices, mode, &limits)
+            prewarm(app, &hub, &st, row.id);
+            persist::save_live(
+                &app.db,
+                row.id,
+                &persist::snapshot(&st, Instant::now()),
+                st.turns.len(),
+            )
+            .await?;
+            let limits = current_limits(app, identity).await?;
+            create_res(&st, &token, &voices, mode, &limits)
+        };
+        Ok::<_, AppError>((res, from))
     };
+    let (res, from) = match finish.await {
+        Ok(done) => done,
+        Err(err) => {
+            let minted: Vec<String> = voices.iter().map(|v| v.2.clone()).collect();
+            if !minted.is_empty() {
+                tracing::warn!(session_id = %row.id, voices = minted.len(), "resume failed after minting; new voices ended");
+                persist::end_in_background(app, row.id, minted);
+            }
+            return Err(err);
+        }
+    };
+    if row.voice == "fish" {
+        // The old Fish sessions went with the page.
+        persist::end_in_background(app, row.id, stale);
+        hub.voices.lock().unwrap_or_else(|e| e.into_inner()).clear();
+        remember_voices(&hub, &voices);
+        hub.voices_released.store(false, Ordering::SeqCst);
+    }
     tracing::info!(session_id = %row.id, from, "session resumed");
     Ok(Json(res).into_response())
 }
