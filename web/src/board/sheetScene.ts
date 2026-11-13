@@ -22,6 +22,8 @@ export interface DevSheetHandle {
   toWorld(points: [number, number][], hCm?: number): Vec3[];
   ghosts(list: GhostOp[]): void;
   say(text: string): string;
+  /** The sheet's board texture as a PNG data URL (what the wall board shows). */
+  snapshot(): string;
   sent: BoardOp[];
   destroy(): void;
 }
@@ -173,6 +175,10 @@ export async function createDevSheet(root: HTMLElement): Promise<DevSheetHandle>
     say: (text) => {
       const hit = xr.say(text, performance.now());
       return hit ? `${hit.mode} ${hit.label}` : 'nothing';
+    },
+    snapshot: () => {
+      const img = xr.sheet.texture.image as HTMLCanvasElement | OffscreenCanvas;
+      return 'toDataURL' in img ? img.toDataURL('image/png') : '';
     },
     destroy() {
       xr.destroy();
