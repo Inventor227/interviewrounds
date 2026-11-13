@@ -37,8 +37,13 @@ describe('the onboarding ghost hand', () => {
     expect(ONBOARD_COPY.controllers.box).toBe('Pull the trigger and draw a box');
     // Nothing here tells anyone to put a controller down.
     expect(JSON.stringify(ONBOARD_COPY)).not.toMatch(/put .*down/i);
-    let skipped = 0;
-    const v = new OnboardingView(() => skipped++);
+    const v = new OnboardingView();
+    v.setInput('controllers');
+    v.show('box', 0);
+    expect(v.line).toBe('Pull the trigger and draw a box');
+    v.setInput('hands');
+    v.show(null, 0);
+    expect(v.line).toBeNull();
     expect(v.group.visible).toBe(false);
     v.show('box', 0);
     v.update(1500);
@@ -50,6 +55,5 @@ describe('the onboarding ghost hand', () => {
     v.show(null, 3000);
     expect(v.group.visible).toBe(false);
     v.dispose();
-    expect(skipped).toBe(0);
   });
 });

@@ -65,6 +65,27 @@ await page(() => {
 });
 await sleep(700);
 await shot('hint-controllers');
+// A controller instead of hands: the ray on Resume and the trigger must do what a poke or a pinch does.
+await page(() => globalThis.__xrApp.ui.setNotice('paused'));
+await look(S, -32);
+const target = await page(() => {
+  const g = globalThis.__xrApp.ui.status.group;
+  g.updateWorldMatrix(true, false);
+  const v = g.position.clone().set(-0.068, -0.03, 0.002);
+  g.localToWorld(v);
+  return { x: v.x, y: v.y, z: v.z };
+});
+await L.call('xr', 'set-input-mode', { mode: 'controller' });
+await L.call('xr', 'set-transform', { device: 'controller-right', position: { x: S.head.x + 0.22, y: S.head.y - 0.3, z: S.head.z - 0.08 } });
+await L.call('xr', 'look-at', { device: 'controller-right', target });
+await sleep(1500);
+await shot('controller-ray-on-resume');
+const before = await page(() => globalThis.__round.controller.state);
+await L.call('xr', 'select', { device: 'controller-right', duration: 0.25 });
+await sleep(2500);
+out.controller = { target, before, after: await page(() => globalThis.__round.controller.state) };
+stage('controller trigger on Resume', out.controller);
+if (out.controller.before !== 'paused' || !['live', 'greeting'].includes(out.controller.after)) console.error('WARNING: the controller ray and trigger did not press Resume', out.controller);
 save('cards', out);
 await page(() => globalThis.__round.controller.end());
 console.log('cards ok');

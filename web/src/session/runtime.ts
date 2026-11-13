@@ -433,25 +433,46 @@ export function createRoundRuntime({ preview }: RuntimeOptions): RoundController
     const s = store;
     if (!a || !b || !s || taught || !needsOnboarding({ kit: b.kit.id, done: me?.onboarding_done, preview })) return 'none';
     if (!onboarding) {
-      const { OnboardingView, mountOnboardingView } = await import('../xr/onboardingView');
+      const { OnboardingView, ONBOARD_SKIP } = await import('../xr/onboardingView');
       if (disposed || app !== a) return 'none';
       const skips = new Set<() => void>();
-      const view = new OnboardingView(() => {
-        a.sounds.click();
-        for (const cb of [...skips]) cb();
-      });
+      const view = new OnboardingView();
       // The input lane's `activeInput()` and `onInputChange` once they exist on the app; hands until then.
       const input = a as unknown as { activeInput?: () => 'hands' | 'controllers'; onInputChange?: (cb: (i: 'hands' | 'controllers') => void) => () => void };
       view.setInput(input.activeInput?.() ?? 'hands');
+      a.sheetAnchor.add(view.group);
+      let shownLine: string | null = null;
+      // The line and Skip are on the status card: reachable by poke, pinch and controller ray like every other card.
+      const showLine = () => {
+        const line = view.line;
+        if (line) {
+          shownLine = line;
+          a.ui.status.showText(line, '', null, view.showing === 'box' ? [{ label: ONBOARD_SKIP, action: 'skip' }] : []);
+        } else if (shownLine !== null) {
+          // Only our own line is taken down (a card of the round may have replaced it meanwhile).
+          if (a.ui.status.view.title === shownLine) a.ui.hideStatus();
+          shownLine = null;
+          a.ui.restoreNotice();
+        }
+      };
       cleanups.push(
-        mountOnboardingView(a.world, a.sheetAnchor, view),
+        () => view.dispose(),
         a.onFrame((_dt, t) => view.update(t)),
-        input.onInputChange?.((i) => view.setInput(i)) ?? (() => undefined),
+        a.ui.onAction((act) => {
+          if (act === 'skip') for (const cb of [...skips]) cb();
+        }),
+        input.onInputChange?.((i) => {
+          view.setInput(i);
+          showLine();
+        }) ?? (() => undefined),
       );
       onboarding = new Onboarding({
         cards: () => s.board.items.filter((i) => i.kind !== 'ink').map((i) => ({ id: i.id, labelled: !!((i as { label?: string | null }).label ?? (i as { text?: string | null }).text) })),
         onBoard: (cb) => s.onChange(() => cb()),
-        show: (step) => view.show(step, performance.now()),
+        show: (step) => {
+          view.show(step, performance.now());
+          showLine();
+        },
         onSkip: (cb) => {
           skips.add(cb);
           return () => skips.delete(cb);

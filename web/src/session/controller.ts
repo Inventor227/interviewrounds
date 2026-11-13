@@ -1207,6 +1207,8 @@ export class RoundController {
       case 'report':
       case 'history':
         return this.events.emit('action', a);
+      case 'skip':
+        return; // the onboarding's Skip: the room's own (session/runtime.ts)
     }
   }
 

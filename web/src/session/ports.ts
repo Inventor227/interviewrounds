@@ -32,7 +32,7 @@ export type ControllerState =
  * "Tap to hear your interviewer" action shown when agent audio seems blocked. Every action is a
  * user gesture, so the controller also retries blocked audio on each one.
  */
-export type UiAction = 'mute' | 'unmute' | 'pause' | 'resume' | 'end' | 'hear' | 'retry' | 'report' | 'history' | 'stay';
+export type UiAction = 'mute' | 'unmute' | 'pause' | 'resume' | 'end' | 'hear' | 'retry' | 'report' | 'history' | 'stay' | 'skip';
 
 /** XRSession visibility: the system menu covers the room (`visible-blurred`) or the headset is off (`hidden`). */
 export type XRVisibilityLike = 'visible' | 'visible-blurred' | 'hidden';

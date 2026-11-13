@@ -1,12 +1,11 @@
 // What the first-round onboarding shows on the sheet: a translucent ghost hand that pinches and draws a box in a
-// loop (3 s), a short line beyond the sheet's far edge ("Pinch and draw a box", then "Say its name") and a Skip
-// button on that line. Everything lives in the sheet's frame, so it lies on the user's desk with the sheet.
-// One merged mesh for the hand, one for the stroke: two draw calls while it shows, none after.
+// loop (3 s), in the near half of the sheet. It lives in the sheet's frame, so it lies on the user's desk with the
+// sheet. One merged mesh for the hand, one for the stroke: two draw calls while it shows, none after. The line
+// ("Pinch and draw a box", then "Say its name") and the Skip button are on the round's status card, which stands
+// above the far half of the sheet in reach of a poke, a pinch or a controller ray.
 
-import { PokeInteractable, RayInteractable, UIKitDocument, type World } from '@iwsdk/core';
 import { BoxGeometry, BufferAttribute, BufferGeometry, CapsuleGeometry, Group, Mesh, MeshBasicMaterial, SphereGeometry, type Object3D } from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
-import { button, panel, set, show, text, type Button } from './ui/style';
 
 export type OnboardViewStep = 'box' | 'name';
 /** What the user draws with right now. The input lane provides the live value (`activeInput`, `onInputChange`). */
@@ -26,8 +25,11 @@ const DRAW_S = 2.0;
 const SNAP_S = 0.25;
 
 /** The demonstrated box on the sheet, in metres in the sheet frame (x right, z toward the user, origin near edge centre). */
-export const DEMO_BOX = { x0: -0.1, x1: 0.06, zFar: -0.3, zNear: -0.18 };
+export const DEMO_BOX = { x0: -0.1, x1: 0.06, zFar: -0.2, zNear: -0.08 };
 const STROKE_W = 0.004;
+/** The ghost hand: a dark, see-through slate, so it reads on the white sheet and on a dark desk alike. */
+const HAND_COLOR = 0x26303c;
+const HAND_OPACITY = 0.55;
 const HOVER = 0.012;
 
 /** Where the pinch point is at loop time t (s): position in the sheet frame, how much of the box is drawn, opacity. */
@@ -94,21 +96,16 @@ function handGeometry(): BufferGeometry {
 export class OnboardingView {
   /** Add to the sheet frame (Room.sheetAnchor). */
   readonly group = new Group();
-  /** The line and the Skip button (a UIKit panel; needs ray and poke interactables). */
-  readonly card = new Group();
   private readonly hand: Mesh<BufferGeometry, MeshBasicMaterial>;
   private readonly stroke: Mesh<BufferGeometry, MeshBasicMaterial>;
   private readonly strokePos: BufferAttribute;
-  private readonly doc: UIKitDocument;
-  private readonly line;
-  private readonly skip: Button;
   private step: OnboardViewStep | null = null;
   private input: ActiveInput = 'hands';
   private t0 = 0;
 
-  constructor(onSkip: () => void) {
+  constructor() {
     this.group.name = 'onboarding';
-    this.hand = new Mesh(handGeometry(), new MeshBasicMaterial({ color: 0xf4f2ee, transparent: true, opacity: 0.5, depthWrite: false, toneMapped: false }));
+    this.hand = new Mesh(handGeometry(), new MeshBasicMaterial({ color: HAND_COLOR, transparent: true, opacity: HAND_OPACITY, depthWrite: false, toneMapped: false }));
     this.hand.name = 'ghost-hand';
     this.hand.renderOrder = 20;
     // The stroke: four quads round the box, grown as the hand passes.
@@ -124,17 +121,6 @@ export class OnboardingView {
     this.stroke.renderOrder = 19;
     this.group.add(this.stroke, this.hand);
 
-    this.card.name = 'onboarding-card';
-    const root = panel({ flexDirection: 'row', alignItems: 'center', gap: 2, paddingX: 2, paddingY: 1.2, borderRadius: 2.2 });
-    this.line = text('', { fontSize: 1.7, fontWeight: 'semi-bold' });
-    this.skip = button(ONBOARD_SKIP, { width: 9, height: 4.4, onClick: onSkip });
-    root.add(this.line, this.skip.root);
-    this.doc = new UIKitDocument(root);
-    this.card.add(this.doc);
-    // Standing just beyond the sheet's far edge, leaning back toward the user's eyes (the frame itself is tilted 15°).
-    this.card.position.set(0, 0.06, -0.44);
-    this.card.rotation.set(-0.95, 0, 0);
-    this.group.add(this.card);
     this.group.visible = false;
   }
 
@@ -144,8 +130,11 @@ export class OnboardingView {
     this.t0 = nowMs;
     this.group.visible = step !== null;
     this.hand.visible = this.stroke.visible = step === 'box';
-    if (step) set(this.line, { text: ONBOARD_COPY[this.input][step] });
-    show(this.skip.root, step === 'box');
+  }
+
+  /** The line for the step on screen (for the status card). */
+  get line(): string | null {
+    return this.step ? ONBOARD_COPY[this.input][this.step] : null;
   }
 
   /**
@@ -154,9 +143,7 @@ export class OnboardingView {
    * box path from demoAt) belongs here, swapped in for `this.hand` when input is 'controllers'.
    */
   setInput(input: ActiveInput): void {
-    if (input === this.input) return;
     this.input = input;
-    if (this.step) set(this.line, { text: ONBOARD_COPY[input][this.step] });
   }
 
   get showing(): OnboardViewStep | null {
@@ -167,7 +154,7 @@ export class OnboardingView {
     if (this.step !== 'box') return;
     const d = demoAt((nowMs - this.t0) / 1000);
     this.hand.position.set(d.x, d.y, d.z);
-    this.hand.material.opacity = 0.5 * d.alpha;
+    this.hand.material.opacity = HAND_OPACITY * d.alpha;
     this.stroke.material.opacity = (d.snapped ? 1 : 0.85) * Math.min(1, d.alpha + (d.snapped ? 0 : 1));
     this.writeStroke(d.drawn);
   }
@@ -214,18 +201,5 @@ export class OnboardingView {
     this.hand.material.dispose();
     this.stroke.geometry.dispose();
     this.stroke.material.dispose();
-    this.doc.dispose();
   }
-}
-
-/** Puts the view on the sheet and makes its Skip button reachable by ray and by touch. Returns a cleanup. */
-export function mountOnboardingView(world: World, sheetAnchor: Object3D, view: OnboardingView): () => void {
-  sheetAnchor.add(view.group);
-  const e = world.createTransformEntity(view.card);
-  e.addComponent(RayInteractable);
-  e.addComponent(PokeInteractable);
-  return () => {
-    e.destroy();
-    view.dispose();
-  };
 }

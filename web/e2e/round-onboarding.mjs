@@ -47,9 +47,49 @@ if (out.waiting.some((w) => w.state !== 'placing' || w.hello || w.lines > 0)) aw
 await shot('03-ghost-hand-later');
 out.view = await page(() => {
   const v = globalThis.__round.room.debug.onboarding.view;
-  return { cardVisible: v.card.visible, hand: v.group.getObjectByName('ghost-hand').visible, calls: globalThis.__xrApp.stats().callsPerView };
+  return { card: globalThis.__xrApp.ui.status.view, hand: v.group.getObjectByName('ghost-hand').visible, calls: globalThis.__xrApp.stats().callsPerView };
 });
 
+if (process.env.SHOTS_ONLY === '1') {
+  // A look at the ghost hand and the line only: skip (one pinch on Skip is the same call) and stop.
+  // Skip through the card's own button action (what a poke, a pinch or a trigger on it sends).
+  out.skip = await page(() => {
+    globalThis.__xrApp.ui.emit('skip');
+    return globalThis.__round.room.debug.onboarding.showing();
+  });
+  await waitState(['live'], 120000);
+  stage('skipped', { ...out, ...(await started()) });
+  // A controller instead of hands: the ray on the paused card's Resume and the trigger must do what a pinch does.
+  await page(() => globalThis.__round.controller.pause('user'));
+  await look(S, -32);
+  await sleep(1500);
+  const target = await page(() => {
+    const g = globalThis.__xrApp.ui.status.group;
+    g.updateWorldMatrix(true, false);
+    const v = g.position.clone().set(-0.068, -0.03, 0.002);
+    g.localToWorld(v);
+    return { x: v.x, y: v.y, z: v.z };
+  });
+  const d = { x: S.head.x - target.x, y: S.head.y - target.y, z: S.head.z - target.z };
+  const n = Math.hypot(d.x, d.y, d.z);
+  const from = { x: target.x + (d.x / n) * 0.25 + 0.03, y: target.y + (d.y / n) * 0.25 - 0.03, z: target.z + (d.z / n) * 0.25 };
+  await L.call('xr', 'set-input-mode', { mode: 'controller' });
+  await L.call('xr', 'set-transform', { device: 'controller-right', position: from });
+  await L.call('xr', 'look-at', { device: 'controller-right', target });
+  await sleep(2000);
+  const dev = await L.call('xr', 'get-transform', { device: 'controller-right' }).catch((e) => String(e).slice(0, 200));
+  await shot('09-controller-ray-on-resume');
+  const before = await page(() => globalThis.__round.controller.state);
+  await L.call('xr', 'select', { device: 'controller-right', duration: 3 });
+  await sleep(5000);
+  out.controller = { target, from, dev: JSON.stringify(dev).slice(0, 300), before, after: await page(() => globalThis.__round.controller.state), sources: await page(() => [...globalThis.__xrApp.world.session.inputSources].map((s) => ({ hand: !!s.hand, mode: s.targetRayMode, side: s.handedness }))) };
+  stage('controller trigger on Resume', out.controller);
+  if (out.controller.after === 'paused') console.error('WARNING: the controller ray and trigger did not press Resume');
+  save('round-onboarding-shots', out);
+  await page(() => globalThis.__round.controller.end());
+  console.log('round onboarding shots ok');
+  process.exit(0);
+}
 const boxAt = Date.now();
 await draw(roughBox(24, 22, 14, 9, 3));
 const made = await until('the box became a card', () => {
@@ -66,11 +106,11 @@ stage('named', out.afterName);
 await waitState(['greeting', 'live'], 60000);
 stage('the round started', await started());
 // The line is up for 8 s at most, shorter than one software-rendered capture: show it again just for its shot.
-await page(() => globalThis.__round.room.debug.onboarding.view.show('name', performance.now()));
+await page(() => globalThis.__xrApp.ui.status.showText('Say its name'));
 await look(S, -48);
 await sleep(800);
 await shot('04-say-its-name');
-await page(() => globalThis.__round.room.debug.onboarding.view.show(null, performance.now()));
+await page(() => globalThis.__xrApp.ui.hideStatus());
 await waitState(['live'], 120000);
 await look(S, -14);
 await sleep(1000);

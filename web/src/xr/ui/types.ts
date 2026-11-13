@@ -2,7 +2,7 @@
 
 import type { SessionStatus } from '../../shared/types';
 
-export type RoundAction = 'mute' | 'unmute' | 'pause' | 'resume' | 'end' | 'hear' | 'retry' | 'report' | 'history' | 'stay' | 'captions';
+export type RoundAction = 'mute' | 'unmute' | 'pause' | 'resume' | 'end' | 'hear' | 'retry' | 'report' | 'history' | 'stay' | 'skip' | 'captions';
 
 export interface RoundUIState {
   status: SessionStatus;
