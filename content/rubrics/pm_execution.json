@@ -1,0 +1,92 @@
+{
+  "id": "rubric.pm_execution",
+  "round_types": [
+    "pm_execution"
+  ],
+  "title": "Metrics and execution",
+  "scale": {
+    "1": {
+      "label": "below",
+      "name": "Below the bar",
+      "meaning": "Concerning for this level; this alone would likely block an offer."
+    },
+    "2": {
+      "label": "developing",
+      "name": "Developing",
+      "meaning": "Some signal, but clear gaps for this level."
+    },
+    "3": {
+      "label": "meets_bar",
+      "name": "Meets the bar",
+      "meaning": "What a solid candidate at the chosen level shows."
+    },
+    "4": {
+      "label": "above_bar",
+      "name": "Above the bar",
+      "meaning": "Would read as the next level up."
+    }
+  },
+  "level_bar": {
+    "junior": "Sensible metrics with basic definitions; a structured list of causes to check.",
+    "mid": "North star, supporting metrics and a guardrail, each defined; a diagnosis that checks data and segments before guessing; a decision with reasons.",
+    "senior": "All of mid, plus precise definitions with window and unit, checks ordered by likelihood and effort, and decisions that consider long term effects and how to test them.",
+    "staff": "All of senior, plus the second order effects across teams, the experiment design, and how to reverse the decision if wrong."
+  },
+  "competencies": [
+    {
+      "id": "metric_definition",
+      "name": "Goals and metrics",
+      "weight": 1,
+      "looks_for": "A north star tied to user value, supporting metrics, a guardrail, and precise definitions.",
+      "descriptors": {
+        "1": "Vague metrics with no definition.",
+        "2": "A list of metrics with no hierarchy.",
+        "3": "North star, supporting metrics and a guardrail, each well defined.",
+        "4": "Precise definitions with window and unit, and the gaming risk of each named."
+      }
+    },
+    {
+      "id": "diagnosis",
+      "name": "Diagnosis",
+      "weight": 1,
+      "looks_for": "Data checks first, internal versus external causes, segment cuts, funnel step, checks in a sensible order.",
+      "descriptors": {
+        "1": "Guesses a single cause.",
+        "2": "Hypotheses listed with no order or structure.",
+        "3": "Clarifies, checks data quality, splits internal and external, segments, and orders the checks.",
+        "4": "Fast and complete without overlap, prioritised by likelihood and ease to check, and asks whether the change is noise."
+      }
+    },
+    {
+      "id": "tradeoff_decision",
+      "name": "Trade-off decisions",
+      "weight": 1,
+      "looks_for": "Making the call with data, stated assumptions and a threshold.",
+      "descriptors": {
+        "1": "Cannot decide.",
+        "2": "Decides without reasoning, or hedges to the end.",
+        "3": "Decides with data and stated assumptions.",
+        "4": "Considers long term effects, experiment design and how to reverse the decision."
+      }
+    },
+    {
+      "id": "execution",
+      "name": "Execution and next steps",
+      "weight": 1,
+      "looks_for": "Clear next steps, owners and order; dependencies and communication.",
+      "descriptors": {
+        "1": "No plan.",
+        "2": "A plan with no order or owners.",
+        "3": "Clear next steps with owners and order.",
+        "4": "Plans for risks, dependencies and who needs to hear what."
+      }
+    }
+  ],
+  "scoring_notes": [
+    "Numbers the candidate changes between answers count against Goals and metrics or Diagnosis, whichever they affect.",
+    "The data scientist's questions count the same as the lead's."
+  ],
+  "red_flags": [
+    "Hostile to the interviewers"
+  ]
+}

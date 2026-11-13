@@ -1,0 +1,92 @@
+{
+  "id": "rubric.pm_product_sense",
+  "round_types": [
+    "pm_product_sense"
+  ],
+  "title": "Product sense",
+  "scale": {
+    "1": {
+      "label": "below",
+      "name": "Below the bar",
+      "meaning": "Concerning for this level; this alone would likely block an offer."
+    },
+    "2": {
+      "label": "developing",
+      "name": "Developing",
+      "meaning": "Some signal, but clear gaps for this level."
+    },
+    "3": {
+      "label": "meets_bar",
+      "name": "Meets the bar",
+      "meaning": "What a solid candidate at the chosen level shows."
+    },
+    "4": {
+      "label": "above_bar",
+      "name": "Above the bar",
+      "meaning": "Would read as the next level up."
+    }
+  },
+  "level_bar": {
+    "junior": "A clear user, a real problem, one reasonable solution, and a metric that measures it.",
+    "mid": "A segment chosen for a reason, prioritised problems, two or three ideas with a reasoned pick and a concrete first version, and a metric with a guardrail.",
+    "senior": "All of mid, plus explicit prioritisation criteria, sequencing from first version to next, risks with mitigation, and saying what not to build.",
+    "staff": "All of senior, plus a non obvious insight tied to the company's goal and strengths, and a view on where the product goes over years."
+  },
+  "competencies": [
+    {
+      "id": "user_insight",
+      "name": "Users and problems",
+      "weight": 1,
+      "looks_for": "A segment chosen for a reason; specific, real, prioritised pain points.",
+      "descriptors": {
+        "1": "No segment, or generic problems.",
+        "2": "A segment picked without a reason; problems are plausible but not prioritised.",
+        "3": "A clear segment chosen for a reason, with real and prioritised pain points.",
+        "4": "A non obvious insight about the users, tied to the goal and the company's strengths."
+      }
+    },
+    {
+      "id": "solution",
+      "name": "Solution quality",
+      "weight": 1,
+      "looks_for": "Ideas traced to the chosen pain, a reasoned pick, and a concrete first version.",
+      "descriptors": {
+        "1": "One obvious idea, or a solution looking for a problem.",
+        "2": "Several ideas with a weak link to the chosen problem.",
+        "3": "Two or three ideas, one picked with a reason, and a concrete first version.",
+        "4": "Creative and feasible, with a sensible sequence from the first version to the next."
+      }
+    },
+    {
+      "id": "prioritisation",
+      "name": "Prioritisation and trade-offs",
+      "weight": 1,
+      "looks_for": "Explicit criteria applied to problems and solutions; what not to build.",
+      "descriptors": {
+        "1": "No prioritisation.",
+        "2": "Criteria mentioned but not applied.",
+        "3": "Explicit criteria such as reach, severity, impact and effort, applied to the choices.",
+        "4": "Trade-offs weighed against the goal, and a clear call on what not to build."
+      }
+    },
+    {
+      "id": "metrics",
+      "name": "Metrics and risks",
+      "weight": 1,
+      "looks_for": "A success metric tied to the problem, a guardrail, and risks with mitigation.",
+      "descriptors": {
+        "1": "No metric.",
+        "2": "A vanity metric such as downloads or page views.",
+        "3": "A success metric tied to the problem plus a guardrail.",
+        "4": "Leading and lagging metrics, and the main risks with mitigations."
+      }
+    }
+  ],
+  "scoring_notes": [
+    "Using a framework by name earns nothing by itself; the reasons behind each choice do.",
+    "Board stickies count when the candidate spoke to them."
+  ],
+  "red_flags": [
+    "Hostile to the interviewer"
+  ]
+}

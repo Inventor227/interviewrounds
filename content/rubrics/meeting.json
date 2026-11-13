@@ -1,0 +1,94 @@
+{
+  "id": "rubric.meeting",
+  "round_types": [
+    "meeting"
+  ],
+  "title": "Meeting",
+  "scale": {
+    "1": {
+      "label": "below",
+      "name": "Below the bar",
+      "meaning": "Concerning for this level; this alone would likely block an offer."
+    },
+    "2": {
+      "label": "developing",
+      "name": "Developing",
+      "meaning": "Some signal, but clear gaps for this level."
+    },
+    "3": {
+      "label": "meets_bar",
+      "name": "Meets the bar",
+      "meaning": "What a solid candidate at the chosen level shows."
+    },
+    "4": {
+      "label": "above_bar",
+      "name": "Above the bar",
+      "meaning": "Would read as the next level up."
+    }
+  },
+  "level_bar": {
+    "junior": "n/a",
+    "mid": "n/a",
+    "senior": "n/a",
+    "staff": "n/a"
+  },
+  "competencies": [
+    {
+      "id": "clarity",
+      "name": "Clarity and structure",
+      "weight": 1,
+      "looks_for": "The ask and the reason up front, in a logical order, tailored to the people in the room.",
+      "descriptors": {
+        "1": "The point is still unclear after two minutes.",
+        "2": "The point is clear but buried under detail.",
+        "3": "The ask and the reason come early, in a logical order.",
+        "4": "Crisp and tailored to each attendee's concern."
+      }
+    },
+    {
+      "id": "objections",
+      "name": "Handling objections",
+      "weight": 1,
+      "looks_for": "Acknowledging, answering with facts, and checking the answer landed.",
+      "descriptors": {
+        "1": "Defensive, or dodges the question.",
+        "2": "Answers some objections, vaguely.",
+        "3": "Acknowledges, answers with facts or a commitment, and checks it landed.",
+        "4": "Pre-empts objections and turns them into support."
+      }
+    },
+    {
+      "id": "evidence",
+      "name": "Evidence and numbers",
+      "weight": 1,
+      "looks_for": "Relevant, consistent numbers and examples framed for the listener.",
+      "descriptors": {
+        "1": "No numbers, or contradicts their own numbers.",
+        "2": "Some numbers, unsupported or not tied to the decision.",
+        "3": "Relevant, consistent numbers and examples.",
+        "4": "Numbers framed in the listener's terms, such as payback, risk or headcount."
+      }
+    },
+    {
+      "id": "outcome",
+      "name": "Driving to outcome",
+      "weight": 1,
+      "looks_for": "A clear ask, an agreed next step, owners and dates.",
+      "descriptors": {
+        "1": "No ask.",
+        "2": "Ask made, but no next step agreed.",
+        "3": "A clear ask and an agreed next step.",
+        "4": "A decision reached, with owners and dates."
+      }
+    }
+  ],
+  "scoring_notes": [
+    "Meetings have no hire verdict. Level is n/a; judge against a capable professional in the user's stated role.",
+    "A concern counts as resolved only when the user answered it with a specific fact, number, commitment or concession.",
+    "Negotiations: going below the user's walk away point is a weakness under Driving to outcome, whatever the attendees said."
+  ],
+  "red_flags": [
+    "Makes up facts that contradict the setup and defends them",
+    "Hostile or insulting to attendees"
+  ]
+}
