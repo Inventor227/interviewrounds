@@ -1,7 +1,6 @@
 // Emulator run for the XR room: enter passthrough, sit at the room's desk or table, rest the right index tip on it,
 // then screenshot placement, the seated room with round chrome, scoring and the summary. Logs render stats.
 // Rooms: home_office (1 seat, desk against the window wall) and conference_room (3 seats, near end of the table).
-//   plan/ops-tools/emu.sh <worktree> web/e2e/xr-room.mjs --room home_office --size 800x800 --out plan/shots/xr/home_office
 // Needs e2e/xr-lib.mjs next to it (copied by the script itself into .emu/).
 
 import { copyFileSync, writeFileSync } from 'node:fs';
@@ -10,10 +9,10 @@ import { fileURLToPath } from 'node:url';
 import { call, enterXR, screenshot, sleep, waitReady } from './emu-lib.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-// emu.sh uploads only this file; the lib lives next to it in the repo.
+// The runner uploads only this file; the lib lives next to it in the repo.
 const libSrc = path.join(process.env.EMU_APP_DIR, 'e2e', 'xr-lib.mjs');
 copyFileSync(libSrc, path.join(here, 'xr-lib.mjs'));
-const { go, page, stats, waitApp, SAMPLE_ROUND, SAMPLE_SUMMARY } = await import('./xr-lib.mjs');
+const { consoleLines, go, page, startPlacement, stats, waitApp, SAMPLE_ROUND, SAMPLE_SUMMARY } = await import('./xr-lib.mjs');
 
 const ROOM = process.env.EMU_ROOM ?? 'home_office';
 const SETUPS = {
@@ -35,6 +34,8 @@ await go(`/session/emu?offer=1&standins=1&fallback=120&seats=${S.seats}`);
 await waitApp();
 await enterXR();
 await sleep(1500);
+// Placement is explicit: the round controller calls place() after entering.
+await startPlacement();
 
 await call('xr', 'set-input-mode', { mode: 'hand' });
 await call('xr', 'set-transform', { device: 'headset', position: S.head, orientation: { pitch: -38, yaw: 0, roll: 0 } });
@@ -96,6 +97,51 @@ await sleep(1200);
 await shot(`${ROOM}-6-summary`);
 
 log.seats = await page(() => globalThis.__xrApp.room.seatPoses());
+
+// Leave and come back (the resume path): the old desk and anchor are dropped, the room hides until the new
+// placement, and nothing errors per frame.
+const roomState = () =>
+  page(() => {
+    const app = globalThis.__xrApp;
+    return { desk: app.desk$.value, roomVisible: app.room.root.visible, session: !!app.world.session };
+  });
+await call('xr', 'exit');
+await sleep(2500);
+log.afterExit = await roomState();
+await enterXR();
+await sleep(1500);
+log.afterReenter = await roomState();
+await startPlacement();
+await call('xr', 'set-input-mode', { mode: 'hand' });
+await call('xr', 'set-transform', { device: 'headset', position: S.head, orientation: { pitch: -38, yaw: 0, roll: 0 } });
+await call('xr', 'set-transform', { device: 'hand-right', position: { x: S.head.x + 0.3, y: 0.95, z: S.head.z - 0.1 }, orientation: 'auto' });
+await sleep(3000);
+await shot(`${ROOM}-7-reenter-prompt`);
+await call('xr', 'set-hand-pose', { device: 'hand-right', poseId: 'point' });
+await call('xr', 'set-transform', { device: 'hand-right', position: S.tip, anchor: 'index-tip', orientation: { fingers: [0, -0.85, -0.5], thumb: 'left' } });
+let desk2 = null;
+for (let i = 0; i < 20 && !desk2; i++) {
+  await sleep(1000);
+  desk2 = await page(() => globalThis.__xrApp.desk$.value).catch(() => null);
+}
+log.desk2 = desk2;
+await call('xr', 'set-transform', { device: 'hand-right', position: { x: S.head.x + 0.28, y: 0.8, z: S.head.z - 0.2 }, orientation: 'auto' });
+await call('xr', 'set-transform', { device: 'headset', position: S.head, orientation: { pitch: -16, yaw: 0, roll: 0 } });
+await sleep(1200);
+await shot(`${ROOM}-8-reentered`);
+const lines = await consoleLines(500);
+log.frameErrors = lines.filter((l) => /onXRFrame callback failed|InvalidStateError/i.test(l));
+log.frameRateLog = lines.filter((l) => l.includes('[xr] frame rate'));
 writeFileSync(path.join(process.env.EMU_SHOTS, `${ROOM}-renderer-info.json`), JSON.stringify(log, null, 2));
-if (!desk || desk.source !== 'touch') process.exit(1);
-console.log('xr room ok');
+
+const problems = [];
+if (!desk || desk.source !== 'touch') problems.push('first placement was not the touch');
+if (log.afterExit.desk !== null || log.afterExit.roomVisible) problems.push('exit kept the desk or the room');
+if (log.afterReenter.desk !== null || log.afterReenter.roomVisible) problems.push('re-enter showed the old room');
+if (!desk2 || desk2.source !== 'touch') problems.push('second placement was not the touch');
+if (log.frameErrors.length) problems.push(`${log.frameErrors.length} per-frame errors`);
+if (problems.length) {
+  console.error('xr room problems:', problems.join('; '));
+  process.exit(1);
+}
+console.log('xr room ok (including re-enter)');

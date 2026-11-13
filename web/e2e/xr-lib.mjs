@@ -1,4 +1,4 @@
-// Shared helpers for the XR room emulator scripts (run through the plan's emu.sh, which provides ./emu-lib.mjs).
+// Shared helpers for the XR room emulator scripts. The runner provides ./emu-lib.mjs (IWSDK CLI helpers).
 // `page(fn, arg)` runs a function inside the app page through `iwsdk browser run` and returns its JSON result.
 
 import { writeFileSync } from 'node:fs';
@@ -38,6 +38,30 @@ export async function go(p) {
   );
   return iwsdk('browser', 'run', path.relative(process.env.EMU_APP_DIR, file), '--timeout', '45000');
 }
+
+/** Sets the browser viewport (the managed page), returning the new size. */
+export async function viewport(width, height) {
+  const file = path.join(DIR, `vp-${++n}.mjs`);
+  writeFileSync(
+    file,
+    `export default async function ({ page }) {
+  await page.setViewportSize({ width: ${width}, height: ${height} });
+  return page.viewportSize();
+}
+`,
+  );
+  return iwsdk('browser', 'run', path.relative(process.env.EMU_APP_DIR, file), '--timeout', '20000');
+}
+
+/** Recent browser console lines (text only). */
+export async function consoleLines(count = 300) {
+  const out = await iwsdk('browser', 'logs', '--input-json', JSON.stringify({ count })).catch(() => null);
+  const list = out?.data?.result ?? out?.result ?? [];
+  return Array.isArray(list) ? list.map((l) => `[${l.level}] ${String(l.message ?? l.text ?? '')}`) : [];
+}
+
+/** Starts the desk placement (explicit since the app no longer places by itself). */
+export const startPlacement = () => page(() => void globalThis.__xrApp.place().catch(() => {}));
 
 /** Waits until window.__xrApp exists (the world is slow to start on software WebGL). */
 export async function waitApp(timeoutMs = 90000) {

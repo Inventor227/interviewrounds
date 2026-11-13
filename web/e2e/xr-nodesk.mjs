@@ -1,7 +1,6 @@
 // Emulator run for the no-desk path: enter passthrough holding controllers (the hands hint shows), switch to hands,
 // sit in open floor and never touch anything. After 6 s the desk falls back to 0.45 m below the head with a full
 // virtual desk and the line "No desk? We set one up for you."
-//   plan/ops-tools/emu.sh <worktree> web/e2e/xr-nodesk.mjs --room home_office --out plan/shots/xr/nodesk
 
 import { copyFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
@@ -10,7 +9,7 @@ import { call, enterXR, iwsdk, screenshot, sleep, waitReady } from './emu-lib.mj
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 copyFileSync(path.join(process.env.EMU_APP_DIR, 'e2e', 'xr-lib.mjs'), path.join(here, 'xr-lib.mjs'));
-const { go, page, stats, waitApp } = await import('./xr-lib.mjs');
+const { go, page, startPlacement, stats, waitApp } = await import('./xr-lib.mjs');
 
 const ROOM = process.env.EMU_ROOM ?? 'home_office';
 // Open floor in the middle of the room, facing the window wall, nothing within reach.
@@ -27,6 +26,7 @@ await waitReady();
 await go('/session/emu?offer=1&standins=1&seats=1');
 await waitApp();
 await enterXR();
+await startPlacement();
 await call('xr', 'set-input-mode', { mode: 'controller' });
 await call('xr', 'set-transform', { device: 'headset', position: HEAD, orientation: { pitch: -20, yaw: 0, roll: 0 } });
 await sleep(1500);

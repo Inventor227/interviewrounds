@@ -1,6 +1,6 @@
 // Emulator run for the 2D preview (no WebXR path): the room in the page, stage stretched to the viewport for the
 // shot. Screens with 1 and 3 seats, live chrome and the summary; logs render stats.
-//   plan/ops-tools/emu.sh <worktree> web/e2e/xr-preview.mjs --size 1280x720 --out plan/shots/xr/preview
+// Run it with the headless emulator at a 1280×720 viewport.
 
 import { copyFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
@@ -9,7 +9,7 @@ import { screenshot, sleep, waitReady } from './emu-lib.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 copyFileSync(path.join(process.env.EMU_APP_DIR, 'e2e', 'xr-lib.mjs'), path.join(here, 'xr-lib.mjs'));
-const { go, page, stats, waitApp, SAMPLE_ROUND, SAMPLE_SUMMARY } = await import('./xr-lib.mjs');
+const { go, page, stats, viewport, waitApp, SAMPLE_ROUND, SAMPLE_SUMMARY } = await import('./xr-lib.mjs');
 
 const log = {};
 const shot = async (name) => {
@@ -28,6 +28,38 @@ const fill = () =>
 await waitReady();
 await go('/session/emu?view=preview&seats=1');
 await waitApp();
+
+// The canvas follows its 16:9 stage in the page through window resizes (IWSDK's own handler sizes it to the window).
+const fitCheck = () =>
+  page(() => {
+    const canvas = globalThis.__xrApp.world.renderer.domElement;
+    const stage = canvas.parentElement.getBoundingClientRect();
+    const c = canvas.getBoundingClientRect();
+    return {
+      window: [innerWidth, innerHeight],
+      stage: [Math.round(stage.width), Math.round(stage.height)],
+      canvas: [Math.round(c.width), Math.round(c.height)],
+      buffer: [canvas.width, canvas.height],
+      aspect: +globalThis.__xrApp.world.camera.aspect.toFixed(3),
+    };
+  });
+const fits = (f) =>
+  Math.abs(f.canvas[0] - f.stage[0]) <= 1 &&
+  Math.abs(f.canvas[1] - f.stage[1]) <= 1 &&
+  Math.abs(f.aspect - f.stage[0] / f.stage[1]) < 0.01 &&
+  Math.abs(f.buffer[0] / f.buffer[1] - f.stage[0] / f.stage[1]) < 0.02;
+await sleep(2000);
+log.fit = [await fitCheck()];
+await viewport(900, 1000);
+await sleep(2500);
+log.fit.push(await fitCheck());
+await shot('preview-0-stage-after-resize');
+await viewport(1280, 720);
+await sleep(2500);
+log.fit.push(await fitCheck());
+log.fitOk = log.fit.every(fits);
+console.log('fit', JSON.stringify(log.fit), log.fitOk);
+
 await fill();
 await sleep(6000); // stand-ins load
 log.mode = await page(() => globalThis.__xrApp.mode);
@@ -53,6 +85,33 @@ await page((sum) => {
 await sleep(1500);
 await shot('preview-3-seats-summary');
 
+// The Tap to hear card (the controller shows it when the interviewer cannot be heard).
+await page(() => {
+  const app = globalThis.__xrApp;
+  app.ui.hideSummary();
+  app.ui.setStatus('hear');
+});
+await sleep(1500);
+await shot('preview-hear');
+
+// destroy() frees the renderer: context lost, canvas gone.
+log.destroy = await page(() => {
+  const app = globalThis.__xrApp;
+  const r = app.world.renderer;
+  const gl = r.getContext();
+  const canvas = r.domElement;
+  app.destroy();
+  return { contextLost: gl.isContextLost(), canvasInPage: document.contains(canvas) };
+});
+console.log('destroy', JSON.stringify(log.destroy));
+
 writeFileSync(path.join(process.env.EMU_SHOTS, 'preview-renderer-info.json'), JSON.stringify(log, null, 2));
-if (log.mode !== 'preview') process.exit(1);
+const problems = [];
+if (log.mode !== 'preview') problems.push('not in preview');
+if (!log.fitOk) problems.push('canvas left its stage after a resize');
+if (!log.destroy?.contextLost || log.destroy?.canvasInPage) problems.push('destroy kept the context or canvas');
+if (problems.length) {
+  console.error('xr preview problems:', problems.join('; '));
+  process.exit(1);
+}
 console.log('xr preview ok');

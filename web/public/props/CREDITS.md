@@ -12,5 +12,7 @@ The room's furniture is built in code, so this folder ships no third-party model
 | Contact shadows | IWSDK `ContactShadow` (MIT) |
 | Image based lighting | IWSDK `IBLTexture` "room" environment (three.js RoomEnvironment, MIT) |
 | UI sounds | synthesized with Web Audio in `web/src/xr/sound.ts` |
+| Panel font | Inter by Rasmus Andersson, SIL Open Font License 1.1, as MSDF atlases redistributed by `@pmndrs/msdfonts` (from Google Fonts) via UIKit |
+| Stand-in people (preview and screenshots) | Microsoft Rocketbox avatars and animations, MIT licence; see `web/public/avatars/LICENSE.md` |
 
 If a CC0 model replaces any of these later, add its name, author, source link and licence here.
