@@ -9,11 +9,12 @@
 #
 # Environment:
 #   AVATAR_HOST   ssh host of the build server (default: ioflood)
-#   AVATAR_ROOT   work folder on the build server (default: /root/ir-dev/avatar)
+#   AVATAR_ROOT   work folder on the build server (default: /root/ir-avatar-work). Keep it outside
+#                 /root/ir-dev/: the dev sync scripts mirror worktrees there with rsync --delete.
 set -euo pipefail
 
 HOST="${AVATAR_HOST:-ioflood}"
-ROOT="${AVATAR_ROOT:-/root/ir-dev/avatar}"
+ROOT="${AVATAR_ROOT:-/root/ir-avatar-work}"
 # The image tag is a hash of the Dockerfile (set on the build server), so Dockerfile edits always rebuild.
 IMAGE=""
 CONTAINER="ir-avatar-convert"
