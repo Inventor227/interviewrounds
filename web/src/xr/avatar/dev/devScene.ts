@@ -68,7 +68,6 @@ export class AvatarDevScene {
   private readonly clock = new Clock();
   private readonly audio: HTMLAudioElement;
   private ctx: AudioContext | null = null;
-  private voiceAttached = false;
   private frozen = false;
   private view: DevView;
   private readonly user = USER_EYE.clone();
@@ -155,12 +154,10 @@ export class AvatarDevScene {
     if (this.ctx.state === 'suspended') await this.ctx.resume();
     this.audio.currentTime = 0;
     await this.audio.play();
-    if (!this.voiceAttached) {
-      const el = this.audio as HTMLAudioElement & { captureStream?: () => MediaStream };
-      if (!el.captureStream) throw new Error('this browser cannot capture an audio element stream');
-      await a.attachVoice(el.captureStream(), this.ctx);
-      this.voiceAttached = true;
-    }
+    // Capture again on every play: Chrome ends the captured tracks when the element reaches its end.
+    const el = this.audio as HTMLAudioElement & { captureStream?: () => MediaStream };
+    if (!el.captureStream) throw new Error('this browser cannot capture an audio element stream');
+    await a.attachVoice(el.captureStream(), this.ctx);
     a.setMode('speaking');
   }
 

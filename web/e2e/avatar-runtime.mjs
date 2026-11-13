@@ -88,17 +88,27 @@ await click('Speak');
 await sleep(1500);
 out.afterSpeak = await status();
 console.log('after speak', JSON.stringify(out.afterSpeak));
+/** Starts the voice again if it has ended (captures are slow on software WebGL). */
+const keepTalking = async () => {
+  const s = await status();
+  if (s.mode !== 'speaking') {
+    await click('Speak');
+    await sleep(1200);
+  }
+};
 for (const [i, min] of [
   [1, 0.55],
   [2, 0.35],
   [3, 0.6],
 ]) {
-  out[`freeze-${i}`] = await freezeWhen(new Function(`return (a) => a.voiceLevel > ${min}`)());
+  await keepTalking();
+  out[`freeze-${i}`] = await freezeWhen(new Function(`return (a) => a.mode === 'speaking' && a.voiceLevel > ${min}`)());
   await shot(`0${1 + i}-face-speaking-${i}`);
   await unfreeze();
   await sleep(700);
 }
 // A frame between words (mouth closing).
+await keepTalking();
 out['freeze-gap'] = await freezeWhen((a) => a.mode === 'speaking' && a.voiceLevel < 0.12);
 await shot('05-face-speaking-gap');
 await unfreeze();
