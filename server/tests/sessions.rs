@@ -118,7 +118,7 @@ async fn create_session_fake_returns_no_fish_token() {
         "no Fish call for the fake voice"
     );
     // The prompt cache is prewarmed once, and the prewarm is priced into the ledger (2000 cache-write tokens at
-    // $5 per million on the default model).
+    // $2.50 per million on the default live model).
     live::eventually("prewarm recorded", Duration::from_secs(3), || async {
         count(
             &app,
@@ -134,7 +134,7 @@ async fn create_session_fake_returns_no_fish_token() {
             .fetch_one(&app.state.db)
             .await
             .unwrap();
-    assert!((prewarm - 0.01).abs() < 1e-9, "{prewarm}");
+    assert!((prewarm - 0.005).abs() < 1e-9, "{prewarm}");
 
     // Stored: created, token hashed, state snapshot for reloads.
     let uuid = Uuid::parse_str(id).unwrap();

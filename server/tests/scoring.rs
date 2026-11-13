@@ -1452,7 +1452,7 @@ async fn score_session_stores_report_and_serves_it() {
     assert_eq!(loaded.panel[0].persona_id, "persona.daniel");
     assert_eq!(
         loaded.phases_completed.len(),
-        6,
+        d.catalog.rounds["sde.system_design.full"].phases.len(),
         "ended completed: every phase"
     );
     assert!(loaded.duration_sec >= 1490);
