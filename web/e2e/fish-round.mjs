@@ -2,7 +2,8 @@
 // about $0.07 a minute per open voice). The candidate's lines are played into the page's microphone as speech
 // (e2e/voice/*.wav from make-voice.py), so the voice service hears them, ends each turn itself and transcribes it;
 // SPEECH=typed sends them as typed turns instead. The round is recorded (?record=1: timeline, one audio file per
-// voice, the candidate's speech, a mix) and the screen is captured to a video, for the demo.
+// voice, the candidate's speech, a mix) for the demo video. No live screen capture: the tooling runs one browser
+// command at a time, so a capture would hold the page the script drives.
 //
 //   ROUND=behavioral|design|meeting  VIEW=preview|xr  SPEECH=voice|typed  MAX_MIN=<hard stop, default 6>
 //   FISH_OK=1 must be set: without it the script refuses to start.
@@ -12,8 +13,7 @@
 // Every voice this opens is ended on the way out, also when a step fails (the round is ended, then the page leaves).
 // The run prints the Fish session ids (never a token) so they can be checked from outside.
 
-import { spawn } from 'node:child_process';
-import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { waitReady } from './emu-lib.mjs';
@@ -22,7 +22,7 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const APP = process.env.EMU_APP_DIR;
 copyFileSync(path.join(APP, 'e2e', 'round-lib.mjs'), path.join(here, 'round-lib.mjs'));
 const L = await import('./round-lib.mjs');
-const { click, go, look, page, placeDesk, sleep, stage, until, waitState } = L;
+const { click, go, look, page, placeDesk, sleep, stage } = L;
 
 // FAKE=1: the same run with the typed-turn fake voice (dev key from the env file, nothing billed), to check the script.
 const FAKE = process.env.FAKE === '1';
@@ -62,82 +62,31 @@ async function shot(name) {
   }
 }
 
-// ---------- screen video (CDP screencast into Playwright's own ffmpeg, constant 5 fps) ----------
-// `iwsdk browser run` executes its module in a CLI process of its own: the capture lives as long as that process, so
-// it runs in the background for the whole round and stops when the stop file appears.
+// ---------- waiting (these throw; round-lib's exit the process, which would skip ending the round) ----------
 
-const STOP_FILE = path.join(SHOTS, '..', 'cast.stop');
-/** The tooling allows a browser script 110 s, so the capture runs as consecutive parts of at most 100 s each. */
-const PART_MS = 100_000;
-let castLoop = null;
-function castModule(out) {
-  return `import { spawn } from 'node:child_process';
-import { existsSync, readdirSync, writeFileSync } from 'node:fs';
-export default async function ({ page }) {
-  const root = '/ms-playwright';
-  const ff = existsSync(root) ? readdirSync(root).filter((d) => d.startsWith('ffmpeg')).map((d) => root + '/' + d + '/ffmpeg-linux').find((p) => existsSync(p)) : null;
-  if (!ff) return 'no ffmpeg';
-  const out = ${JSON.stringify(out)};
-  const proc = spawn(ff, ['-loglevel', 'error', '-f', 'image2pipe', '-framerate', '5', '-c:v', 'mjpeg', '-i', 'pipe:0', '-an', '-c:v', 'vp8', '-b:v', '1500k', '-deadline', 'realtime', '-speed', '6', '-vf', 'scale=1280:720', '-y', out], { stdio: ['pipe', 'ignore', 'ignore'] });
-  const s = await page.context().newCDPSession(page);
-  let latest = null, frames = 0, written = 0, firstAt = null;
-  s.on('Page.screencastFrame', async (f) => {
-    latest = Buffer.from(f.data, 'base64');
-    frames++;
-    try { await s.send('Page.screencastFrameAck', { sessionId: f.sessionId }); } catch {}
-  });
-  await s.send('Page.startScreencast', { format: 'jpeg', quality: 70, maxWidth: 1280, maxHeight: 720 });
-  const startedAt = Date.now();
-  await new Promise((resolve) => {
-    const timer = setInterval(() => {
-      if (latest) {
-        if (firstAt === null) firstAt = Date.now();
-        written++;
-        try { proc.stdin.write(latest); } catch {}
-      }
-      if (existsSync(${JSON.stringify(STOP_FILE)}) || Date.now() - startedAt > ${PART_MS}) {
-        clearInterval(timer);
-        resolve();
-      }
-    }, 200);
-  });
-  try { await s.send('Page.stopScreencast'); } catch {}
-  try { await s.detach(); } catch {}
-  await new Promise((r) => { proc.on('close', r); proc.stdin.end(); setTimeout(r, 5000); });
-  const meta = { file: out.split('/').pop(), fps: 5, first_frame_epoch_ms: firstAt, frames_written: written, screencast_frames: frames };
-  writeFileSync(out.replace(/\\.webm$/, '.video.json'), JSON.stringify(meta, null, 2));
-  return meta;
+async function until(what, fn, arg = null, timeoutMs = 60000, everyMs = 1500) {
+  const end = Date.now() + timeoutMs;
+  let last = null;
+  for (;;) {
+    last = await page(fn, arg).catch((e) => ({ __error: String(e).slice(0, 300) }));
+    if (last && !last.__error) return last;
+    if (Date.now() > end) throw new Error(`timed out waiting for ${what}: ${JSON.stringify(last).slice(0, 300)}`);
+    await sleep(everyMs);
+  }
 }
-`;
-}
-
-function castStart(name) {
-  const bin = path.join(APP, 'node_modules', '.bin', 'iwsdk');
-  const parts = [];
-  const runPart = (n) =>
-    new Promise((resolve) => {
-      const file = path.join(L.DIR, `cast-${n}.mjs`);
-      writeFileSync(file, castModule(path.join(SHOTS, `${name}-${String(n).padStart(2, '0')}.webm`)));
-      const proc = spawn(bin, ['browser', 'run', path.relative(APP, file), '--timeout', '108000'], { cwd: APP, stdio: ['ignore', 'pipe', 'pipe'] });
-      let log = '';
-      proc.stdout.on('data', (d) => (log += d));
-      proc.stderr.on('data', (d) => (log += d));
-      proc.on('exit', (code) => resolve({ part: n, code, log: code ? log.slice(-300) : undefined }));
-    });
-  castLoop = (async () => {
-    for (let n = 1; n <= 30 && !existsSync(STOP_FILE); n++) parts.push(await runPart(n));
-    return parts;
-  })();
-  return { started: true, name };
-}
-
-async function castStop() {
-  if (!castLoop) return null;
-  writeFileSync(STOP_FILE, 'stop');
-  const r = await Promise.race([castLoop, sleep(30000).then(() => ({ timeout: true }))]);
-  castLoop = null;
-  return r;
-}
+const recordRound = () =>
+  until('the round on the session page', () => {
+    const r = globalThis.__round;
+    if (!r) return null;
+    if (!globalThis.__rec) {
+      const rec = (globalThis.__rec = { lines: [], states: [r.controller.state], errors: [] });
+      r.controller.on('state', (st) => rec.states.push(st));
+      r.controller.on('error', (e) => rec.errors.push(`${e.code}: ${e.message}`));
+    }
+    return true;
+  }, null, 90000);
+const waitState = (want, timeoutMs = 90000) =>
+  until(`state ${want}`, (w) => (w.includes(globalThis.__round?.controller.state) ? { state: globalThis.__round.controller.state } : null), [].concat(want), timeoutMs);
 
 // ---------- the tab: recording on, a microphone the script can speak into ----------
 
@@ -335,20 +284,17 @@ try {
   const startSel = VIEW === 'preview' ? 'start-preview' : 'start-round';
   await until('ready to start', (sel) => !!document.querySelector(`[data-test="${sel}"]:not([disabled])`), startSel, 150000);
   await shot('02-ready');
-  rmSync(STOP_FILE, { force: true });
-  const video = castStart(`${ROUND}-screen`);
-  stage('screen video', video);
 
   // Tap 2: the voices connect, the round starts.
   out.startedAt = Date.now();
   await click(startSel);
   if (VIEW === 'xr') {
     await sleep(3000);
-    await L.recordRound();
+    await recordRound();
     await placeDesk(L.SETUPS[R.room]);
     await look(L.SETUPS[R.room], -14);
   } else {
-    await L.recordRound();
+    await recordRound();
     // The room on screen (the video shows it, not the page header).
     await page(() => (document.querySelector('[data-test="session-stage"]')?.scrollIntoView({ block: 'center' }), true)).catch(() => undefined);
   }
@@ -402,7 +348,6 @@ try {
   out.notes.push(`after the round: ${String(e.message ?? e).slice(0, 300)}`);
 }
 await collectFish();
-out.video = await castStop();
 out.recordingFiles = await saveRecording().catch((e) => (out.notes.push(`recording: ${String(e).slice(0, 300)}`), null));
 out.timings = await page(() => globalThis.__round?.timings?.() ?? null).catch(() => null);
 const sid = await page(() => globalThis.__round?.session?.session_id ?? null).catch(() => null);
