@@ -1,0 +1,145 @@
+// The board in XR, wired: hands → ghosts → board input → store, the sheet with its tray and
+// bin under the XR app's sheet anchor, the wall mirror, voice labels, and feedback sounds.
+// The session code owns the socket: `send` posts board.op, `sendGhostReject` posts
+// board.ghost_reject, and server frames go to the same store (apply / confirm / logRejected /
+// setGhosts).
+import type { BoardOp } from '../shared/types';
+import { GhostLayer } from './ghosts';
+import { VOICE_FOCUS_MS, voiceLabel, type VoiceLabel } from './grammar';
+import { HandAdapter } from './hand';
+import { BoardInput } from './input';
+import { HLD_KIT, type Kit } from './kits';
+import { IdGen } from './model';
+import type { BoardStore } from './ops';
+import type { BoardXRPort, Sfx, SfxName } from './port';
+import { Sheet } from './sheet';
+import { SheetProjector } from './sheetMath';
+import { kitFor } from './tray';
+import type { MakeCanvas } from './xrmesh';
+
+export interface BoardXROptions {
+  store: BoardStore;
+  /** Settings dominant_hand: the tray goes on the other side. */
+  dominantHand: 'left' | 'right';
+  kit?: Kit;
+  /** board.op to the server (already applied locally, pending until board.ack). */
+  send(op: BoardOp): void;
+  /** board.ghost_reject to the server (Scribe ghosts only; local suggestions stay local). */
+  sendGhostReject(opId: string): void;
+  sfx?: Sfx;
+  makeCanvas?: MakeCanvas;
+  ids?: IdGen;
+}
+
+export interface BoardXR {
+  kit: Kit;
+  sheet: Sheet;
+  hands: HandAdapter;
+  ghosts: GhostLayer;
+  input: BoardInput;
+  /** A finished user speech segment: labels the fresh focus card, suggests a label, or does nothing. */
+  say(text: string, nowMs?: number): VoiceLabel | null;
+  destroy(): void;
+}
+
+/** The feedback sound for a committed op. */
+export function sfxForOp(op: BoardOp): SfxName | null {
+  switch (op.op) {
+    case 'item.create':
+      return op.args.kind === 'ink' ? 'pen' : 'snap';
+    case 'item.move':
+      return 'snap';
+    case 'item.delete':
+    case 'edge.delete':
+    case 'undo':
+      return 'erase';
+    case 'edge.create':
+    case 'edge.set_dir':
+    case 'item.label':
+    case 'edge.label':
+      return 'click';
+    default:
+      return null;
+  }
+}
+
+export function createBoardXR(port: BoardXRPort, opts: BoardXROptions): BoardXR {
+  const { store } = opts;
+  const kit = kitFor(opts.kit ?? HLD_KIT, opts.dominantHand);
+  const ids = opts.ids ?? new IdGen();
+  const play = (n: SfxName) => opts.sfx?.play(n);
+
+  // One clock for focus, ghosts and voice: the XR frame time. Registered first so it is
+  // current when the hands are read in the same frame.
+  let clock = 0;
+  const now = () => clock;
+  const offClock = port.onFrame((_dt, t) => {
+    clock = t;
+  });
+
+  const projector = new SheetProjector(port.sheetAnchor);
+  const hands = new HandAdapter(port, (p) => projector.project(p), { zone: kit.view });
+
+  const commit = (op: BoardOp) => {
+    const r = store.apply(op, { local: true });
+    if (!r.accepted) return;
+    opts.send(op);
+    const s = sfxForOp(op);
+    if (s) play(s);
+  };
+
+  const ghosts = new GhostLayer(hands, store, kit, {
+    now,
+    accept: (g) => commit({ op_id: g.op_id, src: store.isLocalGhost(g.op_id) ? 'voice_grammar' : 'scribe', op: g.op, args: g.args } as BoardOp),
+    reject: (id) => {
+      const local = store.isLocalGhost(id);
+      store.rejectGhost(id);
+      if (!local) opts.sendGhostReject(id);
+      play('erase');
+    },
+  });
+  const input = new BoardInput(store, ghosts, kit, commit, { ids, now });
+
+  const sheet = new Sheet({ kit, makeCanvas: opts.makeCanvas });
+  sheet.group.visible = false;
+  port.sheetAnchor.add(sheet.group);
+  port.wallboardTexture?.(sheet.texture);
+
+  let shown = false;
+  const offFrame = port.onFrame((_dt, t) => {
+    const placed = port.desk() !== null;
+    if (placed && !shown) {
+      shown = true;
+      play('flap');
+    }
+    sheet.group.visible = placed;
+    ghosts.update(t);
+    sheet.update(store.board, { highlight: input.hover, overlays: input.overlays, rings: ghosts.rings(t), pointers: hands.pointers() });
+  });
+
+  return {
+    kit,
+    sheet,
+    hands,
+    ghosts,
+    input,
+    say(text, t = clock) {
+      const hit = voiceLabel(store.board, text, store.freshFocus(t, VOICE_FOCUS_MS));
+      if (!hit) return null;
+      const args = { id: hit.id, text: hit.label };
+      if (hit.mode === 'commit') commit({ op_id: ids.next('op'), src: 'voice_grammar', op: 'item.label', args });
+      else store.suggest({ op_id: ids.next('op'), src: 'scribe', op: 'item.label', args });
+      return hit;
+    },
+    destroy() {
+      offFrame();
+      offClock();
+      input.destroy();
+      ghosts.destroy();
+      hands.destroy();
+      port.sheetAnchor.remove(sheet.group);
+      port.wallboardTexture?.(null);
+      sheet.dispose();
+    },
+  };
+}
