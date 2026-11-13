@@ -1,0 +1,100 @@
+{
+  "id": "investor_pitch",
+  "title": "Investor pitch",
+  "summary": "Pitch your seed round to a skeptical partner and a numbers focused associate.",
+  "goal": "Get a partner meeting next week to discuss terms for our seed round.",
+  "your_role": "Founder and CEO",
+  "scenario": "You're raising a 1.5 million dollar seed round for a scheduling tool for clinics. You have 40 paying clinics.",
+  "attendees": [
+    {
+      "name": "Rhea",
+      "role": "Partner, seed fund",
+      "cares_about": [
+        "market size",
+        "why now",
+        "why this team"
+      ],
+      "personality": "skeptical",
+      "likely_objections": [
+        "Clinic software is a crowded market",
+        "Forty clinics is early; is this a feature or a company?",
+        "Why can't an incumbent add this in a quarter?"
+      ],
+      "decision_power": "approver",
+      "knows": "Read the one page summary, not the deck. Has seen two clinic scheduling pitches this year. Will only take it to the partner meeting if the market and the team both hold up.",
+      "voice_base": "persona.ana"
+    },
+    {
+      "name": "Tom",
+      "role": "Associate",
+      "cares_about": [
+        "churn",
+        "payback on customer acquisition",
+        "use of funds"
+      ],
+      "personality": "neutral",
+      "likely_objections": [
+        "What is your monthly churn?",
+        "How long until a clinic pays back what it cost to win?",
+        "How much of the round goes to sales versus product?"
+      ],
+      "decision_power": "influencer",
+      "knows": "Built a model from the data room. Noticed churn looks low but the cohort is young.",
+      "voice_base": "persona.leo"
+    }
+  ],
+  "hidden_concerns": [
+    "Market size and how it was calculated",
+    "Why now",
+    "Why this team",
+    "Traction quality: churn and growth",
+    "Competition and incumbents",
+    "Biggest risk",
+    "Use of funds and milestones"
+  ],
+  "success": "Rhea agrees to a partner meeting or a terms discussion with a date.",
+  "tips": [
+    "Open with the ask, the traction and why now, in under a minute.",
+    "Answer every number question with the number first, then the context.",
+    "End by asking for a specific next step and a date."
+  ],
+  "key_facts": [
+    {
+      "label": "Round",
+      "value": "1.5 million dollars, seed"
+    },
+    {
+      "label": "Paying clinics",
+      "value": "40"
+    },
+    {
+      "label": "Price",
+      "value": "400 dollars per clinic per month"
+    },
+    {
+      "label": "Revenue",
+      "value": "16,000 dollars per month"
+    },
+    {
+      "label": "Growth",
+      "value": "15 percent month over month for 6 months"
+    },
+    {
+      "label": "Monthly churn",
+      "value": "2 percent of clinics"
+    },
+    {
+      "label": "Team",
+      "value": "2 founders, 3 engineers"
+    },
+    {
+      "label": "Runway after raise",
+      "value": "18 months"
+    }
+  ],
+  "ask": "A partner meeting next week to discuss terms.",
+  "walk_away": null,
+  "difficulty": "realistic",
+  "who_speaks_first": "user",
+  "length": "short"
+}

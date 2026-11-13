@@ -1,0 +1,90 @@
+{
+  "id": "client_proposal",
+  "title": "Client proposal",
+  "summary": "Sell a six month pilot to an operations head and a procurement manager who loves spreadsheets.",
+  "goal": "Agree to start a six month pilot with a start date this quarter.",
+  "your_role": "Account executive",
+  "scenario": "You're selling a six month pilot of route planning software to a regional food distributor that plans its delivery routes in spreadsheets today.",
+  "attendees": [
+    {
+      "name": "Dana",
+      "role": "Head of Operations",
+      "cares_about": [
+        "driver disruption",
+        "on time deliveries",
+        "fuel cost"
+      ],
+      "personality": "neutral",
+      "likely_objections": [
+        "My drivers won't adopt a new app in peak season",
+        "What happens if it plans a route that doesn't work?",
+        "Who supports us when something breaks at 5 in the morning?"
+      ],
+      "decision_power": "approver",
+      "knows": "Owns the delivery fleet and the budget. Open to change if drivers are protected.",
+      "voice_base": "persona.priya"
+    },
+    {
+      "name": "Marcus",
+      "role": "Procurement Manager",
+      "cares_about": [
+        "price versus alternatives",
+        "contract risk",
+        "proof of savings"
+      ],
+      "personality": "skeptical",
+      "likely_objections": [
+        "Our spreadsheet costs us nothing",
+        "Your savings estimate is optimistic",
+        "Why a six month commitment and not one month?"
+      ],
+      "decision_power": "influencer",
+      "knows": "Has a competing quote that is 20 percent cheaper but has no local support.",
+      "voice_base": "persona.viktor"
+    }
+  ],
+  "hidden_concerns": [
+    "Return on investment and payback",
+    "Price against the spreadsheet and a cheaper competitor",
+    "Implementation risk for drivers and dispatchers",
+    "Who supports it day to day",
+    "How success is measured in the pilot"
+  ],
+  "success": "Dana agrees to a pilot with clear success criteria and a start date.",
+  "tips": [
+    "Lead with their numbers: fuel, overtime and late deliveries.",
+    "Frame price as payback, not cost.",
+    "Agree how the pilot will be judged before you ask for a yes."
+  ],
+  "key_facts": [
+    {
+      "label": "Pilot price",
+      "value": "48,000 dollars for 6 months"
+    },
+    {
+      "label": "Fleet",
+      "value": "60 trucks"
+    },
+    {
+      "label": "Fuel spend",
+      "value": "2.4 million dollars a year"
+    },
+    {
+      "label": "Expected fuel saving",
+      "value": "8 to 12 percent"
+    },
+    {
+      "label": "Setup time",
+      "value": "3 weeks"
+    },
+    {
+      "label": "Driver training",
+      "value": "2 hours per driver"
+    }
+  ],
+  "ask": "Approve a six month pilot starting next month.",
+  "walk_away": null,
+  "difficulty": "realistic",
+  "who_speaks_first": "user",
+  "length": "short"
+}

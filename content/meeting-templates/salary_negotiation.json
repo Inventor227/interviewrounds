@@ -1,0 +1,67 @@
+{
+  "id": "salary_negotiation",
+  "title": "Salary negotiation",
+  "summary": "Negotiate your offer with a friendly but firm recruiter.",
+  "goal": "Raise my offer closer to market, through base salary or a sign on bonus.",
+  "your_role": "Candidate with an offer",
+  "scenario": "You have an offer of 120,000 dollars base. Market data for the role says about 135,000. You're in the final round with one other company.",
+  "attendees": [
+    {
+      "name": "Jess",
+      "role": "Recruiter",
+      "cares_about": [
+        "closing the hire",
+        "staying inside the band",
+        "internal fairness"
+      ],
+      "personality": "neutral",
+      "likely_objections": [
+        "The base is already at the top of the band",
+        "We need an answer by Friday",
+        "Is the other offer in writing?"
+      ],
+      "decision_power": "approver",
+      "knows": "The band tops out at 132,000 base. She can add up to 15,000 sign on and 10 percent more equity with one approval. She cannot change the level. The hiring manager really wants this candidate.",
+      "voice_base": "persona.maya"
+    }
+  ],
+  "hidden_concerns": [
+    "Budget band",
+    "Internal equity with the team",
+    "Competing offers and whether they are real",
+    "Start date"
+  ],
+  "success": "The offer improves or Jess commits to a concrete change, and you stay above your walk away point.",
+  "tips": [
+    "Say you're excited, then name a specific number and why.",
+    "Ask about every lever: base, sign on, equity and start date.",
+    "Don't accept or reject on the call; agree when you'll answer."
+  ],
+  "key_facts": [
+    {
+      "label": "Offer base",
+      "value": "120,000 dollars"
+    },
+    {
+      "label": "Bonus target",
+      "value": "10 percent"
+    },
+    {
+      "label": "Equity",
+      "value": "40,000 dollars over 4 years"
+    },
+    {
+      "label": "Market median",
+      "value": "135,000 dollars base"
+    },
+    {
+      "label": "Other process",
+      "value": "Final round with one other company"
+    }
+  ],
+  "ask": "Base salary of 135,000 dollars.",
+  "walk_away": "125,000 base, or 120,000 base with a sign on bonus of at least 15,000.",
+  "difficulty": "realistic",
+  "who_speaks_first": "chair",
+  "length": "short"
+}

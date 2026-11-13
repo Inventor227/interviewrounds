@@ -1,0 +1,96 @@
+{
+  "id": "project_kickoff",
+  "title": "Project kickoff",
+  "summary": "Kick off a cross team project and leave with scope, owners and a first milestone.",
+  "goal": "Agree the scope, owners and first milestone for the new onboarding project.",
+  "your_role": "Product manager leading the project",
+  "scenario": "You're kicking off an eight week project to rebuild new user onboarding across three teams.",
+  "attendees": [
+    {
+      "name": "Tomas",
+      "role": "Engineering Lead",
+      "cares_about": [
+        "realistic dates",
+        "scope creep",
+        "dependencies on other teams"
+      ],
+      "personality": "skeptical",
+      "likely_objections": [
+        "Eight weeks is not realistic for three teams",
+        "Who decides when scope changes?",
+        "The identity team hasn't agreed to anything yet"
+      ],
+      "decision_power": "influencer",
+      "knows": "Saw the last onboarding project slip by two months.",
+      "voice_base": "persona.daniel"
+    },
+    {
+      "name": "Mei",
+      "role": "Product Designer",
+      "cares_about": [
+        "time for user research",
+        "owning the flow end to end"
+      ],
+      "personality": "neutral",
+      "likely_objections": [
+        "When does research happen if build starts in week one?",
+        "Who signs off on the design?"
+      ],
+      "decision_power": "influencer",
+      "knows": "Has interview notes from 12 new users that nobody has read yet.",
+      "voice_base": "persona.maya"
+    },
+    {
+      "name": "Helen",
+      "role": "VP of Product",
+      "cares_about": [
+        "activation rate",
+        "a clear owner",
+        "launching before the spring campaign"
+      ],
+      "personality": "supportive",
+      "likely_objections": [
+        "What do you need from me to make this happen?",
+        "What's the first thing we'll see, and when?"
+      ],
+      "decision_power": "approver",
+      "knows": "Sponsors the project and wants it live before the spring campaign in 10 weeks.",
+      "voice_base": "persona.priya"
+    }
+  ],
+  "hidden_concerns": [
+    "Scope in and out",
+    "Owners for each part",
+    "Risks and dependencies",
+    "Whether the timeline is realistic"
+  ],
+  "success": "Everyone agrees the scope, the owners and the first milestone with a date.",
+  "tips": [
+    "State the goal and how you'll measure it first.",
+    "Say what is out of scope before anyone asks.",
+    "Leave with a named owner and date for the first milestone."
+  ],
+  "key_facts": [
+    {
+      "label": "Length",
+      "value": "8 weeks"
+    },
+    {
+      "label": "Teams",
+      "value": "Growth, Identity, Design"
+    },
+    {
+      "label": "Goal",
+      "value": "Day 1 activation from 42 to 50 percent"
+    },
+    {
+      "label": "Spring campaign",
+      "value": "Starts in 10 weeks"
+    }
+  ],
+  "ask": "Agree the scope, owners and a first milestone in two weeks.",
+  "walk_away": null,
+  "difficulty": "realistic",
+  "who_speaks_first": "user",
+  "length": "short"
+}

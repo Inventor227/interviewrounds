@@ -1,0 +1,63 @@
+{
+  "id": "performance_review",
+  "title": "Performance review",
+  "summary": "As the manager, tell a strong engineer about a real problem and agree a plan.",
+  "goal": "Ravi understands the impact of missed code review deadlines and agrees a plan to fix it.",
+  "your_role": "Engineering manager",
+  "scenario": "Ravi is a strong engineer, but he regularly misses code review deadlines and the team is frustrated. This is his review.",
+  "attendees": [
+    {
+      "name": "Ravi",
+      "role": "Senior Software Engineer",
+      "cares_about": [
+        "fairness",
+        "his growth and promotion",
+        "credit for his project work"
+      ],
+      "personality": "skeptical",
+      "likely_objections": [
+        "Nobody told me this was a problem",
+        "I was busy shipping the migration everyone wanted",
+        "Who complained?"
+      ],
+      "decision_power": "approver",
+      "knows": "Thinks his review will be about the migration he led. Does not know the team has complained.",
+      "voice_base": "persona.daniel"
+    }
+  ],
+  "hidden_concerns": [
+    "Whether this is fair and specific",
+    "What exactly is expected",
+    "How it affects his promotion",
+    "What support he gets"
+  ],
+  "success": "Ravi understands the gap and agrees a specific plan with a check in date.",
+  "tips": [
+    "Name the issue in the first two minutes, with one or two specific examples.",
+    "Listen, then restate his view before you respond.",
+    "Agree one concrete change and when you'll check in."
+  ],
+  "key_facts": [
+    {
+      "label": "Reviews past 2 days",
+      "value": "11 of his last 20 assigned reviews"
+    },
+    {
+      "label": "Team norm",
+      "value": "Reviews within 1 working day"
+    },
+    {
+      "label": "Strength",
+      "value": "Led the database migration on time"
+    },
+    {
+      "label": "Next promotion cycle",
+      "value": "In 6 months"
+    }
+  ],
+  "ask": "Agree to review within one working day, with a check in in four weeks.",
+  "walk_away": null,
+  "difficulty": "realistic",
+  "who_speaks_first": "user",
+  "length": "short"
+}
