@@ -99,11 +99,16 @@ fn enum_str<T: serde::Serialize>(v: &T) -> String {
         .unwrap_or_default()
 }
 
+/// The request carries the configured dev key (never true for an empty key, on either side).
 pub(crate) fn dev_key_ok(app: &AppState, headers: &HeaderMap) -> bool {
     headers
         .get(DEV_KEY_HEADER)
         .and_then(|v| v.to_str().ok())
-        .is_some_and(|k| constant_time_eq(k.as_bytes(), app.config.dev_key.as_bytes()))
+        .is_some_and(|k| {
+            !k.is_empty()
+                && !app.config.dev_key.is_empty()
+                && constant_time_eq(k.as_bytes(), app.config.dev_key.as_bytes())
+        })
 }
 
 /// The round in the requested length (following `short_version` / `full_version`).
