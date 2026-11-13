@@ -810,6 +810,13 @@ pub async fn mark_failed(deps: &ScoringDeps, session_id: Uuid) {
 /// Scores a session within its attempt budget (two, then `failed`) and stores the report. Every attempt is
 /// ledgered first, so a crash, a store error or a restart never buys more than two model runs.
 pub async fn score_session(deps: &ScoringDeps, session_id: Uuid) -> anyhow::Result<Value> {
+    // Scoring writes its own ledger rows (`record_usage`): the metered client must not record its calls again.
+    crate::usage::LLM_UNMETERED
+        .scope((), score_session_inner(deps, session_id))
+        .await
+}
+
+async fn score_session_inner(deps: &ScoringDeps, session_id: Uuid) -> anyhow::Result<Value> {
     let started = Instant::now();
     let card = report::CardSlot::default();
     let mut last_err = anyhow!("no scoring attempt left");
