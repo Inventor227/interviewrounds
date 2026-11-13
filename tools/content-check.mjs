@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Content check: every file in content/ is valid against its schema and every reference resolves.
 // - rounds, personas, meeting templates: validated against content/schema/*.schema.json
-// - rubrics, banks, voices.json: validated against the schemas in this file (they are content-only formats)
+// - rubrics, banks, voices.json: validated against content/schema when those files exist, else the copies in this file
 // - links: personas, rubrics, banks, voices, avatars, short/full pairs, panel avatars, attendee voice bases
 // - copy: no em or en dashes in any content JSON string or prompt
 // - prompts: every {placeholder} used in a prompt is declared in its header comment
@@ -330,6 +330,7 @@ const HOUSE_RULES_PLACEHOLDERS = [
   'silence_wait_seconds', 'interrupt_after_seconds',
 ];
 const REQUIRED_PROMPTS = ['house-rules.md', 'levels.md', 'styles.md', 'hand-over.md', 'scribe.md', 'scorer.md', 'meeting-prepare.md', 'meeting-state.md'];
+const MARKERS = ['start', 'time_check', 'silence_check', 'long_answer', 'handover', 'resume', 'ending'];
 const AVATARS = ['f01', 'f02', 'f03', 'm02', 'm04', 'm05'];
 
 /** Placeholders like {persona.title} in text; JSON-looking braces are ignored. */
@@ -384,6 +385,17 @@ export function checkContent(rootDir, opts = {}) {
     docs[`${name}.schema.json`] = JSON.parse(readFileSync(p, 'utf8'));
   }
   if (errors.length) return errors;
+  // Rubric, bank and voices formats: the contract schemas when present, else the copies in this file.
+  const contentSchema = (name, fallback) => {
+    const p = join(schemaDir, `${name}.schema.json`);
+    if (!existsSync(p)) return fallback;
+    const doc = JSON.parse(readFileSync(p, 'utf8'));
+    docs[`${name}.schema.json`] = doc;
+    return doc;
+  };
+  const rubricSchema = contentSchema('rubric', RUBRIC_SCHEMA);
+  const bankSchema = contentSchema('bank', BANK_SCHEMA);
+  const voicesSchema = contentSchema('voices', VOICES_SCHEMA);
   const check = (schema, data, file, doc) => validate(schema, data, { docs, doc: doc ?? schema }).forEach((e) => errors.push(`${rel(file)}: ${e}`));
 
   // Load and validate every file.
@@ -402,12 +414,12 @@ export function checkContent(rootDir, opts = {}) {
   const rounds = byId('rounds', docs['round.schema.json']);
   const personas = byId('personas', docs['persona.schema.json']);
   const templates = byId('meeting-templates', docs['meeting-template.schema.json']);
-  const rubrics = byId('rubrics', RUBRIC_SCHEMA);
-  const banks = byId('banks', BANK_SCHEMA);
+  const rubrics = byId('rubrics', rubricSchema);
+  const banks = byId('banks', bankSchema);
   const voicesFile = join(content, 'voices.json');
   const voices = existsSync(voicesFile) ? load(voicesFile) : null;
   if (!voices) errors.push('content/voices.json: missing');
-  else check(VOICES_SCHEMA, voices, voicesFile);
+  else check(voicesSchema, voices, voicesFile);
 
   // File names follow ids.
   for (const [id, { file }] of rounds) if (basename(file) !== `${id}.json`) errors.push(`${rel(file)}: file name must be ${id}.json`);
@@ -532,6 +544,9 @@ export function checkContent(rootDir, opts = {}) {
     const body = text.slice(header[0].length);
     for (const p of new Set(placeholdersIn(body))) if (!declared.has(p)) errors.push(`content/prompts/${name}: placeholder {${p}} is not declared in the header`);
     text.split('\n').forEach((line, i) => DASH.test(line) && errors.push(`content/prompts/${name}:${i + 1}: em or en dash`));
+    if (name === 'house-rules.md' || name === 'round-meeting.md') {
+      for (const m of MARKERS) if (!body.includes(`[event: ${m}]`)) errors.push(`content/prompts/${name}: does not handle [event: ${m}]`);
+    }
     if (name === 'house-rules.md') {
       for (const p of HOUSE_RULES_PLACEHOLDERS) if (!placeholdersIn(body).includes(p)) errors.push(`content/prompts/house-rules.md: must use {${p}}`);
       if (!body.includes('<!-- turn-note -->')) errors.push('content/prompts/house-rules.md: missing <!-- turn-note --> split');

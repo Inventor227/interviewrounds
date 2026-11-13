@@ -14,9 +14,9 @@ elsewhere) and `node --test tools/content-check.test.mjs`.
 | `rounds/<id>.json` | One file per round and length, e.g. `sde.system_design.full`. Phases, timings, panel, rubric, bank, board kit. | `schema/round.schema.json` |
 | `personas/<name>.json` | The eight interviewers and the meeting chair. | `schema/persona.schema.json` |
 | `meeting-templates/<id>.json` | The six meeting templates with default attendees. | `schema/meeting-template.schema.json` |
-| `rubrics/<name>.json` | Four competencies per round type, descriptors for scores 1 to 4, the bar per level. | `RUBRIC_SCHEMA` in `tools/content-check.mjs` |
-| `banks/<name>.json` | Question cards per round type, at least four each. | `BANK_SCHEMA` in `tools/content-check.mjs` |
-| `voices.json` | The voice for each persona, keyed by `voice_id`, with two alternates each. | `VOICES_SCHEMA` in `tools/content-check.mjs` |
+| `rubrics/<name>.json` | Four competencies per round type, descriptors for scores 1 to 4, the bar per level. | `schema/rubric.schema.json` |
+| `banks/<name>.json` | Question cards per round type, at least four each. | `schema/bank.schema.json` |
+| `voices.json` | The voice for each persona, keyed by `voice_id`, with two alternates each. | `schema/voices.schema.json` |
 | `prompts/*.md` | Prompt templates with `{placeholders}`. | see below |
 
 ## Rounds

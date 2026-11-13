@@ -104,3 +104,15 @@ test('an undeclared prompt placeholder is reported', () => {
 test('placeholdersIn finds dotted names and ignores JSON braces', () => {
   assert.deepEqual(placeholdersIn('Hi {persona.display_name}, {"id","kind"} {x}'), ['persona.display_name', 'x']);
 });
+
+test('a live prompt that ignores an app marker is reported', () => {
+  const dir = scratchCopy();
+  try {
+    const p = join(dir, 'content/prompts/round-meeting.md');
+    writeFileSync(p, readFileSync(p, 'utf8').replaceAll('[event: long_answer]', 'a long answer'));
+    const errors = checkContent(dir, { schemaDir });
+    assert.ok(errors.some((e) => e.includes('round-meeting.md') && e.includes('long_answer')), errors.join('\n'));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
