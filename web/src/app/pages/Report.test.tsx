@@ -152,6 +152,11 @@ describe('Report', () => {
     const root = await renderApp('/report/nosignal');
     expect($(root, 'no-signal')).not.toBeNull();
     expect($(root, 'verdict')).toBeNull();
+    // It says what was missing (enough answers and speech), not how long the round was.
+    const text = $(root, 'no-signal')!.textContent ?? '';
+    expect(text).toContain('two full answers');
+    expect(text).toMatch(/about a minute/);
+    expect(text).not.toContain('lasted about');
   });
 
   it('report_shows_meeting_outcome_and_no_hire_verdict', async () => {

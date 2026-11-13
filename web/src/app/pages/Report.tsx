@@ -182,7 +182,7 @@ function NoSignal(props: { r: ReportData; meeting: boolean }) {
       <p>
         {props.meeting
           ? `The meeting lasted about ${plural(mins, 'minute')} and ended before the room made a decision. What they said is below.`
-          : `The round lasted about ${plural(mins, 'minute')}, which is not enough to score fairly. We would rather say that than guess. A full answer or two is enough for a first read.`}
+          : `To score fairly we need at least two full answers and ${props.r.session.length === 'full' ? 'about a minute and a half' : 'about a minute'} of you talking. This round ended before that, and we would rather say so than guess.`}
       </p>
       <a class="btn btn-primary" href={again} data-test="no-signal-again">
         {props.meeting ? 'Rehearse it again' : 'Try the round again'}
