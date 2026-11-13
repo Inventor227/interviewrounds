@@ -282,4 +282,44 @@ describe('Report', () => {
     await settle();
     expect($(root, 'report-failed')).not.toBeNull();
   });
+
+  it('a_failed_report_offers_try_again_which_scores_it_again', async () => {
+    let status = 'failed';
+    const server = useFakeServer({
+      routes: {
+        'GET /api/sessions/f1/report': () => new Response(JSON.stringify({ code: 'not_ready', message: 'Report not ready' }), { status: 404 }),
+        'GET /api/sessions/f1': () => ({ status, report_ready: false }),
+        'POST /api/sessions/f1/report': () => {
+          status = 'scoring';
+          return new Response(JSON.stringify({ status: 'scoring' }), { status: 202, headers: { 'content-type': 'application/json' } });
+        },
+      },
+    });
+    const root = await renderApp('/report/f1');
+    await settle();
+    expect($(root, 'report-failed')).not.toBeNull();
+    await click($(root, 'report-retry'));
+    await settle();
+    expect(server.calls.filter((c) => c.method === 'POST' && c.path === '/api/sessions/f1/report')).toHaveLength(1);
+    expect($(root, 'report-failed')).toBeNull();
+    expect($(root, 'report-scoring')).not.toBeNull();
+  });
+
+  it('try_again_at_the_daily_limit_says_so_and_stays', async () => {
+    useFakeServer({
+      routes: {
+        'GET /api/sessions/f2/report': () => new Response(JSON.stringify({ code: 'not_ready', message: 'Report not ready' }), { status: 404 }),
+        'GET /api/sessions/f2': () => ({ status: 'failed', report_ready: false }),
+        'POST /api/sessions/f2/report': () =>
+          new Response(JSON.stringify({ code: 'rescore_limit', message: 'This report was retried twice today. Try again tomorrow.' }), { status: 429 }),
+      },
+    });
+    const root = await renderApp('/report/f2');
+    await settle();
+    await click($(root, 'report-retry'));
+    await settle();
+    expect($(root, 'report-retry-error')?.textContent).toBe('This report was retried twice today. Try again tomorrow.');
+    expect($(root, 'report-failed')).not.toBeNull();
+    expect(($(root, 'report-retry') as HTMLButtonElement).disabled).toBe(false);
+  });
 });

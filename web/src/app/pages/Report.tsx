@@ -759,6 +759,44 @@ class ReportBoundary extends Component<{ onRetry: () => void; children: Componen
   }
 }
 
+/** Scoring gave up (the model was down, or its answers were broken twice): one tap scores it again. */
+function Failed(props: { id: string; onRetried: () => void }) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const retry = async () => {
+    setBusy(true);
+    setErr(null);
+    try {
+      await api.rescore(props.id);
+      props.onRetried();
+    } catch (e) {
+      const a = toApiError(e);
+      setErr(a.code === 'rescore_limit' ? a.message : a.status === 0 ? 'No connection. Try again.' : 'Could not start it again. Try again in a minute.');
+      setBusy(false);
+    }
+  };
+  return (
+    <Page test="report" title="We could not score this round" back={{ href: '/history', label: 'History' }}>
+      <div class="state" data-test="report-failed">
+        <p>Something went wrong while writing the scorecard. Your other reports are fine.</p>
+        {err && (
+          <p class="note" role="alert" data-test="report-retry-error">
+            {err}
+          </p>
+        )}
+        <div class="row">
+          <button type="button" class="btn btn-primary" disabled={busy} onClick={() => void retry()} data-test="report-retry">
+            {busy ? 'Starting…' : 'Try again'}
+          </button>
+          <a class="btn" href="/history">
+            Your history
+          </a>
+        </div>
+      </div>
+    </Page>
+  );
+}
+
 export function Report(props: { id?: string }) {
   const id = props.id ?? '';
   const [view, reload] = useReport(id);
@@ -778,15 +816,12 @@ export function Report(props: { id?: string }) {
     );
   }
   if (view.kind === 'waiting') return <Waiting since={view.since} status={view.status} />;
-  if (view.kind === 'failed' || view.kind === 'abandoned') {
+  if (view.kind === 'failed') return <Failed id={id} onRetried={reload} />;
+  if (view.kind === 'abandoned') {
     return (
-      <Page test="report" title={view.kind === 'failed' ? 'We could not score this round' : 'This round was not scored'} back={{ href: '/history', label: 'History' }}>
-        <div class="state" data-test={`report-${view.kind}`}>
-          <p>
-            {view.kind === 'failed'
-              ? 'Something went wrong while writing the scorecard. Your other reports are fine.'
-              : 'It ended before there was anything to score.'}
-          </p>
+      <Page test="report" title="This round was not scored" back={{ href: '/history', label: 'History' }}>
+        <div class="state" data-test="report-abandoned">
+          <p>It ended before there was anything to score.</p>
           <div class="row">
             <a class="btn btn-primary" href="/start">
               Start a new round

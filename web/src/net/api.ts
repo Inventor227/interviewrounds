@@ -134,6 +134,8 @@ export const api = {
     roundPost<void>(`/api/sessions/${enc(sessionId)}/end`, { reason }),
   sessionStatus: (sessionId: string) => roundGet<SessionStatusRes>(`/api/sessions/${enc(sessionId)}`),
   report: (sessionId: string) => roundGet<Report>(`/api/sessions/${enc(sessionId)}/report`),
+  /** Scores a round whose report failed once more (two fresh attempts; at most twice a day). */
+  rescore: (sessionId: string) => post<{ status: string }>(`/api/sessions/${enc(sessionId)}/report`),
   uploadBoardImage: async (sessionId: string, png: Blob): Promise<void> => {
     if (png.size > BOARD_IMAGE_MAX_BYTES) {
       throw new ApiError(413, 'too_large', 'Board image is larger than 2 MB');
