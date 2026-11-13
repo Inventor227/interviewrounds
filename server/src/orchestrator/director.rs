@@ -44,14 +44,15 @@ pub fn system_text(speaker_system: &str) -> String {
 
 /// The last user message: the turn's input and note as the speaker saw them, then the spoken line.
 pub fn line_message(draft: &TurnDraft, speaker: &str, spoken: &str) -> String {
-    let mut parts: Vec<String> = Vec::new();
-    for m in &draft.messages {
-        let text = m.text();
-        match m.role {
-            Role::User => parts.push(format!("The candidate's turn: {}", text.trim())),
-            Role::System => parts.push(format!("The app note the speaker saw:\n{}", text.trim())),
-            Role::Assistant => {}
-        }
+    let mut parts: Vec<String> = vec![format!(
+        "The candidate's turn: {}",
+        draft.input.text().trim()
+    )];
+    for m in draft.messages.iter().filter(|m| m.role == Role::System) {
+        parts.push(format!(
+            "The app note the speaker saw:\n{}",
+            m.text().trim()
+        ));
     }
     let said = if spoken.trim().is_empty() {
         "(nothing)"
@@ -84,7 +85,8 @@ pub fn build_request(
         .collect::<Vec<_>>()
         .join("\n\n");
     let mut messages = state.history.clone();
-    // The history always ends on an assistant line (or is empty), so the new user message never follows a user.
+    // The history ends on the turn's user message (recorded at turn start); the line follows it as another user
+    // message, which the API joins with it.
     if let Some(block) = messages
         .last_mut()
         .filter(|m| m.role != Role::System)

@@ -86,6 +86,17 @@ impl SessionAuth for MemorySessionAuth {
     }
 }
 
+/// The browser's `voice.spoken {panelist_id, text_prefix}` report (the voice started playing this text): commits the
+/// matching parked reply and runs its tool actions now. Returns the events (also broadcast on `state.events`).
+/// Call `SessionState::flush_provisional` on pause and `Registry::end_session` at the end.
+pub fn confirm_spoken(
+    state: &mut SessionState,
+    panelist_id: &str,
+    text_prefix: &str,
+) -> Vec<ServerEvent> {
+    state.confirm_spoken(panelist_id, text_prefix)
+}
+
 /// Compares secrets without an early exit on the first differing byte.
 pub fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     if a.len() != b.len() {

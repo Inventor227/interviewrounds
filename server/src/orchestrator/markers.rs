@@ -46,6 +46,19 @@ impl EventKind {
         }
     }
 
+    /// Lower is more urgent (when several events wait in one turn).
+    pub fn urgency(self) -> u8 {
+        match self {
+            EventKind::Ending => 0,
+            EventKind::LongAnswer => 1,
+            EventKind::Handover => 2,
+            EventKind::Resume => 3,
+            EventKind::Start => 4,
+            EventKind::SilenceCheck => 5,
+            EventKind::TimeCheck => 6,
+        }
+    }
+
     fn from_name(name: &str) -> Option<EventKind> {
         Some(match name {
             "start" => EventKind::Start,
@@ -114,20 +127,25 @@ pub fn parse_user_input(text: &str) -> UserInput {
 
 /// One turn from all the user messages Fish sent since our last reply (Fish can hold more than one, for example a
 /// typed `[event: long_answer]` next to the candidate's speech, or speech we never answered). Speech parts are
-/// joined; the newest event wins. None when there is nothing.
+/// joined. When several events wait, the most urgent one is kept (ending, long answer, hand-over, resume, start,
+/// silence check, time check) and the others are logged. None when there is nothing.
 pub fn parse_user_turn<S: AsRef<str>>(parts: &[S]) -> Option<UserInput> {
     let mut speech: Vec<String> = Vec::new();
-    let mut event = None;
+    let mut events: Vec<EventKind> = Vec::new();
     for part in parts {
         match parse_user_input(part.as_ref()) {
             UserInput::Speech(s) if s.is_empty() => {}
             UserInput::Speech(s) => speech.push(s),
-            UserInput::Event(k) => event = Some(k),
+            UserInput::Event(k) => events.push(k),
             UserInput::SpeechWithEvent(s, k) => {
                 speech.push(s);
-                event = Some(k);
+                events.push(k);
             }
         }
+    }
+    let event = events.iter().copied().min_by_key(|k| k.urgency());
+    if events.len() > 1 {
+        tracing::info!(kept = ?event, waiting = events.len(), "several app events in one turn; the most urgent is kept");
     }
     let speech = speech.join(" ");
     match (speech.is_empty(), event) {

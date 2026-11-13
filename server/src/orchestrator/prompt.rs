@@ -36,6 +36,8 @@ pub struct TurnDraft {
     pub tool_result_ids: Vec<String>,
     pub notes_used: usize,
     pub warned_two_minutes: bool,
+    /// The user message is already in the history (recorded when the turn started); `messages` holds the note only.
+    pub user_committed: bool,
 }
 
 /// The request for one live turn. Pure: the state is not changed (the turn is committed after streaming).
@@ -60,19 +62,35 @@ pub fn prepare_live_turn(
         .or_else(|| state.panelist(&state.floor))
         .unwrap_or(&state.panel[0]);
     let draft = draft_turn(state, &panelist.panelist_id, input, now);
+    (
+        request_for_draft(state, &panelist.panelist_id, &draft),
+        draft,
+    )
+}
 
+/// The live request for a draft: the history, then the draft's messages (the user message and the note, or only the
+/// note once the user message is recorded).
+pub fn request_for_draft(
+    state: &SessionState,
+    panelist_id: &str,
+    draft: &TurnDraft,
+) -> MessagesRequest {
+    let panelist = state
+        .panelist(panelist_id)
+        .or_else(|| state.panelist(&state.floor))
+        .unwrap_or(&state.panel[0]);
     let mut messages = state.history.clone();
-    let mut new = draft.messages.clone();
-    // Second cache breakpoint on the newest user turn, so the growing history is read from cache next turn.
-    // It exists only in the request; the stored history carries no breakpoints.
-    if let Some(block) = new
+    messages.extend(draft.messages.clone());
+    // Second cache breakpoint on the newest user turn (in the history when it was recorded at turn start), so the
+    // growing history is read from cache next turn. It exists only in the request; the stored history carries none.
+    if let Some(block) = messages
         .iter_mut()
+        .rev()
         .find(|m| m.role == Role::User)
         .and_then(|m| m.content.last_mut())
     {
         block.set_cache_control(Some(CacheControl::ephemeral()));
     }
-    messages.extend(new);
 
     let model = state.live.model.clone();
     let (system, tools, tool_choice) = match state.live.tools {
@@ -82,14 +100,14 @@ pub fn prepare_live_turn(
             Some(ToolChoice::Auto),
         ),
         // Speech only: the director turns the line into tool actions afterwards. The note sits after the cached
-        // block, so the cached prefix is the same text the director reads.
+        // block, so the cached speaker prompt stays the same with or without it.
         ToolsMode::Director => {
             let mut system = panelist.system.clone();
             system.push(SystemBlock::text(director::SPEAK_ONLY_NOTE));
             (system, Vec::new(), None)
         }
     };
-    let req = MessagesRequest {
+    MessagesRequest {
         thinking: thinking_for(&model),
         fallbacks: fallbacks_for(&model),
         model,
@@ -100,8 +118,7 @@ pub fn prepare_live_turn(
         tool_choice,
         output_config: Some(OutputConfig::effort(&state.live.effort)),
         stream: true,
-    };
-    (req, draft)
+    }
 }
 
 /// The user message (tool results owed by the last reply first, then the input) and the system note.
@@ -131,6 +148,7 @@ pub fn draft_turn(
         tool_result_ids: state.pending_tool_results.clone(),
         notes_used: state.pending_notes.len(),
         warned_two_minutes,
+        user_committed: false,
     }
 }
 

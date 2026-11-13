@@ -176,17 +176,18 @@ pub struct Turn {
     pub heard: Option<String>,
 }
 
-/// A turn that was spoken (or streamed) but is not in the history yet, because the voice platform may not have
+/// A reply that was spoken (or streamed) but is not in the history yet, because the voice platform may not have
 /// played it: Fish starts speculative replies on interim transcripts and throws most of them away, a request can be
-/// cut off mid-stream, and the hold line can be spoken while another turn runs. It is committed once the voice
-/// platform shows it was played (its transcript in the next request, or the browser reporting playback), and
-/// dropped when the next request shows it was not.
+/// cut off mid-stream, and the hold line can be spoken while another turn runs. The user message it answers is
+/// already recorded (always, at turn start). The reply is committed when playback is confirmed (the browser's
+/// `voice.spoken` report through `confirm_spoken`, or the panelist's next Fish request showing it in the transcript)
+/// and dropped when that panelist's next request shows it was not played. Parked replies are kept per panelist.
 #[derive(Clone, Debug)]
 pub struct Provisional {
     pub id: u64,
     pub panelist_id: String,
     pub input: UserInput,
-    /// The draft the reply was made from; None = draft again when committing.
+    /// The draft the reply was made from (its note goes in with the reply); None = draft again when committing.
     pub draft: Option<TurnDraft>,
     /// Tool round trips inside the turn (inline tools).
     pub extra: Vec<Message>,
@@ -194,8 +195,10 @@ pub struct Provisional {
     pub reply: Vec<ContentBlock>,
     /// What was streamed to the voice.
     pub spoken: String,
-    /// Tool calls to apply when the turn is committed (inline calls, then the director's when it finishes).
+    /// Tool calls to apply when the reply is committed (inline calls, then the director's when it finishes).
     pub tool_calls: Vec<ToolCall>,
+    /// When the reply was spoken (the turn log time, whenever it is committed).
+    pub parked_at: Instant,
 }
 
 /// Everything a finished turn adds.
@@ -261,9 +264,13 @@ pub struct SessionState {
     /// Ids of recently committed turns (a director that finishes after the commit applies its calls then).
     pub recent_commits: std::collections::VecDeque<u64>,
     pub next_turn_id: u64,
-    /// Playback reported before its reply finished streaming (the voice starts speaking from the first words):
-    /// panelist, words heard, when. The reply is committed as soon as it is parked.
-    pub early_confirm: Option<(String, String, Instant)>,
+    /// Playback reported before its reply finished streaming (the voice starts speaking from the first words), per
+    /// panelist: words heard, when. The reply is committed as soon as it is parked.
+    pub early_confirm: HashMap<String, (String, Instant)>,
+    /// Per panelist: the candidate's words already recorded that this panelist has not answered with a played reply
+    /// yet. Fish repeats them in its next request (its transcript has no reply after them), so they are not
+    /// recorded twice.
+    pub unanswered: HashMap<String, String>,
     /// Dev voice spike only: this many next replies are sent empty (to observe the voice platform).
     pub dev_empty_replies: u8,
 }
@@ -373,7 +380,8 @@ impl SessionState {
             provisional: Vec::new(),
             recent_commits: std::collections::VecDeque::new(),
             next_turn_id: 1,
-            early_confirm: None,
+            early_confirm: HashMap::new(),
+            unanswered: HashMap::new(),
             dev_empty_replies: 0,
         })
     }
@@ -522,28 +530,119 @@ impl SessionState {
         events
     }
 
-    /// Parks a spoken turn until the voice platform confirms it (at once, if playback was already reported).
-    pub fn park(&mut self, p: Provisional) {
-        if let Some((panelist, heard, at)) = self.early_confirm.take() {
+    /// The part of `input` this panelist has not recorded yet: speech Fish repeats from an earlier request (its
+    /// draft reply was never played) is cut off the front. None when nothing is new.
+    pub fn new_words(&self, panelist_id: &str, input: UserInput) -> Option<UserInput> {
+        let Some(done) = self
+            .unanswered
+            .get(panelist_id)
+            .filter(|d| !d.trim().is_empty())
+        else {
+            return Some(input);
+        };
+        let fresh = |speech: &str| match strip_word_prefix(done, speech) {
+            Some(rest) => rest,
+            None => speech.to_string(),
+        };
+        match input {
+            UserInput::Speech(s) => {
+                let rest = fresh(&s);
+                (!rest.trim().is_empty()).then_some(UserInput::Speech(rest))
+            }
+            UserInput::SpeechWithEvent(s, k) => {
+                let rest = fresh(&s);
+                Some(if rest.trim().is_empty() {
+                    UserInput::Event(k)
+                } else {
+                    UserInput::SpeechWithEvent(rest, k)
+                })
+            }
+            event => Some(event),
+        }
+    }
+
+    /// Records the turn's user message now (the candidate's words are never lost, whatever happens to the reply)
+    /// and leaves only the note in the draft. With `repeat_only`, nothing new was said: no message is added unless
+    /// the history would otherwise not end on a user message.
+    pub fn record_user(&mut self, draft: &mut TurnDraft, repeat_only: bool, now: Instant) {
+        if draft.user_committed || draft.messages.is_empty() {
+            return;
+        }
+        let mut user = draft.messages.remove(0);
+        draft.user_committed = true;
+        let ends_on_user = self.history.last().is_some_and(|m| m.role == Role::User);
+        if repeat_only && ends_on_user {
+            return;
+        }
+        user.content
+            .iter_mut()
+            .for_each(|c| c.set_cache_control(None));
+        self.history.push(user);
+        self.pending_tool_results
+            .retain(|id| !draft.tool_result_ids.contains(id));
+        if repeat_only {
+            return;
+        }
+        let at_ms = self.elapsed_ms(now);
+        if let Some(said) = draft.input.speech() {
+            let unanswered = self
+                .unanswered
+                .entry(draft.panelist_id.clone())
+                .or_default();
+            if !unanswered.is_empty() {
+                unanswered.push(' ');
+            }
+            unanswered.push_str(said);
+            // Words that continue the candidate's last line join it in the turn log.
+            match self.turns.last_mut() {
+                Some(t) if t.speaker == "candidate" => {
+                    t.text.push(' ');
+                    t.text.push_str(said);
+                }
+                _ => self.turns.push(Turn {
+                    speaker: "candidate".into(),
+                    text: said.to_string(),
+                    at_ms,
+                    interrupted: false,
+                    heard: None,
+                }),
+            }
+        }
+        if let Some(kind) = draft.input.event() {
+            self.turns.push(Turn {
+                speaker: "app".into(),
+                text: kind.marker().to_string(),
+                at_ms,
+                interrupted: false,
+                heard: None,
+            });
+        }
+    }
+
+    /// Parks a spoken reply until the voice platform confirms it (at once, if playback was already reported).
+    pub fn park(&mut self, p: Provisional) -> Vec<ServerEvent> {
+        if let Some((heard, at)) = self.early_confirm.remove(&p.panelist_id) {
             let fresh = at.elapsed() < std::time::Duration::from_secs(15);
-            if fresh
-                && panelist == p.panelist_id
-                && compare_spoken(&p.spoken, &heard) != Heard::Unknown
-            {
-                tracing::info!(session_id = %self.id, panelist_id = %panelist, turn_id = p.id, "reply confirmed by playback before it finished");
-                self.commit_parked(p, None, Instant::now());
-                return;
+            if fresh && compare_spoken(&p.spoken, &heard) != Heard::Unknown {
+                tracing::info!(session_id = %self.id, panelist_id = %p.panelist_id, turn_id = p.id, "reply confirmed by playback before it finished");
+                return self.commit_parked(p, None);
             }
         }
         self.provisional.push(p);
+        Vec::new()
     }
 
-    fn commit_parked(&mut self, p: Provisional, heard: Option<&str>, now: Instant) {
+    fn commit_parked(&mut self, p: Provisional, heard: Option<&str>) -> Vec<ServerEvent> {
         let draft = match p.draft {
             Some(d) => d,
-            None => prompt::draft_turn(self, &p.panelist_id, &p.input, now),
+            None => {
+                let mut d = prompt::draft_turn(self, &p.panelist_id, &p.input, p.parked_at);
+                d.messages.retain(|m| m.role != Role::User);
+                d.user_committed = true;
+                d
+            }
         };
-        self.commit_now(
+        let events = self.commit_now(
             p.id,
             TurnCommit {
                 draft,
@@ -553,7 +652,7 @@ impl SessionState {
                 tool_calls: p.tool_calls,
                 handover_line_used: false,
             },
-            now,
+            p.parked_at,
         );
         if let Some(heard) = heard
             && let Some(turn) = self
@@ -565,18 +664,37 @@ impl SessionState {
             turn.interrupted = true;
             turn.heard = Some(heard.trim().to_string());
         }
+        events
     }
 
-    /// Settles parked turns against Fish's transcript (`fish_last`: its newest assistant message). The newest parked
-    /// turn whose line Fish has (all of it, or the start of it, which means the candidate cut in) is committed now,
-    /// marked interrupted when only part was played. Turns Fish does not have were drafts it threw away: they are
-    /// dropped, and their words come back in Fish's newer user message anyway.
-    pub fn resolve_provisional(&mut self, fish_last: Option<&str>, now: Instant) {
-        let parked = std::mem::take(&mut self.provisional);
-        let n = parked.len();
+    /// Settles this panelist's parked replies against its Fish session's transcript (`fish_last`: the newest
+    /// assistant message there). The newest parked reply Fish has (all of it, or the start of it, meaning the
+    /// candidate cut in) is committed, marked interrupted when only part was played. Replies Fish does not have were
+    /// drafts it threw away and are dropped. Other panelists' parked replies are never touched (their own sessions
+    /// settle them).
+    pub fn resolve_provisional(
+        &mut self,
+        panelist_id: &str,
+        fish_last: Option<&str>,
+    ) -> Vec<ServerEvent> {
+        let (mine, others): (Vec<Provisional>, Vec<Provisional>) =
+            std::mem::take(&mut self.provisional)
+                .into_iter()
+                .partition(|p| p.panelist_id == panelist_id);
+        self.provisional = others;
+        if mine.is_empty() {
+            return Vec::new();
+        }
+        // Fish's newest line is the one already committed: nothing parked was played.
+        let already = fish_last.is_some_and(|fish| {
+            self.last_agent_text
+                .get(panelist_id)
+                .is_some_and(|last| compare_spoken(last, fish) == Heard::All)
+        });
         let mut played = None;
-        if let Some(fish) = fish_last {
-            for p in parked.into_iter().rev() {
+        let n = mine.len();
+        if let (Some(fish), false) = (fish_last, already) {
+            for p in mine.into_iter().rev() {
                 if played.is_none() && compare_spoken(&p.spoken, fish) != Heard::Unknown {
                     played = Some(p);
                 }
@@ -584,41 +702,75 @@ impl SessionState {
         }
         let dropped = n - usize::from(played.is_some());
         if dropped > 0 {
-            tracing::info!(session_id = %self.id, dropped, "unplayed replies dropped");
+            tracing::info!(session_id = %self.id, panelist_id = %panelist_id, dropped, "unplayed replies dropped");
         }
-        if let (Some(p), Some(fish)) = (played, fish_last) {
-            let part = compare_spoken(&p.spoken, fish) == Heard::Part;
-            tracing::info!(session_id = %self.id, panelist_id = %p.panelist_id, turn_id = p.id, interrupted = part, "played reply committed");
-            self.commit_parked(p, part.then_some(fish), now);
+        match (played, fish_last) {
+            (Some(p), Some(fish)) => {
+                let part = compare_spoken(&p.spoken, fish) == Heard::Part;
+                tracing::info!(session_id = %self.id, panelist_id = %p.panelist_id, turn_id = p.id, interrupted = part, "played reply committed");
+                self.commit_parked(p, part.then_some(fish))
+            }
+            _ => Vec::new(),
         }
     }
 
-    /// The browser reports that the voice started playing `heard` (the text so far) for `panelist_id`: the matching
-    /// parked turn is committed at once, so its tool calls reach the screen while it is spoken. Returns whether one
-    /// was found.
-    pub fn confirm_spoken(&mut self, panelist_id: &str, heard: &str, now: Instant) -> bool {
+    /// The browser reports that `panelist_id`'s voice started playing `text_prefix` (the reply's text so far,
+    /// `voice.spoken`). The matching parked reply is committed at once and its tool actions run now (brief card,
+    /// phase, hint, hand-over, end), so they happen while the line plays; the panelist's older parked replies are
+    /// dropped. A report that arrives before the reply finished streaming is kept and applied when it is parked.
+    /// Returns the events the actions produced (also broadcast on the session's event channel).
+    pub fn confirm_spoken(&mut self, panelist_id: &str, text_prefix: &str) -> Vec<ServerEvent> {
         let Some(i) = self.provisional.iter().rposition(|p| {
-            p.panelist_id == panelist_id && compare_spoken(&p.spoken, heard) != Heard::Unknown
+            p.panelist_id == panelist_id && compare_spoken(&p.spoken, text_prefix) != Heard::Unknown
         }) else {
-            // The reply may still be streaming: remember the report for when it is parked (unless it is about the
-            // line already committed, such as a reply to a typed event).
+            // Unless it is about the line already committed (a reply to a typed event, or a repeat report).
             let committed = self
                 .last_agent_text
                 .get(panelist_id)
-                .is_some_and(|last| compare_spoken(last, heard) != Heard::Unknown);
+                .is_some_and(|last| compare_spoken(last, text_prefix) != Heard::Unknown);
             if !committed {
-                self.early_confirm = Some((panelist_id.to_string(), heard.to_string(), now));
+                self.early_confirm.insert(
+                    panelist_id.to_string(),
+                    (text_prefix.to_string(), Instant::now()),
+                );
             }
-            return false;
+            return Vec::new();
         };
-        // Older parked turns were superseded by this one.
-        let mut parked = std::mem::take(&mut self.provisional);
-        let p = parked.remove(i);
-        parked.drain(..i);
-        self.provisional = parked;
+        let p = self.provisional.remove(i);
+        // This panelist's older parked replies were superseded by this one.
+        let mut seen = 0;
+        self.provisional.retain(|q| {
+            let older = q.panelist_id == panelist_id && seen < i;
+            seen += 1;
+            !older
+        });
         tracing::info!(session_id = %self.id, panelist_id = %panelist_id, turn_id = p.id, "reply confirmed by playback");
-        self.commit_parked(p, None, now);
-        true
+        self.commit_parked(p, None)
+    }
+
+    /// On pause and at session end: parked replies whose playback was reported are committed (their actions,
+    /// end_round included, run now); the rest were never played and are dropped. The candidate's words are already
+    /// recorded either way.
+    pub fn flush_provisional(&mut self) -> Vec<ServerEvent> {
+        let parked = std::mem::take(&mut self.provisional);
+        let mut events = Vec::new();
+        let mut dropped = 0;
+        for p in parked {
+            let reported = self
+                .early_confirm
+                .get(&p.panelist_id)
+                .is_some_and(|(heard, _)| compare_spoken(&p.spoken, heard) != Heard::Unknown);
+            if reported {
+                self.early_confirm.remove(&p.panelist_id);
+                events.extend(self.commit_parked(p, None));
+            } else {
+                dropped += 1;
+            }
+        }
+        if dropped > 0 {
+            tracing::info!(session_id = %self.id, dropped, "unplayed replies dropped at flush");
+        }
+        events
     }
 
     /// The director finished for turn `id`: its calls ride with the parked turn, are applied now if the turn is
@@ -661,50 +813,45 @@ impl SessionState {
         } = commit;
         let panelist = draft.panelist_id.clone();
         let at_ms = self.elapsed_ms(now);
+        let mut draft = draft;
+        if !draft.user_committed {
+            self.record_user(&mut draft, false, now);
+        }
 
-        self.pending_tool_results
-            .retain(|id| !draft.tool_result_ids.contains(id));
         let used = draft.notes_used.min(self.pending_notes.len());
         self.pending_notes.drain(..used);
         self.heard_note.remove(&panelist);
         self.two_minute_warned |= draft.warned_two_minutes;
+        self.unanswered.remove(&panelist);
 
-        let mut messages = draft.messages;
-        for m in &mut messages {
-            m.content.iter_mut().for_each(|c| c.set_cache_control(None));
-        }
-        self.history.extend(messages);
-        self.history.extend(extra);
-        if !reply.is_empty() {
-            for block in &reply {
-                if let ContentBlock::ToolUse { id, .. } = block {
-                    self.pending_tool_results.push(id.clone());
-                }
+        // The note and the reply follow the user message they answer. When another reply was recorded after that
+        // message (joined panel, a late confirmation), the history cannot take a note after an assistant turn: the
+        // line goes to the next turn's note instead.
+        let ends_on_user = self.history.last().is_some_and(|m| m.role == Role::User);
+        if ends_on_user {
+            let mut messages = draft.messages;
+            for m in &mut messages {
+                m.content.iter_mut().for_each(|c| c.set_cache_control(None));
             }
-            self.history.push(Message {
-                role: Role::Assistant,
-                content: reply,
-            });
+            self.history.extend(messages);
+            self.history.extend(extra);
+            if !reply.is_empty() {
+                for block in &reply {
+                    if let ContentBlock::ToolUse { id, .. } = block {
+                        self.pending_tool_results.push(id.clone());
+                    }
+                }
+                self.history.push(Message {
+                    role: Role::Assistant,
+                    content: reply,
+                });
+            }
+        } else if !spoken.trim().is_empty() {
+            let name = self.display_name(&panelist);
+            self.pending_notes
+                .push(format!("Earlier, {name} also said: \"{}\"", spoken.trim()));
         }
 
-        if let Some(said) = draft.input.speech() {
-            self.turns.push(Turn {
-                speaker: "candidate".into(),
-                text: said.to_string(),
-                at_ms,
-                interrupted: false,
-                heard: None,
-            });
-        }
-        if let Some(kind) = draft.input.event() {
-            self.turns.push(Turn {
-                speaker: "app".into(),
-                text: kind.marker().to_string(),
-                at_ms,
-                interrupted: false,
-                heard: None,
-            });
-        }
         self.turns.push(Turn {
             speaker: panelist.clone(),
             text: spoken.clone(),
@@ -750,6 +897,29 @@ fn words(text: &str) -> Vec<String> {
         .split_whitespace()
         .map(str::to_string)
         .collect()
+}
+
+/// `text` without its leading words that equal `prefix`'s words (case and punctuation ignored; the last prefix word
+/// may be cut short). None when `text` does not start with `prefix`.
+fn strip_word_prefix(prefix: &str, text: &str) -> Option<String> {
+    let want = words(prefix);
+    if want.is_empty() {
+        return Some(text.to_string());
+    }
+    let tokens: Vec<&str> = text.split_whitespace().collect();
+    let mut seen: Vec<String> = Vec::new();
+    for (i, token) in tokens.iter().enumerate() {
+        seen.extend(words(token));
+        if seen.len() >= want.len() {
+            let last = want.len() - 1;
+            let same = seen[..last] == want[..last] && seen[last].starts_with(&want[last]);
+            if !same || seen.len() > want.len() {
+                return None;
+            }
+            return Some(tokens[i + 1..].join(" "));
+        }
+    }
+    None
 }
 
 /// Whether `fish` (what was played) is all of `ours`, a strict prefix of it, or something else.
@@ -799,6 +969,18 @@ impl Registry {
         handle
     }
 
+    /// Ends a session: flushes its parked replies (confirmed ones are committed and their actions run; unplayed ones
+    /// are dropped), then removes it. Returns the final state handle and the events the flush produced.
+    pub async fn end_session(
+        &self,
+        id: &str,
+    ) -> Option<(Arc<Mutex<SessionState>>, Vec<ServerEvent>)> {
+        let handle = self.get(id)?;
+        let events = handle.lock().await.flush_provisional();
+        self.remove(id);
+        Some((handle, events))
+    }
+
     pub fn remove(&self, id: &str) -> Option<Arc<Mutex<SessionState>>> {
         self.inner
             .write()
@@ -818,6 +1000,20 @@ impl Registry {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn word_prefix_is_stripped() {
+        assert_eq!(
+            strip_word_prefix("So first,", "So first, are the seats assigned?").as_deref(),
+            Some("are the seats assigned?")
+        );
+        assert_eq!(
+            strip_word_prefix("so FIRST", "So first.").as_deref(),
+            Some("")
+        );
+        assert_eq!(strip_word_prefix("Hello there", "Hi there"), None);
+        assert_eq!(strip_word_prefix("a b c", "a b"), None);
+    }
 
     #[test]
     fn spoken_prefix_detection() {

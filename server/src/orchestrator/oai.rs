@@ -23,7 +23,7 @@ use tokio::sync::{Mutex, OwnedMutexGuard};
 use super::constant_time_eq;
 use super::director;
 use super::markers::{EventKind, UserInput, parse_user_turn};
-use super::prompt::{TurnDraft, prepare_live_turn};
+use super::prompt::{TurnDraft, draft_turn, request_for_draft};
 use super::speech_filter::SpeechFilter;
 use super::state::{Provisional, SessionState, ToolsMode, TurnCommit, VoiceKind};
 use super::tools::ToolCall;
@@ -365,6 +365,7 @@ impl Drop for TurnGuard {
             reply: vec![ContentBlock::text(self.said.trim().to_string())],
             spoken: self.spoken.trim().to_string(),
             tool_calls: Vec::new(),
+            parked_at: Instant::now(),
         };
         tracing::info!(session_id = %self.session_id, panelist_id = %self.panelist, spoken_chars = provisional.spoken.len(), "turn cut off after speech; parked");
         handle.spawn(async move {
@@ -399,19 +400,30 @@ fn turn_stream(
         let Ok(turn) = tokio::time::timeout(wait, turn_lock.lock_owned()).await else {
             tracing::warn!(session_id = %session_id, "previous turn still running; holding");
             // The candidate hears the hold line, so the turn is kept (parked until the next request confirms it).
+            // The candidate's words are recorded now, like every turn.
             {
                 let mut st = session.lock().await;
                 let panelist_id = st.resolve_panelist(panelist_req.as_deref());
+                let now = Instant::now();
+                let (draft, input) = match st.new_words(&panelist_id, input.clone()) {
+                    Some(new) => {
+                        let mut draft = draft_turn(&st, &panelist_id, &new, now);
+                        st.record_user(&mut draft, false, now);
+                        (Some(draft), new)
+                    }
+                    None => (None, input.clone()),
+                };
                 let id = st.new_turn_id();
                 st.park(Provisional {
                     id,
                     panelist_id,
-                    input: input.clone(),
-                    draft: None,
+                    input,
+                    draft,
                     extra: Vec::new(),
                     reply: vec![ContentBlock::text(opts.hold_line.clone())],
                     spoken: opts.hold_line.clone(),
                     tool_calls: Vec::new(),
+                    parked_at: now,
                 });
             }
             yield Ok(chunks.content(&opts.hold_line));
@@ -434,17 +446,23 @@ fn turn_stream(
             return;
         }
 
-        let (panelist, handover_line, req, draft, live) = {
+        // The panelist first: only its own parked replies are settled against its own Fish transcript.
+        let (panelist, handover_line, input, repeat_only, draft, live) = {
             let mut st = session.lock().await;
-            st.resolve_provisional(fish_last.as_deref(), Instant::now());
             let panelist = st.resolve_panelist(panelist_req.as_deref());
+            st.resolve_provisional(&panelist, fish_last.as_deref());
             st.observe_fish_transcript(&panelist, fish_last.as_deref());
             let handover_line = match input {
                 UserInput::Event(EventKind::Handover) => st.pending_handover.get(&panelist).cloned(),
                 _ => None,
             };
-            let (req, draft) = prepare_live_turn(&st, &panelist, &input, Instant::now());
-            (panelist, handover_line, req, draft, st.live.clone())
+            // Words Fish repeats from an earlier request (its draft reply was never played) are recorded already.
+            let (input, repeat_only) = match st.new_words(&panelist, input.clone()) {
+                Some(new) => (new, false),
+                None => (input.clone(), true),
+            };
+            let draft = draft_turn(&st, &panelist, &input, Instant::now());
+            (panelist, handover_line, input, repeat_only, draft, st.live.clone())
         };
         let mut guard = TurnGuard {
             session: session.clone(),
@@ -452,7 +470,7 @@ fn turn_stream(
             session_id: session_id.clone(),
             panelist: panelist.clone(),
             input: input.clone(),
-            draft: Some(draft.clone()),
+            draft: None,
             spoken: String::new(),
             said: String::new(),
             done: false,
@@ -495,7 +513,14 @@ fn turn_stream(
             tracing::warn!(session_id = %session_id, panelist_id = %panelist, "hand-over line was empty after filtering; asking the model");
         }
 
-        let mut req = req;
+        // The user turn is recorded now, whatever happens to the reply; the request is the history plus the note.
+        let mut draft = draft;
+        let mut req = {
+            let mut st = session.lock().await;
+            st.record_user(&mut draft, repeat_only, Instant::now());
+            request_for_draft(&st, &panelist, &draft)
+        };
+        guard.draft = Some(draft.clone());
         let mut filter = SpeechFilter::new();
         let mut asm = Assembler::default();
         let mut extra: Vec<Message> = Vec::new();
@@ -661,6 +686,9 @@ fn turn_stream(
             reply.insert(at, ContentBlock::text(opts.hold_line.clone()));
             spoken = opts.hold_line.clone();
             ttft_ms.get_or_insert(started.elapsed().as_millis() as u64);
+            // Kept by the guard too, in case the request is dropped right after this chunk.
+            guard.spoken = spoken.clone();
+            guard.said = spoken.clone();
             yield Ok(chunks.content(&spoken));
         }
 
@@ -684,6 +712,7 @@ fn turn_stream(
                     reply,
                     spoken: spoken.clone(),
                     tool_calls,
+                    parked_at: Instant::now(),
                 });
             } else {
                 st.commit_now(

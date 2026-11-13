@@ -1197,16 +1197,16 @@ async fn dropped_turn_after_speech_is_kept_when_fish_played_it() {
     )
     .await;
     assert!(first.contains("Okay. So walk me through"), "{first}");
-    assert!(
-        state
-            .registry
-            .get("s1")
-            .unwrap()
-            .lock()
-            .await
-            .history
-            .is_empty()
-    );
+    // Only the candidate's words are recorded; the reply waits.
+    {
+        let st = state.registry.get("s1").unwrap();
+        let st = st.lock().await;
+        assert!(
+            st.history.iter().all(|m| m.role == Role::User),
+            "{:?}",
+            st.history
+        );
+    }
 
     // Fish played part of the line, then the candidate spoke again.
     let res = post_chat(
@@ -1278,8 +1278,19 @@ async fn dropped_draft_that_was_never_played_is_forgotten() {
     assert_eq!(res.text(), "Okay. Why a cache?");
     let st = state.registry.get("s1").unwrap();
     let st = st.lock().await;
-    assert_eq!(user_texts(&st.history), vec!["I'd put a cache in front."]);
+    // The draft's words were recorded when it started; only the new words are added.
+    assert_eq!(
+        user_texts(&st.history),
+        vec!["I'd put", "a cache in front."]
+    );
     assert!(st.provisional.is_empty());
+    let candidate: Vec<&str> = st
+        .turns
+        .iter()
+        .filter(|t| t.speaker == "candidate")
+        .map(|t| t.text.as_str())
+        .collect();
+    assert_eq!(candidate, vec!["I'd put a cache in front."]);
 }
 
 #[tokio::test]
@@ -1462,16 +1473,16 @@ async fn request_ending_with_our_reply_is_not_answered_again() {
     .await;
     assert_eq!(res.text(), "Sorry, give me a second.");
     assert_eq!(llm.calls(), 0);
-    assert!(
-        state
-            .registry
-            .get("s1")
-            .unwrap()
-            .lock()
-            .await
-            .history
-            .is_empty()
-    );
+    // Only the candidate's words are recorded; the reply waits.
+    {
+        let st = state.registry.get("s1").unwrap();
+        let st = st.lock().await;
+        assert!(
+            st.history.iter().all(|m| m.role == Role::User),
+            "{:?}",
+            st.history
+        );
+    }
 }
 
 #[tokio::test]
@@ -1654,16 +1665,16 @@ async fn speculative_replies_wait_for_the_voice_platform() {
     )
     .await;
     assert_eq!(r1.text(), "Go ahead.");
-    assert!(
-        state
-            .registry
-            .get("s1")
-            .unwrap()
-            .lock()
-            .await
-            .history
-            .is_empty()
-    );
+    // Only the candidate's words are recorded; the reply waits.
+    {
+        let st = state.registry.get("s1").unwrap();
+        let st = st.lock().await;
+        assert!(
+            st.history.iter().all(|m| m.role == Role::User),
+            "{:?}",
+            st.history
+        );
+    }
 
     // The finished utterance: Fish never played "Go ahead.", so that draft is dropped.
     let r2 = post_chat(
@@ -1677,21 +1688,28 @@ async fn speculative_replies_wait_for_the_voice_platform() {
     )
     .await;
     assert_eq!(r2.text(), "Assigned seating.");
-    // The model never saw the dropped draft.
+    // The model never saw the dropped draft, and the repeated words are not doubled.
     assert_eq!(
         user_texts(&llm.request(1).messages),
-        vec!["So first, are the seats assigned?"]
+        vec!["So first,", "are the seats assigned?"]
+    );
+    assert!(
+        llm.request(1)
+            .messages
+            .iter()
+            .all(|m| m.text() != "Go ahead.")
     );
 
     // The browser reports playback: the reply is committed at once.
     {
         let st = state.registry.get("s1").unwrap();
         let mut st = st.lock().await;
-        assert!(st.history.is_empty());
-        assert!(st.confirm_spoken("p1", "Assigned", Instant::now()));
+        assert!(st.history.iter().all(|m| m.role == Role::User));
+        st.confirm_spoken("p1", "Assigned");
+        assert!(st.provisional.is_empty());
         assert_eq!(
             user_texts(&st.history),
-            vec!["So first, are the seats assigned?"]
+            vec!["So first,", "are the seats assigned?"]
         );
         assert!(st.provisional.is_empty());
     }
@@ -1715,11 +1733,11 @@ async fn speculative_replies_wait_for_the_voice_platform() {
     let st = st.lock().await;
     assert_eq!(
         user_texts(&st.history),
-        vec!["So first, are the seats assigned?"]
+        vec!["So first,", "are the seats assigned?", "Got it."]
     );
     assert_eq!(st.provisional.len(), 1, "the newest reply waits in turn");
     let speakers: Vec<&str> = st.turns.iter().map(|t| t.speaker.as_str()).collect();
-    assert_eq!(speakers, vec!["candidate", "p1"]);
+    assert_eq!(speakers, vec!["candidate", "p1", "candidate"]);
 }
 
 #[tokio::test]
@@ -1770,7 +1788,7 @@ async fn director_calls_of_an_unplayed_reply_are_dropped() {
 async fn playback_reported_while_the_reply_streams_commits_it_when_done() {
     let mut st = new_state("s1", "sde.system_design.short", VoiceKind::Fish);
     // The voice starts speaking from the first words, before the stream ends and the reply is parked.
-    assert!(!st.confirm_spoken("p1", "Okay. Let's", Instant::now()));
+    assert!(st.confirm_spoken("p1", "Okay. Let's").is_empty());
     let draft = ir_server::orchestrator::prompt::draft_turn(
         &st,
         "p1",
@@ -1787,8 +1805,271 @@ async fn playback_reported_while_the_reply_streams_commits_it_when_done() {
         reply: vec![ContentBlock::text("Okay. Let's move on.")],
         spoken: "Okay. Let's move on.".into(),
         tool_calls: Vec::new(),
+        parked_at: Instant::now(),
     });
     assert!(st.provisional.is_empty());
     assert_eq!(user_texts(&st.history), vec!["That covers it."]);
     assert!(st.recent_commits.contains(&id));
+}
+
+// ---------- fix round 1: per-panelist parking, confirmation, flush ----------
+
+#[tokio::test]
+async fn two_panelists_keep_their_own_parked_replies() {
+    let llm = ScriptedLlm::new(vec![
+        reply("Okay. Why sections?"),
+        reply("Say a section's node dies at peak. What happens?"),
+        reply("Got it."),
+    ]);
+    let (app, state) = test_app_with(llm.clone(), |o| o.confirm_speech_turns = true);
+    state
+        .registry
+        .insert(new_state("s1", "sde.system_design.full", VoiceKind::Fish));
+
+    // Daniel (p1) answers the candidate; the reply waits for playback.
+    post_chat(
+        &app,
+        SECRET,
+        chat_body(
+            "s1",
+            "p1",
+            json!([{"role": "user", "content": "I'd shard by section."}]),
+        ),
+    )
+    .await;
+    // Ana's (p2) own Fish session knows nothing of Daniel's line: her request must not drop it.
+    post_chat(
+        &app,
+        SECRET,
+        chat_body(
+            "s1",
+            "p2",
+            json!([{"role": "user", "content": "[event: handover]"}]),
+        ),
+    )
+    .await;
+    {
+        let st = state.registry.get("s1").unwrap();
+        let st = st.lock().await;
+        assert_eq!(st.provisional.len(), 1);
+        assert_eq!(st.provisional[0].panelist_id, "p1");
+        assert!(
+            st.turns
+                .iter()
+                .any(|t| t.speaker == "candidate" && t.text == "I'd shard by section.")
+        );
+    }
+    // Daniel's next request shows his line was played: it is committed now, after Ana's turn.
+    post_chat(
+        &app,
+        SECRET,
+        chat_body(
+            "s1",
+            "p1",
+            json!([
+                {"role": "user", "content": "I'd shard by section."},
+                {"role": "assistant", "content": "Okay. Why sections?"},
+                {"role": "user", "content": "Load spreads out."}
+            ]),
+        ),
+    )
+    .await;
+    let st = state.registry.get("s1").unwrap();
+    let st = st.lock().await;
+    assert!(
+        st.turns
+            .iter()
+            .any(|t| t.speaker == "p1" && t.text == "Okay. Why sections?")
+    );
+    assert!(st.turns.iter().any(|t| t.speaker == "p2"));
+    let candidate: Vec<&str> = st
+        .turns
+        .iter()
+        .filter(|t| t.speaker == "candidate")
+        .map(|t| t.text.as_str())
+        .collect();
+    assert_eq!(
+        candidate,
+        vec!["I'd shard by section.", "Load spreads out."]
+    );
+    // History stays well formed: no system note right after an assistant turn.
+    for w in st.history.windows(2) {
+        assert!(
+            !(w[0].role == Role::Assistant && w[1].role == Role::System),
+            "{:?}",
+            st.history
+        );
+    }
+}
+
+#[tokio::test]
+async fn confirm_runs_director_actions_once() {
+    let llm = ScriptedLlm::with_creates(
+        vec![reply("Okay. Let's move on to the design."), reply("Go on.")],
+        vec![
+            director_reply(json!([
+                {"type": "tool_use", "id": "toolu_d1", "name": "next_phase", "input": {}}
+            ])),
+            director_reply(json!([])),
+        ],
+    );
+    let (app, state) = test_app_with(llm.clone(), |o| o.confirm_speech_turns = true);
+    let mut st = new_state("s1", "sde.system_design.short", VoiceKind::Fish);
+    st.live.tools = ToolsMode::Director;
+    state.registry.insert(st);
+
+    post_chat(
+        &app,
+        SECRET,
+        chat_body(
+            "s1",
+            "p1",
+            json!([{"role": "user", "content": "That's the API."}]),
+        ),
+    )
+    .await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let handle = state.registry.get("s1").unwrap();
+    {
+        let mut st = handle.lock().await;
+        assert_eq!(st.phase_idx, 0, "nothing runs before playback");
+        // voice.spoken from the browser: the line started playing.
+        let events = ir_server::orchestrator::confirm_spoken(&mut st, "p1", "Okay. Let's move");
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, ServerEvent::RoundState(r) if r.phase_index == 1)),
+            "{events:?}"
+        );
+        assert_eq!(st.phase_idx, 1);
+        // A repeat report changes nothing.
+        assert!(
+            ir_server::orchestrator::confirm_spoken(&mut st, "p1", "Okay. Let's move on")
+                .is_empty()
+        );
+        assert_eq!(st.phase_idx, 1);
+    }
+    // Fish's next request also shows the line: nothing is applied twice.
+    post_chat(
+        &app,
+        SECRET,
+        chat_body(
+            "s1",
+            "p1",
+            json!([
+                {"role": "user", "content": "That's the API."},
+                {"role": "assistant", "content": "Okay. Let's move on to the design."},
+                {"role": "user", "content": "Sure."}
+            ]),
+        ),
+    )
+    .await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let st = handle.lock().await;
+    assert_eq!(st.phase_idx, 1);
+    let p1_lines = st.turns.iter().filter(|t| t.speaker == "p1").count();
+    assert_eq!(p1_lines, 1, "the confirmed line is recorded once");
+}
+
+#[tokio::test]
+async fn end_of_session_flush_records_the_last_exchange() {
+    let llm = ScriptedLlm::with_creates(
+        vec![reply("That's time. Thanks for designing this with me.")],
+        vec![director_reply(json!([
+            {"type": "tool_use", "id": "toolu_e", "name": "end_round",
+             "input": {"closing_line": "That's time. Thanks for designing this with me."}}
+        ]))],
+    );
+    let (app, state) = test_app_with(llm.clone(), |o| o.confirm_speech_turns = true);
+    let mut st = new_state("s1", "sde.system_design.short", VoiceKind::Fish);
+    st.live.tools = ToolsMode::Director;
+    let mut events = st.events.subscribe();
+    state.registry.insert(st);
+
+    post_chat(
+        &app,
+        SECRET,
+        chat_body(
+            "s1",
+            "p1",
+            json!([{"role": "user", "content": "And that's my design."}]),
+        ),
+    )
+    .await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    // The browser reports the closing line playing, then the session ends: the exchange and the close are kept.
+    let handle = state.registry.get("s1").unwrap();
+    {
+        let mut st = handle.lock().await;
+        let ev = st.confirm_spoken("p1", "That's time.");
+        assert!(
+            ev.iter()
+                .any(|e| matches!(e, ServerEvent::RoundEnding { .. }))
+        );
+    }
+    let (_h, flushed) = state.registry.end_session("s1").await.expect("session");
+    assert!(flushed.is_empty(), "the close ran once, at confirmation");
+    assert!(state.registry.get("s1").is_none());
+    let st = handle.lock().await;
+    assert_eq!(
+        st.closing_line.as_deref(),
+        Some("That's time. Thanks for designing this with me.")
+    );
+    let last: Vec<(&str, &str)> = st
+        .turns
+        .iter()
+        .map(|t| (t.speaker.as_str(), t.text.as_str()))
+        .collect();
+    assert_eq!(
+        last,
+        vec![
+            ("candidate", "And that's my design."),
+            ("p1", "That's time. Thanks for designing this with me.")
+        ]
+    );
+    assert!(matches!(
+        events.try_recv(),
+        Ok(ServerEvent::RoundEnding { .. })
+    ));
+}
+
+#[tokio::test]
+async fn flush_without_playback_keeps_the_candidates_words_and_drops_the_reply() {
+    let llm = ScriptedLlm::new(vec![reply("Okay. And the cache?")]);
+    let (app, state) = test_app_with(llm.clone(), |o| o.confirm_speech_turns = true);
+    state
+        .registry
+        .insert(new_state("s1", "sde.system_design.short", VoiceKind::Fish));
+    post_chat(
+        &app,
+        SECRET,
+        chat_body(
+            "s1",
+            "p1",
+            json!([{"role": "user", "content": "Writes go to Postgres."}]),
+        ),
+    )
+    .await;
+    let handle = state.registry.get("s1").unwrap();
+    let flushed = handle.lock().await.flush_provisional();
+    assert!(flushed.is_empty());
+    let st = handle.lock().await;
+    assert!(st.provisional.is_empty());
+    assert_eq!(user_texts(&st.history), vec!["Writes go to Postgres."]);
+    assert!(st.turns.iter().all(|t| t.speaker != "p1"));
+}
+
+#[test]
+fn the_most_urgent_waiting_event_is_kept() {
+    assert_eq!(
+        parse_user_turn(&["[event: ending]", "[event: time_check]"]),
+        Some(UserInput::Event(EventKind::Ending))
+    );
+    assert_eq!(
+        parse_user_turn(&["[event: silence_check]", "So", "[event: long_answer]"]),
+        Some(UserInput::SpeechWithEvent(
+            "So".into(),
+            EventKind::LongAnswer
+        ))
+    );
 }

@@ -8,7 +8,7 @@ use std::time::Instant;
 
 use axum::Json;
 use axum::extract::{Query, State};
-use axum::http::{HeaderValue, header};
+use axum::http::{HeaderMap, HeaderValue, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use serde::Deserialize;
@@ -44,6 +44,18 @@ struct KeyQuery {
     key: String,
     #[serde(default)]
     session_id: Option<String>,
+}
+
+/// At most this many spike sessions per server process (each one bills Fish minutes).
+const MAX_SPIKE_SESSIONS: usize = 12;
+static SPIKE_SESSIONS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// The dev key from the `x-dev-key` header (API calls) or the `key` query (the page itself).
+fn dev_key<'a>(headers: &'a HeaderMap, q: &'a KeyQuery) -> &'a str {
+    headers
+        .get("x-dev-key")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or(&q.key)
 }
 
 fn check_key(app: &AppState, key: &str) -> Result<(), AppError> {
@@ -117,10 +129,18 @@ fn load_catalog(app: &AppState) -> Result<Catalog, AppError> {
 
 async fn create_session(
     State(app): State<AppState>,
+    headers: HeaderMap,
     Query(q): Query<KeyQuery>,
     Json(body): Json<CreateBody>,
 ) -> Result<Json<Value>, AppError> {
-    check_key(&app, &q.key)?;
+    check_key(&app, dev_key(&headers, &q))?;
+    let made = SPIKE_SESSIONS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    if made >= MAX_SPIKE_SESSIONS {
+        return Err(AppError::Limited {
+            code: "spike_cap",
+            message: "spike session cap reached for this server process".into(),
+        });
+    }
     let catalog = load_catalog(&app)?;
     let id = format!("spike-{}", uuid::Uuid::new_v4().simple());
     let state = SessionState::new(
@@ -184,9 +204,10 @@ async fn create_session(
 /// The server's view of a spike session: turn log, parked turns, floor, phase and brief.
 async fn session_state(
     State(app): State<AppState>,
+    headers: HeaderMap,
     Query(q): Query<KeyQuery>,
 ) -> Result<Json<Value>, AppError> {
-    check_key(&app, &q.key)?;
+    check_key(&app, dev_key(&headers, &q))?;
     let id = q.session_id.unwrap_or_default();
     if !id.starts_with("spike-") {
         return Err(AppError::NotFound);
@@ -207,9 +228,10 @@ async fn session_state(
 /// Makes the next live reply of a spike session empty, to see what Fish does with an empty reply.
 async fn empty_next(
     State(app): State<AppState>,
+    headers: HeaderMap,
     Query(q): Query<KeyQuery>,
 ) -> Result<Json<Value>, AppError> {
-    check_key(&app, &q.key)?;
+    check_key(&app, dev_key(&headers, &q))?;
     let id = q.session_id.unwrap_or_default();
     if !id.starts_with("spike-") {
         return Err(AppError::NotFound);
@@ -228,18 +250,21 @@ struct ConfirmBody {
 /// The page saw the voice start playing a reply (what the app's socket will report): commit it now.
 async fn confirm(
     State(app): State<AppState>,
+    headers: HeaderMap,
     Query(q): Query<KeyQuery>,
     Json(body): Json<ConfirmBody>,
 ) -> Result<Json<Value>, AppError> {
-    check_key(&app, &q.key)?;
+    check_key(&app, dev_key(&headers, &q))?;
     let id = q.session_id.unwrap_or_default();
     if !id.starts_with("spike-") {
         return Err(AppError::NotFound);
     }
     let session = app.registry.get(&id).ok_or(AppError::NotFound)?;
-    let found = session
-        .lock()
-        .await
-        .confirm_spoken(&body.panelist_id, &body.text, Instant::now());
-    Ok(Json(json!({"confirmed": found})))
+    let mut st = session.lock().await;
+    let before = st.provisional.len();
+    let events = crate::orchestrator::confirm_spoken(&mut st, &body.panelist_id, &body.text);
+    let confirmed = st.provisional.len() < before;
+    Ok(Json(
+        json!({"confirmed": confirmed, "events": events.len()}),
+    ))
 }
