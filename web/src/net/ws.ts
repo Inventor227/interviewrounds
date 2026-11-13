@@ -115,6 +115,7 @@ export class SessionSocket {
   private readonly droppedHandlers = new Set<(env: Envelope) => void>();
   private firstOpen: { promise: Promise<void>; resolve: () => void; reject: (e: Error) => void } | null = null;
   private heardOnConnection = false;
+  private firstFrame: { promise: Promise<void>; resolve: () => void } | null = null;
   private finalClose: CloseInfo | null = null;
 
   constructor(
@@ -144,6 +145,18 @@ export class SessionSocket {
     if (!this.ws && !this.reconnectTimer) this.open('connecting');
     return promise;
   }
+
+  /** Resolves with the first frame the server sends (it has taken the hello). */
+  heard(): Promise<void> {
+    if (!this.firstFrame) {
+      let resolve!: () => void;
+      const promise = new Promise<void>((r) => (resolve = r));
+      this.firstFrame = { promise, resolve };
+      if (this.everHeard) resolve();
+    }
+    return this.firstFrame.promise;
+  }
+  private everHeard = false;
 
   /**
    * Sends a client message. Reliable types are queued until acked and replayed after a
@@ -248,6 +261,10 @@ export class SessionSocket {
   private handleMessage(ws: WebSocket, ev: MessageEvent): void {
     if (ws !== this.ws) return;
     this.heardSincePing = true;
+    if (!this.everHeard) {
+      this.everHeard = true;
+      this.firstFrame?.resolve();
+    }
     if (!this.heardOnConnection) {
       // The server is really talking to us: the next drop starts the backoff again.
       this.heardOnConnection = true;

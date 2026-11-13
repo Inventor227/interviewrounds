@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { captionLines, captionRows, Captions } from './captions';
 import { layoutDesk } from './layout';
 import { clock } from './style';
-import { summaryFromReport } from './summaryCard';
+import { QUOTE_MAX_CHARS, quickCardFromHeadset, summaryFromReport } from './summaryCard';
 import type { Report } from '../../shared/types';
 
 describe('round ui helpers', () => {
@@ -58,5 +58,20 @@ describe('round ui helpers', () => {
     expect(p.roundBar.tilt).toBeCloseTo((-55 * Math.PI) / 180, 6); // 35° up from the desk
     expect(p.brief.pos.x).toBeLessThan(0);
     expect(p.summary.pos.y).toBeGreaterThan(0.74 + 0.1);
+  });
+
+  it('quick_card_keeps_the_line_and_cuts_long_quotes_at_a_word', () => {
+    const long = 'so the write path goes through the queue first and then the workers pick it up and store it and after that we ack';
+    const v = quickCardFromHeadset({
+      one_line: 'Clear on scale, thin on failure cases.',
+      top_strength: { title: 'Sized the system first', evidence_id: 'c1', quote: 'about a hundred million a day', t_start_sec: 41 },
+      top_fix: { title: 'Name the failure cases', evidence_id: 'c2', quote: long, t_start_sec: 188 },
+    });
+    expect(v.oneLine).toBe('Clear on scale, thin on failure cases.');
+    expect(v.strength).toEqual({ title: 'Sized the system first', quote: 'about a hundred million a day' });
+    expect(v.fix!.quote!.length).toBeLessThanOrEqual(QUOTE_MAX_CHARS + 3);
+    expect(v.fix!.quote!.endsWith('...')).toBe(true);
+    expect(long.startsWith(v.fix!.quote!.slice(0, -3))).toBe(true);
+    expect(quickCardFromHeadset({ one_line: 'x', top_strength: null, top_fix: null })).toEqual({ oneLine: 'x', strength: null, fix: null });
   });
 });

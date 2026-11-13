@@ -11,8 +11,9 @@ import { clock } from '../components/format';
 import { askMic, checkHeadset, holdMic, useHeadset } from '../components/Ready';
 import { Streak } from '../components/Streak';
 import { Monogram } from '../components/Ui';
-import { isFake } from '../fake/mode';
+import { voiceChoice } from '../voiceChoice';
 import { prepareLaunch, type PrepareInput } from '../launch';
+import { prefetchRoom } from '../prefetch';
 import { HowItWorks } from './Onboarding';
 
 export function useNow(everyMs = 1000): number {
@@ -96,6 +97,8 @@ export function Home() {
   const xr = useHeadset();
   const { route } = useLocation();
   const [asking, setAsking] = useState(false);
+  // The room's code loads while this page is idle, so the first tap does not wait for it.
+  useEffect(() => prefetchRoom(), []);
 
   const m = me.data;
   const cap = capFromMe(m, 'short');
@@ -130,7 +133,7 @@ export function Home() {
           length: 'short',
           level: m?.settings.default_level ?? 'mid',
           style: m?.settings.default_style ?? 'neutral',
-          voice: isFake() ? 'fake' : 'fish',
+          voice: voiceChoice(),
         },
       };
       void prepareLaunch(input, { mic: out.stream, preview, title: 'System design' });

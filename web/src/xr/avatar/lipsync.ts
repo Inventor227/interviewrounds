@@ -118,14 +118,26 @@ function modelOnce(): Promise<string> {
   return modelBlobUrl;
 }
 
+/** Fetches the viseme model ahead of the first voice, so the first word already moves the lips. Never rejects. */
+export function preloadVisemeModel(): Promise<void> {
+  return modelOnce().then(
+    () => undefined,
+    () => undefined,
+  );
+}
+
 /**
  * HeadAudio on an AudioWorklet. Rejects when anything is missing, so the caller falls back to RMS.
  *
  * Its processor always asks to stay alive, so the audio thread keeps it until the AudioContext closes, even after
- * disconnect(). Build one per LipSync and keep it across voice swaps (LipSync does); never one per attach.
+ * disconnect(). Build one per LipSync and keep it across voice swaps (LipSync does); never one per attach. A node
+ * that is given back (dispose) is disconnected and kept in a pool for the next avatar with the same voice pitch, so
+ * round after round in one tab the page never holds more nodes than the largest panel needed.
  */
 export async function headAudioSource(ctx: AudioContext, speakerHz: number): Promise<VisemeSource> {
   if (typeof AudioWorkletNode === 'undefined' || !ctx.audioWorklet) throw new Error('no AudioWorklet');
+  const pooled = takePooled(ctx, speakerHz);
+  if (pooled) return pooled;
   let load = workletLoads.get(ctx);
   if (!load) {
     load = ctx.audioWorklet.addModule(workletUrl);
@@ -149,7 +161,7 @@ export async function headAudioSource(ctx: AudioContext, speakerHz: number): Pro
     ha.port.close();
     throw e;
   }
-  return {
+  const source: VisemeSource = {
     node: ha,
     get active() {
       return ha.visemeActive;
@@ -160,10 +172,36 @@ export async function headAudioSource(ctx: AudioContext, speakerHz: number): Pro
       ha.port.postMessage({ event: 'reset' });
     },
     dispose: () => {
+      // Out of the graph and cleared, but kept: the next round's avatar takes it over.
       ha.disconnect();
-      ha.port.close();
+      source.reset?.();
+      givePooled(ctx, speakerHz, source);
     },
   };
+  return source;
+}
+
+const pool = new WeakMap<BaseAudioContext, Map<number, VisemeSource[]>>();
+
+/** Viseme nodes waiting for their next avatar in this context (for tests and tooling). */
+export function pooledVisemeNodes(ctx: BaseAudioContext): number {
+  let n = 0;
+  for (const list of pool.get(ctx)?.values() ?? []) n += list.length;
+  return n;
+}
+
+function takePooled(ctx: BaseAudioContext, speakerHz: number): VisemeSource | null {
+  const s = pool.get(ctx)?.get(speakerHz)?.pop() ?? null;
+  s?.reset?.();
+  return s;
+}
+
+function givePooled(ctx: BaseAudioContext, speakerHz: number, s: VisemeSource): void {
+  let byHz = pool.get(ctx);
+  if (!byHz) pool.set(ctx, (byHz = new Map()));
+  const list = byHz.get(speakerHz) ?? [];
+  if (!list.includes(s)) list.push(s);
+  byHz.set(speakerHz, list);
 }
 
 export class LipSync {

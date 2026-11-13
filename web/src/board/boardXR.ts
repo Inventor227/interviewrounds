@@ -8,7 +8,7 @@ import { GhostLayer } from './ghosts';
 import { VOICE_FOCUS_MS, voiceLabel, type VoiceLabel } from './grammar';
 import { HandAdapter } from './hand';
 import { MAX_TEXT_CHARS } from './validate';
-import { BoardInput } from './input';
+import { BoardInput, type PointerAdapter } from './input';
 import { CodePanel } from './codePanel';
 import type { Kit } from './kits';
 import { kitForBoard } from './kits/index';
@@ -41,6 +41,13 @@ export interface BoardXROptions {
   sfx?: Sfx;
   makeCanvas?: MakeCanvas;
   ids?: IdGen;
+  /**
+   * Another pointer instead of the hands: the 2D preview draws with the mouse on a flat view of
+   * the same board. The sheet, the wall mirror, ghosts, voice labels and sounds work the same.
+   */
+  pointer?: PointerAdapter & { destroy(): void };
+  /** How long an untouched suggestion waits before it settles by itself (default 4 s; tooling raises it). */
+  ghostSettleMs?: number;
 }
 
 export interface BoardXR {
@@ -48,7 +55,8 @@ export interface BoardXR {
   sheet: Sheet;
   /** The code panel (coding rounds), standing beside the sheet on the dominant side. */
   panel: CodePanel | null;
-  hands: HandAdapter;
+  /** The hand pointer; null when another pointer drives the board (the 2D preview). */
+  hands: HandAdapter | null;
   ghosts: GhostLayer;
   input: BoardInput;
   /**
@@ -117,7 +125,8 @@ export function createBoardXR(port: BoardXRPort, opts: BoardXROptions): BoardXR 
   const panel = kit.panel ? new CodePanel(kit, kit.panel.x >= SHEET.w / 2 ? 'right' : 'left', opts.makeCanvas) : null;
   if (panel) port.sheetAnchor.add(panel.frame);
   const projector = new SurfaceProjector(port.sheetAnchor, panel && kit.panel ? { frame: panel.frame, rect: kit.panel } : undefined);
-  const hands = new HandAdapter(port, (p) => projector.project(p), { zone: kit.view });
+  const hands = opts.pointer ? null : new HandAdapter(port, (p) => projector.project(p), { zone: kit.view });
+  const pointer: PointerAdapter & { destroy(): void } = opts.pointer ?? hands!;
 
   const commit = (op: BoardOp): boolean => {
     const r = store.apply(op, { local: true });
@@ -128,8 +137,9 @@ export function createBoardXR(port: BoardXRPort, opts: BoardXROptions): BoardXR 
     return true;
   };
 
-  const ghosts = new GhostLayer(hands, store, kit, {
+  const ghosts = new GhostLayer(pointer, store, kit, {
     now,
+    ...(opts.ghostSettleMs ? { settleMs: opts.ghostSettleMs } : {}),
     accept: (g) => {
       const local = store.isLocalGhost(g.op_id);
       const ok = commit({ op_id: g.op_id, src: local ? 'voice_grammar' : 'scribe', op: g.op, args: g.args } as BoardOp);
@@ -179,7 +189,7 @@ export function createBoardXR(port: BoardXRPort, opts: BoardXROptions): BoardXR 
     if (panel) panel.frame.visible = placed;
     ghosts.update(t);
     const overlays = input.overlays;
-    sheet.update(store.board, { hovers: input.hovers(), overlays, rings: ghosts.rings(t), pointers: hands.pointers() });
+    sheet.update(store.board, { hovers: input.hovers(), overlays, rings: ghosts.rings(t), pointers: hands?.pointers() ?? [] });
     panel?.update(store.board, overlays);
   });
 
@@ -205,7 +215,7 @@ export function createBoardXR(port: BoardXRPort, opts: BoardXROptions): BoardXR 
       offClock();
       input.destroy();
       ghosts.destroy();
-      hands.destroy();
+      pointer.destroy();
       port.sheetAnchor.remove(sheet.group);
       if (panel) {
         port.sheetAnchor.remove(panel.frame);

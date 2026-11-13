@@ -38,9 +38,10 @@ export default defineConfig({
     // Headless emulator runs (the IWSDK CLI sets IWSDK_DEV_AI_MODE=agent) share a host whose
     // inotify instances can run out; polling avoids that and HMR speed does not matter there.
     watch: process.env.IWSDK_DEV_AI_MODE === 'agent' ? { usePolling: true, interval: 1000 } : undefined,
+    // The server only accepts sockets from its own origin, so the proxy presents that origin.
     proxy: {
-      ...Object.fromEntries(proxied.map((p) => [p, { target: apiOrigin, changeOrigin: true }])),
-      '/ws': { target: apiOrigin, ws: true, changeOrigin: true },
+      ...Object.fromEntries(proxied.map((p) => [p, { target: apiOrigin, changeOrigin: true, headers: { origin: apiOrigin } }])),
+      '/ws': { target: apiOrigin, ws: true, changeOrigin: true, headers: { origin: apiOrigin } },
     },
   },
   build: {

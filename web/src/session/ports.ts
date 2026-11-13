@@ -6,7 +6,9 @@ import type { CloseInfo, SocketStatus } from '../net/ws';
 import type {
   ClientMsgMap,
   ClientMsgType,
+  CreateSessionRes,
   HeadSample,
+  HeadsetCard,
   Report,
   RoundStatePayload,
   ServerMsgMap,
@@ -39,10 +41,11 @@ export interface SeatPoseLike {
 /** The XR app (room, placement, round UI). */
 export interface XRPort {
   /**
-   * Loads the room (code, world, renderer) without requesting an XR session, so enter() has
-   * nothing left to load. Called by prepare(), in the mic tap.
+   * Loads the room (code, world, renderer) and this round's people without requesting an XR
+   * session, so enter() has nothing left to load. Called by prepare(), in the mic tap, with the
+   * session it just got.
    */
-  preload?(): Promise<void>;
+  preload?(session: CreateSessionRes): Promise<void>;
   /**
    * Enters the immersive session. Needs the user activation of the Enter tap: call requestSession
    * first. Must reject when requestSession rejects (lost activation, refused), so the session page
@@ -57,10 +60,21 @@ export interface XRPort {
   dispose?(): void;
   /** Resolves once the desk is placed (dwell or fallback). */
   place(): Promise<void>;
+  /** False when no headset session is running (it ended, or was never entered). Absent: unknown. */
+  inSession?(): boolean;
+  /**
+   * Plays the start chime (the desk is down, the round begins) and resolves when it is over. The
+   * controller opens the mic and asks for the greeting only after that.
+   */
+  startCue?(): Promise<void>;
   exit?(): void;
+  /** Any pinch in the room (a user gesture): the controller retries blocked audio on it. */
+  onGesture?(cb: () => void): () => void;
   ui: {
     setRoundState(s: RoundStatePayload & { controller: ControllerState }): void;
     showSummary(report: Report): void;
+    /** The quick card a few seconds after the round: one line, the top strength and the top fix. */
+    showCard?(card: HeadsetCard, opts?: { pending?: boolean }): void;
     setStatus(text: string | null, progress?: number): void;
     onAction(cb: (action: UiAction) => void): () => void;
   };
@@ -79,6 +93,12 @@ export interface AvatarPort {
 /** The board: the controller only needs to know the user is working on it. */
 export interface BoardPort {
   onActivity(cb: () => void): () => void;
+  /**
+   * The round is ending (the user's End, the interviewer's own close, or the server's): the last
+   * moment the sheet is what the round saw. The board sends its picture for the report now, while
+   * the server still takes it.
+   */
+  roundEnding?(): void;
 }
 
 /** 5 Hz head samples, batched; the controller forwards them to the socket. */
@@ -92,6 +112,8 @@ export interface HeadSamplerPort {
 /** The parts of SessionSocket the controller uses. */
 export interface SocketPort {
   connect(): Promise<void>;
+  /** Resolves with the first frame the server sends on this socket (it has taken the hello). */
+  heard?(): Promise<void>;
   send<T extends ClientMsgType>(t: T, d: ClientMsgMap[T]): void;
   on<T extends ServerMsgType>(t: T, cb: (d: ServerMsgMap[T]) => void): () => void;
   onStatus?(cb: (s: SocketStatus) => void): () => void;

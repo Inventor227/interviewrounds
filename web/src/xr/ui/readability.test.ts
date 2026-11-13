@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { DEG, dist, v3 } from '../math';
-import { userPoint } from '../seats';
+import { seatLayout, SHEET_D, sheetPoint, userPoint } from '../seats';
 import { BRIEF_MIN_FONT_CM } from './briefCard';
 import { CAPTION_MAX_CHARS, CAPTIONS_MIN_FONT_CM, captionLines } from './captions';
-import { layoutDesk } from './layout';
+import { BRIEF_H, BRIEF_W, layoutBriefBeyondSheet, layoutDesk } from './layout';
 import { ROUND_BAR_GAP_CM, ROUND_BAR_MIN_FONT_CM } from './roundBar';
 import { STATUS_MIN_FONT_CM } from './statusCard';
 import { SUMMARY_BUTTON_GAP_CM, SUMMARY_MIN_FONT_CM } from './summaryCard';
@@ -30,6 +30,40 @@ describe('readability and reach', () => {
       expect(deg).toBeGreaterThanOrEqual(MIN_DEG);
     });
   }
+
+  it('the_brief_card_beyond_the_sheet_is_off_the_sheet_and_still_readable', () => {
+    const p = layoutBriefBeyondSheet(desk);
+    // Beyond the far edge: further from the user than any point of the sheet.
+    expect(p.pos.z).toBeLessThan(sheetPoint(desk, 0, SHEET_D, 0).z);
+    expect(p.pos.y).toBeGreaterThan(sheetPoint(desk, 0, SHEET_D, 0).y);
+    const deg = Math.atan(BRIEF_MIN_FONT_CM / 100 / dist(eye, p.pos)) / DEG;
+    expect(deg).toBeGreaterThanOrEqual(MIN_DEG);
+    expect(p.tilt).toBeLessThan(0); // leans back
+    // Its lower edge (toward the user) is still past the sheet's far edge: nothing on the sheet is covered.
+    const lowerEdgeZ = p.pos.z + (BRIEF_H / 2) * Math.sin(-p.tilt);
+    expect(lowerEdgeZ).toBeLessThan(sheetPoint(desk, 0, SHEET_D, 0).z);
+  });
+
+  it('the_brief_card_beyond_the_sheet_stays_low_and_clear_of_every_seat', () => {
+    const p = layoutBriefBeyondSheet(desk);
+    // Low: its top edge stays well under a seated chest (about 0.3 m above the table).
+    const top = p.pos.y + (BRIEF_H / 2) * Math.cos(-p.tilt);
+    expect(top).toBeLessThan(desk.deskY + 0.23);
+    // Seen from the user's eyes, the card's sides stay clear of every panelist's hands (about 0.12 m to each side
+    // of the seat's centre line, resting on the table in front of them).
+    const side = (x: number, z: number) => Math.atan2(x - eye.x, eye.z - z) / DEG;
+    const cardLeft = side(p.pos.x - BRIEF_W / 2, p.pos.z);
+    const cardRight = side(p.pos.x + BRIEF_W / 2, p.pos.z);
+    for (const n of [1, 2, 3] as const) {
+      for (const seat of seatLayout(n, desk)) {
+        const handsZ = seat.pos.z + 0.25; // the hands rest about 0.25 m in front of the seat
+        const handsLeft = side(seat.pos.x - 0.12, handsZ);
+        const handsRight = side(seat.pos.x + 0.12, handsZ);
+        const clear = cardRight < handsLeft - 1 || cardLeft > handsRight + 1;
+        expect(clear, `seat ${seat.seat} of ${n}: card ${cardLeft.toFixed(1)}..${cardRight.toFixed(1)}, hands ${handsLeft.toFixed(1)}..${handsRight.toFixed(1)}`).toBe(true);
+      }
+    }
+  });
 
   it('summary_card_buttons_are_in_direct_touch_reach_below_the_eyes', () => {
     const p = poses.summary.pos;

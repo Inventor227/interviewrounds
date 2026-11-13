@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { api, ApiError } from './api';
+import { api, ApiError, DEV_KEY_STORE } from './api';
 
 type Call = { url: string; init: RequestInit };
 
@@ -26,6 +26,23 @@ describe('api', () => {
     expect(calls[0]?.init.credentials).toBe('include');
     expect(new Headers(calls[0]?.init.headers).get('content-type')).toBe('application/json');
     expect(JSON.parse(String(calls[0]?.init.body))).toMatchObject({ round_id: 'r1', voice: 'fake' });
+  });
+
+  it('fake_voice_sessions_carry_the_dev_key_and_real_ones_never_do', async () => {
+    const req = { mode: 'interview', round_id: 'r1', length: 'short', level: 'mid', style: 'neutral' } as const;
+    sessionStorage.setItem(DEV_KEY_STORE, 'k-123');
+    try {
+      const calls = stubFetch(200, { session_id: 's1' });
+      await api.createSession({ ...req, voice: 'fake' });
+      await api.createSession({ ...req, voice: 'fish' });
+      expect(new Headers(calls[0]?.init.headers).get('x-dev-key')).toBe('k-123');
+      expect(new Headers(calls[1]?.init.headers).get('x-dev-key')).toBeNull();
+      sessionStorage.removeItem(DEV_KEY_STORE);
+      await api.createSession({ ...req, voice: 'fake' });
+      expect(new Headers(calls[2]?.init.headers).get('x-dev-key')).toBeNull();
+    } finally {
+      sessionStorage.removeItem(DEV_KEY_STORE);
+    }
   });
 
   it('errors_carry_status_code_message', async () => {

@@ -4,7 +4,16 @@ import { FishTransport, toSessionToken, type FishSessionLike, type FishStartOpti
 import { panelist } from './testkit';
 import type { AgentText, UserTranscript, VoiceError } from './transport';
 
-const voice = { transport: 'fish' as const, fish: { session_token: 'jwt-abc', livekit_url: 'wss://lk.example' } };
+// The shape the server sends: Fish's session response, passed through unchanged.
+const SERVER_FISH = {
+  session_id: 'c0a8012e-7f1b-4c53-9a35-5a3f2b6d9e10',
+  token: 'eyJhbGciOiJIUzI1NiJ9.e30.sig',
+  livekit_url: 'wss://rtc.fish.example',
+  expires_at: '2026-11-13T12:45:00Z',
+  max_duration_seconds: 1800,
+  transport: 'livekit',
+};
+const voice = { transport: 'fish' as const, fish: SERVER_FISH };
 
 function setup() {
   let opts: FishStartOptions | null = null;
@@ -36,19 +45,24 @@ function setup() {
 
 describe('FishTransport', () => {
   it('builds_a_livekit_token_from_the_panelist_voice', () => {
-    expect(toSessionToken(voice.fish)).toMatchObject({
+    // The server's object goes to the SDK whole.
+    expect(toSessionToken(SERVER_FISH)).toEqual(SERVER_FISH);
+    // Fish may leave fields out or send the deadline as a number; extra fields ride along.
+    expect(toSessionToken({ session_id: 's', token: 't', livekit_url: 'wss://x', expires_at: 1794560000, region: 'eu' })).toEqual({
       transport: 'livekit',
-      livekit_url: 'wss://lk.example',
-      token: 'jwt-abc',
+      session_id: 's',
+      token: 't',
+      livekit_url: 'wss://x',
+      expires_at: '1794560000',
+      max_duration_seconds: 0,
+      region: 'eu',
     });
-    const full = { transport: 'livekit', session_id: 'sess_1', expires_at: '2099-01-01T00:00:00Z', max_duration_seconds: 1800, livekit_url: 'wss://x', token: 't' };
-    expect(toSessionToken({ session_token: JSON.stringify(full), livekit_url: 'wss://x' })).toEqual(full);
   });
 
   it('maps_sdk_events_and_drops_marker_echoes', async () => {
     const s = setup();
     await s.t.start();
-    expect(s.opts().sessionToken.token).toBe('jwt-abc');
+    expect(s.opts().sessionToken).toEqual(SERVER_FISH); // the server's object, whole
     s.cb().onModeChange?.('thinking');
     s.cb().onUserTranscript?.({ segmentId: 'typed_1', text: '[event: start]', final: true });
     s.cb().onUserTranscript?.({ segmentId: 'u1', text: 'I think', final: false });

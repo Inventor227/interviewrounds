@@ -8,7 +8,7 @@
 //   echoes typed turns back as user transcripts; marker echoes are dropped here.
 
 import type { AgentSessionCallbacks, SessionToken as LiveKitSessionToken } from '@fishaudio/agent-client';
-import type { Panelist } from '../shared/types';
+import type { FishSession, Panelist } from '../shared/types';
 import { Emitter, isMarker, VoiceError, type TransportEvents, type VoiceErrorCode, type VoiceTransport } from './transport';
 
 /** The AgentSession methods this transport uses (the SDK class satisfies it). */
@@ -50,28 +50,25 @@ const sdkStart = async (opts: FishStartOptions): Promise<FishSessionLike> => {
 };
 
 /**
- * Our server hands out `{session_token, livekit_url}`. The SDK wants Fish's whole session
- * response; when the server passes that through as JSON we use it as is, otherwise we build it
- * from the bare LiveKit token (the SDK only connects with `livekit_url` and `token`).
+ * The server passes Fish's whole session response through (`{session_id, token, livekit_url,
+ * expires_at, max_duration_seconds, ...}`, docs/protocol.md); the SDK gets all of it. Fields
+ * the SDK's type wants and Fish left out get neutral values (it connects with `livekit_url` and
+ * `token`, and skips the expiry check when the date does not parse).
  */
-export function toSessionToken(fish: { session_token: string; livekit_url: string }): LiveKitSessionToken {
-  try {
-    const parsed = JSON.parse(fish.session_token) as Partial<LiveKitSessionToken>;
-    if (parsed && typeof parsed === 'object' && typeof parsed.token === 'string') {
-      return { ...parsed, livekit_url: parsed.livekit_url ?? fish.livekit_url } as LiveKitSessionToken;
-    }
-  } catch {
-    // a bare token
-  }
+export function toSessionToken(fish: FishSession): LiveKitSessionToken {
   return {
+    ...fish,
     transport: 'livekit',
-    session_id: '',
-    expires_at: '',
-    max_duration_seconds: 0,
+    session_id: fish.session_id ?? '',
+    expires_at: fish.expires_at == null ? '' : String(fish.expires_at),
+    max_duration_seconds: typeof fish.max_duration_seconds === 'number' ? fish.max_duration_seconds : 0,
     livekit_url: fish.livekit_url,
-    token: fish.session_token,
-  };
+    token: fish.token,
+  } as LiveKitSessionToken;
 }
+
+/** A failed unmute is tried again after this long. */
+export const UNMUTE_RETRY_MS = 300;
 
 const ERROR_CODES: Record<string, VoiceErrorCode> = {
   mic_permission_denied: 'mic_denied',
@@ -167,9 +164,25 @@ export class FishTransport implements VoiceTransport {
     if (s) await s.end().catch(() => undefined);
   }
 
-  setMicMuted(muted: boolean): void {
+  /** Resolves once the SDK has muted or unmuted the capture track; a failure is reported as an error event. */
+  setMicMuted(muted: boolean): Promise<void> {
     this.muted = muted;
-    void this.session?.setMicMuted(muted).catch((e) => this.events.emit('error', toVoiceError(e)));
+    const s = this.session;
+    if (!s) return Promise.resolve();
+    return s
+      .setMicMuted(muted)
+      .catch(async (e) => {
+        // The SDK puts its own flag back when the toggle fails. An unmute is tried once more (the
+        // first unmute after a muted start captures the mic there and then); only then is it reported,
+        // as a mic problem, not as a lost connection.
+        if (!muted && this.session === s && !this.muted) {
+          await new Promise((r) => setTimeout(r, UNMUTE_RETRY_MS));
+          if (this.session === s && !this.muted) return s.setMicMuted(false);
+          return;
+        }
+        throw e;
+      })
+      .catch((e) => void this.events.emit('error', new VoiceError('mic_toggle_failed', 'Could not switch the microphone', e)));
   }
 
   sendEvent(marker: string): void {

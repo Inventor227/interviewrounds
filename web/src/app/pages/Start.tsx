@@ -11,7 +11,7 @@ import { capFromMe, findRound, loadCatalog, loadMe, otherLength, persona, useAsy
 import { LEVEL_NAMES, ROLE_NAMES, STYLE_NAMES } from '../components/format';
 import { ReadyPanel, useHeadset, useMic } from '../components/Ready';
 import { Disclosure, ErrorState, Loading, Monogram, Page, Segmented } from '../components/Ui';
-import { isFake } from '../fake/mode';
+import { voiceChoice } from '../voiceChoice';
 import type { PrepareInput } from '../launch';
 
 const pick = <T extends string>(v: string | undefined, all: readonly T[], fallback: T): T =>
@@ -43,7 +43,7 @@ function StartBody(props: { round: RoundPublic; catalog: Catalog; me?: Me }) {
     route(`/round/${other.id}${qs ? `?${qs}` : ''}`, true);
   };
 
-  const voice = isFake() ? 'fake' : 'fish';
+  const voice = voiceChoice();
   const input: PrepareInput = retryOf
     ? { kind: 'retry', parentSessionId: retryOf, voice }
     : { kind: 'new', req: { mode: 'interview', round_id: round.id, length: round.length, level, style, voice } };

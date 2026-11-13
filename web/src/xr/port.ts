@@ -2,7 +2,7 @@
 // the round; the app owns the room, the placement and the panels.
 
 import type { ControllerState, SeatPoseLike, UiAction, XRPort } from '../session/ports';
-import type { Report, RoundStatePayload } from '../shared/types';
+import type { HeadsetCard, Report, RoundStatePayload } from '../shared/types';
 import type { DeskPose } from './placement';
 import type { SeatPose } from './seats';
 import type { RoundAction, RoundUIState, StatusStage } from './ui/types';
@@ -12,10 +12,13 @@ export interface XRAppLike {
   enter(): Promise<void>;
   exit(): void;
   place(): Promise<DeskPose>;
+  /** XR select events per hand (a pinch): user gestures. */
+  onSelect?(cb: (hand: 'left' | 'right', phase: 'start' | 'end' | 'cancel', nowMs: number) => void): () => void;
   room: { seatPoses(): SeatPose[] };
   ui: {
     setRoundState(s: RoundUIState): void;
     showSummary(r: Report): void;
+    showQuickCard(c: HeadsetCard, opts?: { pending?: boolean }): void;
     setStatus(stage: StatusStage, pct?: number | null): void;
     showStatusText(text: string, pct?: number | null): void;
     hideStatus(): void;
@@ -45,9 +48,14 @@ export function createXRPort(app: XRAppLike): XRPort & { dispose(): void } {
     enter: () => app.enter(),
     place: () => app.place().then(() => undefined),
     exit: () => app.exit(),
+    // WebXR grants user activation on `select` (a completed pinch), which is when `end` arrives; not on its start.
+    onGesture: (cb: () => void) => app.onSelect?.((_hand, phase) => phase === 'end' && cb()) ?? (() => {}),
     ui: {
       setRoundState(s: RoundStatePayload & { controller: ControllerState }) {
-        const status = s.controller === 'paused' ? 'paused' : s.status;
+        // The controller knows first when the round is over: the last snapshot can still say "live" when the
+        // scorecard arrives, and a live bar would take the summary card down again.
+        const over = s.controller === 'scoring' || s.controller === 'summary' || s.controller === 'failed';
+        const status = s.controller === 'paused' ? 'paused' : over && (s.status === 'live' || s.status === 'paused' || s.status === 'created') ? 'scoring' : s.status;
         show({
           status,
           elapsed_s: s.elapsed_s,
@@ -57,6 +65,7 @@ export function createXRPort(app: XRAppLike): XRPort & { dispose(): void } {
         });
       },
       showSummary: (r: Report) => app.ui.showSummary(r),
+      showCard: (c: HeadsetCard, opts?: { pending?: boolean }) => app.ui.showQuickCard(c, opts),
       setStatus(text: string | null, progress?: number) {
         if (text === null) app.ui.hideStatus();
         else if (HEAR_LINE.test(text)) app.ui.setStatus('hear');

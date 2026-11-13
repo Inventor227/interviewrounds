@@ -688,8 +688,23 @@ export interface CreateSessionReq {
   parent_session_id?: string;
 }
 
+/**
+ * Fish's session response, passed through by the server unchanged (give all of it to the voice SDK).
+ * Fish may send more fields; they ride along.
+ */
+export interface FishSession {
+  session_id: string;
+  token: string;
+  livekit_url: string;
+  /** Join deadline (date-time text, or seconds as Fish sent it). */
+  expires_at?: string | number | null;
+  max_duration_seconds?: number;
+  transport?: string;
+  [extra: string]: unknown;
+}
+
 export type PanelistVoice =
-  | { transport: 'fish'; fish: { session_token: string; livekit_url: string } }
+  | { transport: 'fish'; fish: FishSession }
   | { transport: 'fake' }
   | { transport: 'fish_pending' };
 
@@ -713,6 +728,16 @@ export interface CreateSessionRes {
   floor: string;
   panel_mode: PanelMode;
   limits: Limits;
+  /** The round's timing (RoundPublic strips it); absent from older servers. */
+  timing?: SessionTiming;
+}
+
+/** `timing` in CreateSessionRes: silence_wait_seconds is already scaled by level. */
+export interface SessionTiming {
+  silence_wait_seconds: number;
+  interrupt_after_seconds: number;
+  target_minutes: number;
+  hard_stop_minutes: number;
 }
 
 export interface JoinPanelistRes {
@@ -859,6 +884,23 @@ export interface RoundStatePayload {
   brief: { question: string; lines: string[] };
   /** panelist_id holding the floor. */
   floor: string;
+  /** True once per phase boundary: the browser sends `[event: time_check]`. Absent from older servers. */
+  time_check_due?: boolean;
+}
+
+/** One pick of the headset card: the candidate's own words behind a strength or a fix. */
+export interface CardPick {
+  title: string;
+  evidence_id: string;
+  quote: string;
+  t_start_sec: number;
+}
+
+/** The quick card sent with `report.progress {stage: "card"}` a few seconds after the round ends. */
+export interface HeadsetCard {
+  one_line: string;
+  top_strength: CardPick | null;
+  top_fix: CardPick | null;
 }
 
 /** Server to client payloads, keyed by message type. */
@@ -871,7 +913,8 @@ export interface ServerMsgMap {
   'avatar.point_at': { panelist_id: string; item_id: string };
   'round.ending': { closing_line: string };
   'round.ended': { reason: EndReason };
-  'report.progress': { stage: 'metrics' | 'scoring' | 'done'; pct: number };
+  /** pct is 0 to 100; `card` comes with stage "card". */
+  'report.progress': { stage: 'metrics' | 'scoring' | 'card' | 'done'; pct: number; card?: HeadsetCard };
   'report.ready': { session_id: string };
   /** `op_rejected` carries the op_id. */
   error: { code: string; message: string; op_id?: string };
