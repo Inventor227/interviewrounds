@@ -33,7 +33,8 @@ export function stripComments(src) {
     const c = src[i];
     const d = src[i + 1];
     if (mode === 'code') {
-      if (c === '/' && d === '/') {
+      // `//` right after `:` is a URL (https://...) in JSX text, not a comment.
+      if (c === '/' && d === '/' && src[i - 1] !== ':') {
         while (i < n && src[i] !== '\n') {
           out += ' ';
           i++;

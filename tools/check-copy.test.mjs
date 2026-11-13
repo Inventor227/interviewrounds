@@ -82,6 +82,20 @@ test('dashes inside comments are ignored, url slashes do not start comments', ()
   });
 });
 
+test('a url inside jsx text does not start a comment', () => {
+  const src = [
+    'export function L() {',
+    `  return <a>see https://x.test, then ${EM} go</a>;`,
+    '}',
+    `const ok = 1; // real comment ${EM} ignored`,
+    '',
+  ].join('\n');
+  withRoot({ 'web/src/L.tsx': src }, (root) => {
+    const v = checkCopy(root);
+    assert.deepEqual(v.map((x) => x.line), [2]);
+  });
+});
+
 test('files outside web/src and other extensions are not scanned', () => {
   withRoot(
     {
