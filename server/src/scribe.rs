@@ -113,6 +113,8 @@ pub struct ScribeInput<'a> {
     /// The round's `round_type`, e.g. `pm_execution` (the prompt branches on it within a kit).
     pub round_type: &'a str,
     pub board: &'a Board,
+    /// The item "that", "this" and "it" refer to: `BoardSession::scribe_focus()` (the client's focus while fresh).
+    pub focus: Option<&'a str>,
     /// The last one to three final user segments, oldest first; the last one is new.
     pub utterances: &'a [String],
     /// From `BoardSession::next_scribe_call`: new ids start with `x<n>_`, ghost op ids are `sc<n>.<i>`.
@@ -123,12 +125,9 @@ pub struct ScribeInput<'a> {
 struct Reply {
     #[serde(default)]
     ops: Vec<RawOp>,
-    #[serde(default = "one")]
+    /// Missing confidence fails closed.
+    #[serde(default)]
     confidence: f64,
-}
-
-fn one() -> f64 {
-    1.0
 }
 
 #[derive(Deserialize)]
@@ -169,7 +168,8 @@ impl Scribe {
             .or_else(|| b.round.language.clone())
             .filter(|l| !l.trim().is_empty())
             .unwrap_or_else(|| "none".into());
-        let slots = free_slots(b, FREE_SLOTS);
+        let focus = input.focus.filter(|f| b.items.iter().any(|i| i.id() == *f));
+        let slots = free_slots(b, focus, FREE_SLOTS);
         let slots = if slots.is_empty() {
             "none".to_string()
         } else {
@@ -184,7 +184,7 @@ impl Scribe {
             ("round_type", input.round_type.to_string()),
             ("question", b.brief.question.clone()),
             ("board_text", board::summary(b, None)),
-            ("focus", b.focus.clone().unwrap_or_else(|| "none".into())),
+            ("focus", focus.unwrap_or("none").to_string()),
             ("language", language),
             ("new_id_prefix", format!("x{}_", input.call_no)),
             ("free_slots", slots),
@@ -275,7 +275,7 @@ impl Scribe {
             if out.len() == MAX_OPS {
                 break;
             }
-            let Some(args) = allowed(&raw, input.board.round.kit) else {
+            let Some(args) = allowed(&raw, input.board.round.kit, input.call_no) else {
                 tracing::debug!(op = %raw.op, "scribe op dropped: not a Scribe op for this kit");
                 continue;
             };
@@ -284,7 +284,14 @@ impl Scribe {
             } else {
                 &heard_last
             };
-            if !texts(&raw.op, &args).iter().all(|t| said(t, heard)) {
+            let said_it = if raw.op == "code.complexity" {
+                args.get("value")
+                    .and_then(Value::as_str)
+                    .is_none_or(|v| complexity_said(v, heard))
+            } else {
+                texts(&raw.op, &args).iter().all(|t| said(t, heard))
+            };
+            if !said_it {
                 tracing::debug!(op = %raw.op, args = %args, "scribe op dropped: text not said");
                 continue;
             }
@@ -329,17 +336,29 @@ fn parse_reply(text: &str) -> Option<Reply> {
     })
 }
 
-/// The op's args when the Scribe may make it; `code.insert` lines are always marked `src: scribe`.
-fn allowed(raw: &RawOp, kit: BoardKit) -> Option<Value> {
+/// The op's args when the Scribe may make it on this kit, or `None`. Every id it creates must start with this
+/// call's `x<n>_` prefix (so two calls, or a call and the candidate's own ids, never collide). What the candidate
+/// cannot have said by voice is fixed: new stickies have no votes and no quadrant (`sticky.set_quad` places them),
+/// new items join no group, and code lines are marked `src: scribe`.
+fn allowed(raw: &RawOp, kit: BoardKit, call_no: u64) -> Option<Value> {
     if !kit_ops(kit).contains(&raw.op.as_str()) || !raw.args.is_object() {
         return None;
     }
+    let prefix = format!("x{call_no}_");
     let mut args = raw.args.clone();
+    let mut created: Vec<Option<&str>> = Vec::new();
     match raw.op.as_str() {
         "item.create" => {
-            let kind = args.get("kind").and_then(Value::as_str)?;
-            if !kit_kinds(kit).contains(&kind) {
+            let kind = args.get("kind").and_then(Value::as_str)?.to_string();
+            if !kit_kinds(kit).contains(&kind.as_str()) {
                 return None;
+            }
+            let obj = args.as_object_mut()?;
+            obj.remove("group");
+            if kind == "sticky" {
+                obj.insert("votes".into(), json!(0));
+                obj.insert("quad".into(), Value::Null);
+                obj.remove("rank");
             }
         }
         "code.insert" => {
@@ -348,6 +367,39 @@ fn allowed(raw: &RawOp, kit: BoardKit) -> Option<Value> {
             }
         }
         _ => {}
+    }
+    match raw.op.as_str() {
+        "item.create" => {
+            created.push(args.get("id").and_then(Value::as_str));
+            for sec in ["fields", "methods"] {
+                for m in args
+                    .get(sec)
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                {
+                    created.push(m.get("id").and_then(Value::as_str));
+                }
+            }
+        }
+        "edge.create" => created.push(args.get("id").and_then(Value::as_str)),
+        "member.add" => created.push(
+            args.get("member")
+                .and_then(|m| m.get("id"))
+                .and_then(Value::as_str),
+        ),
+        "code.insert" => created.push(
+            args.get("line")
+                .and_then(|l| l.get("id"))
+                .and_then(Value::as_str),
+        ),
+        _ => {}
+    }
+    if created
+        .iter()
+        .any(|id| !id.is_some_and(|id| id.starts_with(&prefix)))
+    {
+        return None;
     }
     Some(args)
 }
@@ -385,10 +437,11 @@ fn texts(op: &str, args: &Value) -> Vec<String> {
                 }
             }
         }
-        "item.label" | "edge.label" | "item.note.add" | "code.edit" | "park.add" => {
+        "edge.label" => out.extend(s(args.get("text")).filter(|l| !is_multiplicity(l))),
+        "item.label" | "item.note.add" | "code.edit" | "park.add" => {
             out.extend(s(args.get("text")))
         }
-        "edge.create" => out.extend(s(args.get("label"))),
+        "edge.create" => out.extend(s(args.get("label")).filter(|l| !is_multiplicity(l))),
         "member.add" => {
             if let Some(m) = args.get("member") {
                 member(m, &mut out);
@@ -630,6 +683,29 @@ fn heard(utterances: &[String]) -> HashSet<String> {
             out.insert(w.clone());
             match w.as_str() {
                 "cash" => _ = out.insert("cache".into()),
+                // Complexity cues, as the terms they stand for in O(...).
+                "linear" => _ = out.insert("n".into()),
+                "constant" => _ = out.insert("1".into()),
+                "logarithmic" | "logn" => {
+                    out.insert("log".into());
+                    out.insert("n".into());
+                }
+                "linearithmic" => {
+                    out.insert("n".into());
+                    out.insert("log".into());
+                }
+                "quadratic" | "squared" => {
+                    out.insert("n".into());
+                    out.insert("2".into());
+                }
+                "cubic" | "cubed" => {
+                    out.insert("n".into());
+                    out.insert("3".into());
+                }
+                "exponential" => {
+                    out.insert("2".into());
+                    out.insert("n".into());
+                }
                 "q" | "cue" | "queues" => _ = out.insert("queue".into()),
                 "sequel" => {
                     out.insert("sql".into());
@@ -693,6 +769,9 @@ fn close(w: &str, h: &str) -> bool {
     if w == h {
         return true;
     }
+    if is_number(w) || is_number(h) {
+        return false;
+    }
     let (lw, lh) = (w.chars().count(), h.chars().count());
     (lw >= 3 && lh >= 3 && (h.starts_with(w) || w.starts_with(h)))
         || (lw >= 4 && lh >= 4 && common_prefix(w, h) >= 3)
@@ -704,7 +783,7 @@ fn close(w: &str, h: &str) -> bool {
 fn said(text: &str, heard: &HashSet<String>) -> bool {
     let content: Vec<String> = words(text)
         .into_iter()
-        .filter(|w| w.chars().count() >= 2 && !EXEMPT.contains(&w.as_str()))
+        .filter(|w| (w.chars().count() >= 2 || is_number(w)) && !EXEMPT.contains(&w.as_str()))
         .collect();
     if content.is_empty() {
         return true;
@@ -720,9 +799,28 @@ fn said(text: &str, heard: &HashSet<String>) -> bool {
     }
 }
 
+/// UML multiplicity such as `1..*`, `0..1` or `*`: relationship notation, not content.
+fn is_multiplicity(label: &str) -> bool {
+    let l = label.trim();
+    !l.is_empty()
+        && l.split("..").count() <= 2
+        && l.split("..").all(|p| p == "*" || p == "n" || is_number(p))
+}
+
+fn is_number(w: &str) -> bool {
+    !w.is_empty() && w.bytes().all(|b| b.is_ascii_digit())
+}
+
+/// Whether a complexity value such as `O(n log n)` was said: each of its terms (`n`, `log`, `2` ...; the `o` aside)
+/// must be heard, where cue words count as their terms ("linear" is `n`, "squared" is `2`, "constant" is `1`).
+fn complexity_said(value: &str, heard: &HashSet<String>) -> bool {
+    let terms: Vec<String> = words(value).into_iter().filter(|w| w != "o").collect();
+    !terms.is_empty() && terms.iter().all(|t| heard.contains(t))
+}
+
 /// Free board positions for a new card of this kit's usual size, best first (nearest the focus item when there
 /// is one, else top-left first), as whole centimetres.
-pub fn free_slots(board: &Board, n: usize) -> Vec<(i64, i64)> {
+pub fn free_slots(board: &Board, focus: Option<&str>, n: usize) -> Vec<(i64, i64)> {
     let (sw, sh) = match board.round.kit {
         BoardKit::Hld | BoardKit::Coding => (8, 5),
         BoardKit::Lld => (14, 10),
@@ -752,9 +850,7 @@ pub fn free_slots(board: &Board, n: usize) -> Vec<(i64, i64)> {
         }
         y += sh + 2;
     }
-    let focus = board
-        .focus
-        .as_deref()
+    let focus = focus
         .and_then(|f| board.items.iter().find(|i| i.id() == f))
         .map(Item::rect);
     if let Some((fx, fy, fw, fh)) = focus {

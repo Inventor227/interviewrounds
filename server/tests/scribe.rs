@@ -103,6 +103,7 @@ fn input<'a>(board: &'a Board, utterances: &'a [String]) -> ScribeInput<'a> {
     ScribeInput {
         round_type: "system_design",
         board,
+        focus: board.focus.as_deref(),
         utterances,
         call_no: 7,
     }
@@ -250,6 +251,7 @@ async fn scribe_request_uses_fast_model_structured_output_and_the_prompt() {
     ]}))]);
     let inp = ScribeInput {
         round_type: "pm_execution",
+        focus: None,
         board: &board,
         utterances: &said,
         call_no: 7,
@@ -315,6 +317,7 @@ async fn scribe_code_lines_are_marked_as_scribe() {
     let s = scribe();
     let inp = ScribeInput {
         round_type: "coding",
+        focus: None,
         board: &board,
         utterances: &said,
         call_no: 7,
@@ -359,8 +362,8 @@ fn scribe_call_numbers_never_reuse_a_prefix() {
     assert_eq!(session.next_scribe_call(), 5);
 }
 
-/// Real model call. Run with the key:
-/// remote.sh <worktree> rust --env-file .secrets/llm-anthropic.env -- 'cd server && cargo test --test scribe live -- --ignored --nocapture'
+/// Real model call; needs ANTHROPIC_API_KEY and ANTHROPIC_WORKSPACE_ID (FAST_MODEL optional).
+/// `cargo test --test scribe live -- --ignored --nocapture`
 #[tokio::test]
 #[ignore]
 async fn live_scribe_turns_an_utterance_into_ghosts() {
@@ -385,6 +388,7 @@ async fn live_scribe_turns_an_utterance_into_ghosts() {
         let inp = ScribeInput {
             round_type: "system_design",
             board: &board,
+            focus: Some("n2"),
             utterances: &said,
             call_no: i as u64 + 1,
         };
@@ -411,4 +415,157 @@ async fn live_scribe_turns_an_utterance_into_ghosts() {
             assert!(!ghosts.is_empty(), "a board-worthy line gives ops");
         }
     }
+}
+
+async fn one_call(board: &Board, said: &str, reply: Value) -> Vec<GhostOp> {
+    let said = vec![said.to_string()];
+    let llm = FakeLlm::new(vec![Reply::Json(reply)]);
+    scribe().suggest(&llm, &input(board, &said)).await
+}
+
+fn coding_board() -> Board {
+    serde_json::from_value(json!({
+        "schema": "ir.board.v1",
+        "round": {"id": "s1", "type": "coding", "question_id": null, "language": "python"},
+        "rev": 1, "size": {"w": 64, "h": 40},
+        "brief": {"question": "Two sum", "lines": []},
+        "items": [], "edges": [],
+        "code": {"language": "python", "lines": [{"id": "l1", "indent": 0, "text": "def f(nums):", "src": "scribe"}],
+                 "approach": [], "complexity": {"time": null, "space": null}, "trace": []},
+        "meeting": null, "focus": null, "ghosts": [], "op_ids": []
+    }))
+    .unwrap()
+}
+
+#[tokio::test]
+async fn scribe_checks_complexity_against_what_was_said() {
+    let b = coding_board();
+    let set = |v: &str| json!({"confidence": 0.9, "ops": [{"op": "code.complexity", "args": {"slot": "time", "value": v}}]});
+    assert!(
+        one_call(&b, "it's pretty fast", set("O(n log n)"))
+            .await
+            .is_empty()
+    );
+    assert_eq!(
+        one_call(&b, "that's n log n overall", set("O(n log n)"))
+            .await
+            .len(),
+        1
+    );
+    assert_eq!(
+        one_call(&b, "the sort makes it linearithmic", set("O(n log n)"))
+            .await
+            .len(),
+        1
+    );
+    assert_eq!(one_call(&b, "linear time", set("O(n)")).await.len(), 1);
+    assert!(one_call(&b, "linear time", set("O(n^2)")).await.is_empty());
+    assert_eq!(one_call(&b, "it's quadratic", set("O(n^2)")).await.len(), 1);
+    assert_eq!(one_call(&b, "constant space", set("O(1)")).await.len(), 1);
+}
+
+#[tokio::test]
+async fn scribe_checks_numbers_even_single_digits() {
+    let b = hld();
+    let note = |t: &str| json!({"confidence": 0.9, "ops": [{"op": "item.note.add", "args": {"id": "n2", "text": t}}]});
+    assert!(
+        one_call(&b, "it has a TTL of ten minutes", note("TTL 5 min"))
+            .await
+            .is_empty()
+    );
+    assert_eq!(
+        one_call(&b, "it has a TTL of five minutes", note("TTL 5 min"))
+            .await
+            .len(),
+        1
+    );
+    assert!(
+        one_call(&b, "we run a few replicas", note("3 replicas"))
+            .await
+            .is_empty()
+    );
+    assert!(
+        one_call(&b, "about a thousand QPS", note("100 QPS"))
+            .await
+            .is_empty(),
+        "100 is not 1000"
+    );
+
+    let code = coding_board();
+    let line = |t: &str| {
+        json!({"confidence": 0.9, "ops": [{"op": "code.insert",
+        "args": {"line": {"id": "x7_1", "indent": 1, "text": t, "src": "scribe"}, "after": "l1"}}]})
+    };
+    assert!(
+        one_call(&code, "for i in range ten", line("for i in range(5):"))
+            .await
+            .is_empty()
+    );
+    assert_eq!(
+        one_call(&code, "for i in range ten", line("for i in range(10):"))
+            .await
+            .len(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn scribe_new_stickies_have_no_votes_or_quadrant_and_ids_need_the_prefix() {
+    let mut b = hld();
+    b.round.kit = ir_server::board::BoardKit::Pm;
+    let ghosts = one_call(&b, "a pain point: deposits get lost", json!({"confidence": 0.9, "ops": [
+        {"op": "item.create", "args": {"id": "x7_1", "kind": "sticky", "lane": "pain", "text": "Deposits get lost",
+            "votes": 3, "quad": "tl", "x": 30, "y": 20}},
+        {"op": "item.create", "args": {"id": "s9", "kind": "sticky", "lane": "pain", "text": "Deposits get lost",
+            "votes": 0, "quad": null, "x": 40, "y": 20}}
+    ]}))
+    .await;
+    assert_eq!(ghosts.len(), 1, "the id without the x7_ prefix is dropped");
+    assert_eq!(ghosts[0].args["votes"], 0);
+    assert_eq!(ghosts[0].args["quad"], Value::Null);
+}
+
+#[tokio::test]
+async fn scribe_keeps_multiplicity_labels_and_uses_the_given_focus() {
+    let lld: Board = serde_json::from_value(json!({
+        "schema": "ir.board.v1",
+        "round": {"id": "s1", "type": "lld", "question_id": null, "language": null},
+        "rev": 1, "size": {"w": 64, "h": 40}, "brief": {"question": "Parking lot", "lines": []},
+        "items": [
+            {"id": "c1", "kind": "class", "label": "Level", "class_kind": "class", "fields": [], "methods": [], "x": 2, "y": 2, "w": 14, "h": 10},
+            {"id": "c2", "kind": "class", "label": "Spot", "class_kind": "class", "fields": [], "methods": [], "x": 30, "y": 2, "w": 14, "h": 10}
+        ],
+        "edges": [], "code": null, "meeting": null, "focus": null, "ghosts": [], "op_ids": []
+    }))
+    .unwrap();
+    let said = vec!["each level has many spots".to_string()];
+    let llm = FakeLlm::new(vec![Reply::Json(json!({"confidence": 0.9, "ops": [
+        {"op": "edge.create", "args": {"id": "x7_1", "from": "c1", "to": "c2", "dir": "->", "label": "1..*", "rel": "has_a"}}
+    ]}))]);
+    let inp = ScribeInput {
+        round_type: "system_design",
+        board: &lld,
+        focus: Some("c2"),
+        utterances: &said,
+        call_no: 7,
+    };
+    assert_eq!(scribe().suggest(&llm, &inp).await.len(), 1);
+    let prompt: String = llm.seen.lock().unwrap()[0]
+        .system
+        .iter()
+        .map(|b| b.text.as_str())
+        .collect();
+    assert!(
+        prompt.contains("Focus: c2\n"),
+        "the caller's fresh focus, not the board's stored one"
+    );
+
+    let gone = ScribeInput {
+        focus: Some("c9"),
+        ..inp
+    };
+    assert!(
+        scribe().prompt(&gone).contains("Focus: none\n"),
+        "a focus on a missing item is dropped"
+    );
 }
