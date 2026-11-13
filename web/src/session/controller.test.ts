@@ -2056,6 +2056,27 @@ describe('RoundController pause and headset removal', () => {
     expect(t3.sentEvents).toEqual(['[event: resume]']);
   });
 
+  it('a_hand_over_first_heard_of_while_the_voices_are_made_again_is_spoken_by_the_new_floor', async () => {
+    // Daniel hands over as the pause lands: the frame reaches the page during the reconnect, the server has
+    // already moved the floor and made the new voice for p2.
+    const h = harness({ voice: 'fish', slow: ['p2'] });
+    const t1 = await live(h);
+    h.xrVisibility('hidden');
+    t1.events.emit('ended', { reason: 'server' });
+    h.xrVisibility('visible');
+    h.api.resumeSession.mockResolvedValueOnce(sessionRes({ client_token: 'tok2', floor: 'p2', panel: [panelist('p1', 0, { transport: 'fish_pending' } as never), panelist('p2', 1)] }));
+    h.ui('resume');
+    await vi.waitFor(() => expect(h.transports[1]?.started).toBe(true)); // p2's new voice is joining
+    expect(h.ctl.state).toBe('paused');
+    h.sockets[1]!.serverSend('panel.hand_over', { from: 'p1', to: 'p2', opening_line: 'Hi, I am Priya.' });
+    (h.transports[1] as SlowTransport).release();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.ctl.state).toBe('live');
+    // She introduces herself (the server speaks her stored line); no second join, no welcome back in her place.
+    expect(h.transports[1]!.sentEvents).toEqual(['[event: handover]']);
+    expect(h.api.joinPanelist).not.toHaveBeenCalled();
+  });
+
   it('a_hand_over_held_by_the_pause_is_spoken_by_the_new_voices_after_a_release', async () => {
     const h = harness({ voice: 'fish' });
     const t1 = await live(h);
@@ -2091,6 +2112,8 @@ describe('RoundController pause and headset removal', () => {
     await vi.advanceTimersByTimeAsync(0);
     const t2 = h.transports[1]!;
     expect(h.ctl.state).toBe('paused'); // nobody is welcomed back into an empty room
+    // The server is told to hold the round again (the resume call took it out of its pause).
+    expect(h.sockets[1]!.of('ui.event')).toEqual([{ kind: 'pause', reason: 'headset_removed' }]);
     expect(t2.muted).toBe(true);
     expect(t2.sentEvents).toEqual([]);
     h.xrVisibility('visible');

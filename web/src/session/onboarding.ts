@@ -97,3 +97,43 @@ export class Onboarding {
     this.finish('none');
   }
 }
+
+/** Where the room learns whether the user is in it. */
+export interface PresenceSources {
+  /** XRSession visibility changes (`hidden`: headset off; `visible-blurred`: system menu). */
+  onXrVisibility(cb: (v: 'visible' | 'visible-blurred' | 'hidden') => void): () => void;
+  /** The headset session ended. */
+  onSessionEnd(cb: () => void): () => void;
+  /** The page (document.visibilityState and its `visibilitychange`). */
+  page?: { readonly visibilityState: string; addEventListener(t: 'visibilitychange', cb: () => void): void; removeEventListener(t: 'visibilitychange', cb: () => void): void };
+}
+
+/**
+ * Keeps the onboarding's 20 s clock to the time the user is really in the room: it stops when the headset comes
+ * off, the system menu opens, the page is hidden or the session ends, and starts fresh, with the line and Skip
+ * shown again, when the room is visible again. (After a session end the way back is a new Enter, which calls
+ * run() itself.) The round therefore never starts by itself while nobody is there.
+ */
+export function watchPresence(onboarding: Onboarding, src: PresenceSources): () => void {
+  let xr: 'visible' | 'visible-blurred' | 'hidden' = 'visible';
+  const sync = () => {
+    const here = xr === 'visible' && src.page?.visibilityState !== 'hidden';
+    if (!here) onboarding.suspend();
+    else if (onboarding.showing) void onboarding.run();
+  };
+  const onPage = () => sync();
+  src.page?.addEventListener('visibilitychange', onPage);
+  const offs = [
+    src.onXrVisibility((v) => {
+      xr = v;
+      sync();
+    }),
+    src.onSessionEnd(() => {
+      // A new session starts visible; until then nothing counts.
+      xr = 'visible';
+      onboarding.suspend();
+    }),
+    () => src.page?.removeEventListener('visibilitychange', onPage),
+  ];
+  return () => offs.forEach((off) => off());
+}

@@ -27,7 +27,7 @@ import * as browser from './browser';
 import type { RoundControllerDeps } from './controller';
 import { wireCues, type Cues } from './cues';
 import { createHeadPort } from './headPort';
-import { needsOnboarding, Onboarding } from './onboarding';
+import { needsOnboarding, Onboarding, watchPresence } from './onboarding';
 import { People, type AvatarLike } from './people';
 import type { HeadSamplerPort, SocketPort, UiAction, XRPort, XRVisibilityLike } from './ports';
 import { clearLiveRoom, setLiveRoom, type LiveRoom } from './room';
@@ -435,7 +435,9 @@ export function createRoundRuntime({ preview }: RuntimeOptions): RoundController
     // The input lane's `activeInput()` and `onInputChange` once they exist on the app. Until then: hands when a
     // hand is tracked, else controllers.
     const input = a as unknown as { activeInput?: () => 'hands' | 'controllers'; onInputChange?: (cb: (i: 'hands' | 'controllers') => void) => () => void; controllerDrawing?: boolean };
-    const active = () => input.activeInput?.() ?? (a.hands().some((h) => h.tracked) ? 'hands' : 'controllers');
+    // A hand that touched the desk a moment ago is a hand, also when its tracking blinks on this frame.
+    const sampled = input.activeInput?.() ?? (a.desk()?.hand || a.hands().some((h) => h.tracked) ? 'hands' : 'controllers');
+    const active = () => input.activeInput?.() ?? sampled;
     // CONTROLLER VARIANT: drawing on the sheet by controller is the input lane's (`controllerDrawing` on the app
     // when it lands). Without it a controller user could not do the step, so they are not asked to.
     if (!onboarding && active() === 'controllers' && !input.controllerDrawing) return 'none';
@@ -493,6 +495,8 @@ export function createRoundRuntime({ preview }: RuntimeOptions): RoundController
           return () => skips.delete(cb);
         },
       });
+      // The 20 s only count while the user is in the room (headset on, no system menu, page visible).
+      cleanups.push(watchPresence(onboarding, { onXrVisibility: (cb) => a.onVisibility(cb), onSessionEnd: (cb) => a.onSessionEnd(() => cb()), page: typeof document === 'undefined' ? undefined : document }));
       if (import.meta.env.DEV && room.debug) {
         const ob = onboarding;
         room.debug.onboarding = { showing: () => (ob.showing ? 'box' : null), skip: () => [...skips].forEach((cb) => cb()), view };
@@ -556,7 +560,6 @@ export function createRoundRuntime({ preview }: RuntimeOptions): RoundController
           if (disposed) return;
           // The controller first (it pauses a running round), then the page, which offers the way back.
           for (const cb of [...sessionEndCbs]) cb(e);
-          onboarding?.suspend();
           if (e.byApp) return;
           room.sessionLost = true;
           changed();

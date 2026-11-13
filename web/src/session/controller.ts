@@ -925,8 +925,13 @@ export class RoundController {
     this.voicesUp = true;
     this.rebuilt = true;
     this.deps.head?.setFloor(panel.floor);
-    // The user went away while the voices were made: the round stays held, with its voices, until their Resume.
-    if (this.away) return;
+    // The user went away while the voices were made: the round stays held, with its voices, until
+    // their Resume. The server took the round out of its pause for the new voices: it is told to
+    // hold it again, so the voices are released like in any pause.
+    if (this.away) {
+      this.socket?.send('ui.event', { kind: 'pause', reason: 'headset_removed' });
+      return;
+    }
     this.finishResume(true);
   }
 
@@ -947,7 +952,11 @@ export class RoundController {
     const floor = this.panel?.floor;
     // A hand-over to the panelist who already holds the floor is done (the server moved the floor
     // when the hand-over was said, and new voices are made for the floor it has).
-    const handOver = this.pendingHandOver && this.pendingHandOver.to !== floor ? this.pendingHandOver : null;
+    const pending = this.pendingHandOver;
+    const handOver = pending && pending.to !== floor ? pending : null;
+    // New voices were made for a panelist whose hand-over this page only heard of during the pause
+    // (or held): its line was never said, and the server keeps it for `[event: handover]`.
+    const unsaid = reconnected && ((!!pending && pending.to === floor) || (!!gated && gated.to === floor));
     this.pendingHandOver = null;
     if (this.startPending) {
       this.startPending = false;
@@ -960,8 +969,8 @@ export class RoundController {
     } else if (gated && gated.to !== floor) {
       // The voices were made again meanwhile: the hand-over runs on the new panel.
       this.handOver(gated.to, gated.openingLine);
-    } else if (gated && this.voicesUp) {
-      // The new voices are already the new panelist's, and its line was never said: it says it now.
+    } else if (unsaid && this.voicesUp) {
+      // The new voices are already the new panelist's: it says its line now.
       this.floorT()?.sendEvent(VOICE_MARKERS.handover);
     } else if (this.voicesUp) {
       this.floorT()?.sendEvent(VOICE_MARKERS.resume);
@@ -1270,8 +1279,8 @@ export class RoundController {
   }
 
   private handOver(to: string, openingLine: string): void {
-    // Already on the floor (a frame replayed after a reconnect, or new voices made for it): nothing to do.
-    if (this.panel && !this.panel.isStopped && this.voicesUp && to === this.panel.floor && !this.handingOver) return;
+    // Already on the floor while the round runs: nothing to do. (During a pause it is kept: Resume decides.)
+    if (this.st !== 'paused' && this.panel && !this.panel.isStopped && this.voicesUp && to === this.panel.floor && !this.handingOver) return;
     if (this.st === 'paused' || this.st === 'greeting') {
       // Nobody new speaks while the user is away, and nobody takes over before the greeting is
       // done (a swap during the greeting would greet twice). Replayed on Resume or once live.

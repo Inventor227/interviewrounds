@@ -1,6 +1,6 @@
 // The first five minutes, end to end in the emulator against the deployed server with the typed-turn fake voice:
 // a new guest's first design round. After the desk is placed the ghost hand shows "Pinch and draw a box" and the
-// interviewer waits (no hello, no greeting) until the user has drawn one box; then "Say its name" and the round
+// interviewer waits (no hello, no greeting) until the user has drawn one box (or 20 s have passed); then the round
 // starts. A second round in the same tab has no onboarding. Then: leaving the headset view during placement.
 //   plan/ops-tools/emu.sh <worktree> <worktree>/web/e2e/round-onboarding.mjs --env-file <env file> --timeout 40 --out plan/shots/t21/onboarding
 import { copyFileSync } from 'node:fs';
@@ -38,8 +38,8 @@ await look(S, -48);
 await sleep(1200);
 await shot('02-ghost-hand');
 out.waiting = [];
-for (let i = 0; i < 3; i++) {
-  await sleep(4000);
+for (let i = 0; i < 2; i++) {
+  await sleep(2000);
   out.waiting.push(await started());
 }
 stage('the interviewer waits', out.waiting);
@@ -98,19 +98,8 @@ const made = await until('the box became a card', () => {
 }, null, 30000, 700);
 out.afterBox = { ms: Date.now() - boxAt, step: await onboardingStep(), ...made, ...(await started()) };
 stage('one box drawn', out.afterBox);
-// Say its name: with the fake voice a typed turn is what the user says.
-await page(() => globalThis.__round.controller.sendTypedTurn('Cache'));
-await sleep(1500);
-out.afterName = { step: await onboardingStep(), board: (await board()).items };
-stage('named', out.afterName);
 await waitState(['greeting', 'live'], 60000);
 stage('the round started', await started());
-// The line is up for 8 s at most, shorter than one software-rendered capture: show it again just for its shot.
-await page(() => globalThis.__xrApp.ui.status.showText('Say its name'));
-await look(S, -48);
-await sleep(800);
-await shot('04-say-its-name');
-await page(() => globalThis.__xrApp.ui.hideStatus());
 await waitState(['live'], 120000);
 await look(S, -14);
 await sleep(1000);

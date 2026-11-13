@@ -194,6 +194,11 @@ describe('session page', () => {
     controller.emit('error', { code: 'connect_failed' } as never);
     await settle();
     expect($(root, 'session-error')).toBeNull();
+    // And not once the round runs again after the Resume in the headset.
+    controller.go('live');
+    await settle();
+    expect($(root, 'session-error')).toBeNull();
+    expect($(root, 'session-state')!.dataset.state).toBe('live');
   });
 
   it('pause_budget_exhausted_shows_report', async () => {

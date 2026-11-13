@@ -200,6 +200,8 @@ function LiveSession(props: { launch: Taken }) {
     if (controller.state === 'live') setBegan(true);
     const offs = [
       controller.on('state', (s) => {
+        // The round runs again after a pause: what its old voices reported meanwhile is over.
+        if (s === 'live' || s === 'greeting') setError(null);
         setState(s);
         if (s === 'live') setBegan(true);
       }),

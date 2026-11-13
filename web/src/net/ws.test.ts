@@ -101,6 +101,23 @@ describe('SessionSocket', () => {
     vi.useRealTimers();
   });
 
+  it('a_later_socket_of_the_same_session_says_hello_from_where_the_earlier_one_was', async () => {
+    const sock = new SessionSocket('wss://example.test/ws/session/s1', 'tok-2', { WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket, lastSeq: 41 });
+    const states: unknown[] = [];
+    sock.on('round.state', (d) => states.push(d));
+    const connected = sock.connect();
+    const ws = FakeWebSocket.last();
+    ws.serverOpen();
+    await connected;
+    expect(ws.frames()[0]).toMatchObject({ t: 'hello', d: { client_token: 'tok-2', last_seq: 41 } });
+    // A frame from before that point is not taken again; the next one is, and moves the mark.
+    ws.serverSend({ t: 'round.state', seq: 41, d: roundState });
+    ws.serverSend({ t: 'round.state', seq: 42, d: roundState });
+    expect(states).toHaveLength(1);
+    expect(sock.lastSeq()).toBe(42);
+    sock.close();
+  });
+
   it('reconnect_replays_unacked_and_sends_last_seq', async () => {
     const sock = makeSocket();
     const states: unknown[] = [];
