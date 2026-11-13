@@ -179,8 +179,11 @@ export async function createDevSheet(root: HTMLElement): Promise<DevSheetHandle>
     toWorld: (pts, hCm = 1) => pts.map(([x, y]) => sheetToWorld(anchor, x, y, hCm)),
     ghosts: (list) => store.setGhosts(list),
     say: (text) => {
-      const hit = xr.say(text, performance.now());
-      return hit ? `${hit.mode} ${hit.label}` : 'nothing';
+      // Scripted runs are slow (each tooling call takes seconds), so the typed turn stands in
+      // for speech right after the touch: at most 1 s after the focus was set.
+      const age = Math.round(performance.now() - store.focusAt);
+      const hit = xr.say(text, Math.min(performance.now(), store.focusAt + 1000));
+      return `${hit ? `${hit.mode} ${hit.label}` : 'nothing'} (focus ${store.board.focus ?? 'none'}, ${age} ms old)`;
     },
     snapshot: () => {
       const img = xr.sheet.texture.image as HTMLCanvasElement | OffscreenCanvas;
