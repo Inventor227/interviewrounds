@@ -100,5 +100,6 @@
   "walk_away": null,
   "difficulty": "realistic",
   "who_speaks_first": "chair",
+  "user_chairs": false,
   "length": "short"
 }

@@ -75,7 +75,7 @@ anything. The check fails if a prompt uses a placeholder its header does not dec
 | `styles.md` | `{style_rules}` | Sections `## warm`, `## neutral`, `## tough`. |
 | `round-<round_type with dashes>.md` | `{round_script}` | e.g. `round-pm-execution.md`. Behavioral and leadership get several question cards in `{questions}`. |
 | `hand-over.md` | `{panel_rules}` | `## lead` for the lead, `## second` for the second panelist; empty for one to one rounds. |
-| `round-meeting.md` | every meeting attendee | Replaces the stable part of `house-rules.md` for meetings, plus `## chair` or `## attendee`; reuses the turn note. |
+| `round-meeting.md` | every meeting attendee | Replaces the stable part of `house-rules.md` for meetings, plus `## chair` or `## attendee`, plus `## user_chairs` for everyone when the plan has `user_chairs: true`; reuses the turn note. |
 | `meeting-prepare.md` | `POST /api/meetings/prepare` | Output is `schema/meeting-plan.schema.json`. |
 | `meeting-state.md` | background update after each user turn in meetings | Output feeds `{notes}` of the next turn. |
 | `scribe.md` | voice to board ghosts | Op names and args as in `schema/board.v1.schema.json`. |
@@ -84,8 +84,18 @@ anything. The check fails if a prompt uses a placeholder its header does not dec
 Live speech is spoken word for word, so live prompts ask for one to three short sentences with no markdown, lists,
 brackets or symbols, and numbers in words. The server's speech filter is the second line of defence.
 
+App markers the live prompts handle: `[event: start]`, `[event: time_check]`, `[event: silence_check]`,
+`[event: long_answer]` (one answer ran past `interrupt_after_seconds`; models never time answers themselves),
+`[event: handover]`, `[event: resume]`, `[event: ending]`.
+
+Meetings: the meeting plan's `opening_line` is spoken by the server as the session's first message (the chair's, or the
+decision maker's when the user chairs), so no prompt repeats it. Performance review and project kickoff set
+`user_chairs: true`: the user runs the meeting, no AI attendee chairs or asks for the decision, and the meeting ends on
+the user's close.
+
 Live tools: `show_question`, `next_phase`, `hand_over`, `point_at`, `give_hint`, `end_round`. `house-rules.md` says when to
-use each; `hand_over.line` is always the exact first line the next speaker says.
+use each; `hand_over.line` is always the exact first line the next speaker says, and the server speaks it word for word
+on `[event: handover]` without a model call.
 
 ## Copy
 

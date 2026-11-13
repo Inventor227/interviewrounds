@@ -63,5 +63,6 @@
   "walk_away": "125,000 base, or 120,000 base with a sign on bonus of at least 15,000.",
   "difficulty": "realistic",
   "who_speaks_first": "chair",
+  "user_chairs": false,
   "length": "short"
 }
