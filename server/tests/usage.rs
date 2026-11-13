@@ -6,7 +6,7 @@ use std::path::PathBuf;
 
 use axum::http::{Method, StatusCode};
 use chrono::{NaiveDate, TimeZone, Utc};
-use common::live::{self, Options, full_req, short_req};
+use common::live::{self, Options, full_req, go_live, short_req};
 use ir_server::api::me;
 use ir_server::claude::Usage;
 use ir_server::config::UsagePhase;
@@ -125,15 +125,15 @@ async fn after_judging_guests_get_one_quick_round() {
         ..Options::default()
     })
     .await;
+    let base = app.serve().await;
     let cookie = app.guest().await;
     assert_eq!(
         app.create(&cookie, full_req("fake")).await.body["code"],
         "guest_full_used"
     );
-    assert_eq!(
-        app.create(&cookie, short_req("fake")).await.status,
-        StatusCode::OK
-    );
+    let res = app.create(&cookie, short_req("fake")).await;
+    assert_eq!(res.status, StatusCode::OK);
+    go_live(&base, &res.body).await;
     let res = app.create(&cookie, short_req("fake")).await;
     assert_eq!(res.body["code"], "guest_daily_limit");
     assert!(res.body["resets_at"].is_null());
@@ -147,6 +147,7 @@ async fn after_judging_guests_get_one_quick_round() {
 #[tokio::test]
 async fn signed_in_free_users_get_two_rounds() {
     let app = live::test_app(Options::default()).await;
+    let base = app.serve().await;
     let cookie = app.guest().await;
     // Sign-in is a later step; promote the identity by hand.
     sqlx::query("update identities set kind = 'user', google_sub = 'g-1', name = 'Sam'")
@@ -154,10 +155,9 @@ async fn signed_in_free_users_get_two_rounds() {
         .await
         .unwrap();
     for _ in 0..2 {
-        assert_eq!(
-            app.create(&cookie, short_req("fake")).await.status,
-            StatusCode::OK
-        );
+        let res = app.create(&cookie, short_req("fake")).await;
+        assert_eq!(res.status, StatusCode::OK);
+        go_live(&base, &res.body).await;
     }
     let res = app.create(&cookie, short_req("fake")).await;
     assert_eq!(res.body["code"], "free_rounds_used");

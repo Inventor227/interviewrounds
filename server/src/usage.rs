@@ -522,8 +522,8 @@ fn today_start(now: DateTime<Utc>) -> DateTime<Utc> {
     Utc.from_utc_datetime(&now.date_naive().and_time(NaiveTime::MIN))
 }
 
-/// Session counts that limits are based on. Failed sessions and ones that never started and were abandoned
-/// do not count.
+/// Session counts that limits are based on: rounds that went live (the browser's first socket hello). Failed
+/// sessions and sessions that never started (made on the mic tap, never entered) do not count.
 #[derive(Clone, Copy, Debug, Default)]
 struct Counts {
     short_today: i64,
@@ -543,8 +543,7 @@ async fn counts(
                 count(*) filter (where length = 'full'), \
                 count(*) \
          from sessions \
-         where identity_id = $1 and status <> 'failed' \
-           and not (status = 'abandoned' and started_at is null)",
+         where identity_id = $1 and status <> 'failed' and started_at is not null",
     )
     .bind(identity)
     .bind(today_start(now))

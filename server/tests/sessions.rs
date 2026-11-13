@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 
 use axum::http::{Method, StatusCode, header};
 use chrono::{DateTime, Utc};
-use common::live::{self, Options, full_req, short_req};
+use common::live::{self, Options, full_req, go_live, short_req};
 use ir_server::claude::{Message, Role};
 use ir_server::identity::sha256;
 use ir_server::orchestrator::Turn;
@@ -242,10 +242,12 @@ async fn create_session_respects_guest_daily_limit() {
         ..Options::default()
     })
     .await;
+    let base = app.serve().await;
     let cookie = app.guest().await;
     for i in 0..3 {
         let res = app.create(&cookie, short_req("fake")).await;
         assert_eq!(res.status, StatusCode::OK, "round {i}: {}", res.body);
+        go_live(&base, &res.body).await;
     }
     let res = app.create(&cookie, short_req("fake")).await;
     assert_eq!(res.status, StatusCode::TOO_MANY_REQUESTS, "{}", res.body);
@@ -262,6 +264,7 @@ async fn create_session_respects_guest_daily_limit() {
     // The full round is separate: one per device.
     let res = app.create(&cookie, full_req("fake")).await;
     assert_eq!(res.status, StatusCode::OK, "{}", res.body);
+    go_live(&base, &res.body).await;
     let res = app.create(&cookie, full_req("fake")).await;
     assert_eq!(res.body["code"], "guest_full_used");
 
@@ -270,6 +273,64 @@ async fn create_session_respects_guest_daily_limit() {
     assert_eq!(
         app.create(&other, short_req("fake")).await.status,
         StatusCode::OK
+    );
+}
+
+async fn status_of(app: &live::TestApp, id: &str) -> (String, Option<String>) {
+    sqlx::query_as("select status, ended_reason from sessions where id = $1")
+        .bind(Uuid::parse_str(id).unwrap())
+        .fetch_one(&app.state.db)
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn only_rounds_that_started_count_and_a_new_one_replaces_an_unstarted_one() {
+    let app = live::test_app(Options {
+        env: &[("USAGE_PHASE", "judging")],
+        ..Options::default()
+    })
+    .await;
+    let base = app.serve().await;
+    let cookie = app.guest().await;
+    // Sessions made on the mic tap and never entered: none counts, and each new one replaces the last.
+    let mut made = Vec::new();
+    for i in 0..5 {
+        let res = app.create(&cookie, short_req("fake")).await;
+        assert_eq!(res.status, StatusCode::OK, "tap {i}: {}", res.body);
+        made.push(res.body);
+    }
+    for b in &made[..4] {
+        let (status, reason) = status_of(&app, b["session_id"].as_str().unwrap()).await;
+        assert_eq!(status, "abandoned");
+        assert_eq!(reason.as_deref(), Some("user_ended"));
+    }
+    let last = made.last().unwrap();
+    assert_eq!(
+        status_of(&app, last["session_id"].as_str().unwrap())
+            .await
+            .0,
+        "created"
+    );
+    let me = app.call(Method::GET, "/api/me", Some(&cookie), None).await;
+    assert_eq!(me.body["limits"]["short_left_today"], 3, "{}", me.body);
+
+    // A round counts once it goes live: three live rounds use up the day.
+    go_live(&base, last).await;
+    for _ in 0..2 {
+        let res = app.create(&cookie, short_req("fake")).await;
+        assert_eq!(res.status, StatusCode::OK, "{}", res.body);
+        go_live(&base, &res.body).await;
+    }
+    let res = app.create(&cookie, short_req("fake")).await;
+    assert_eq!(res.status, StatusCode::TOO_MANY_REQUESTS, "{}", res.body);
+    assert_eq!(res.body["code"], "guest_daily_limit");
+    // A live round is never replaced by a new create.
+    assert_eq!(
+        status_of(&app, last["session_id"].as_str().unwrap())
+            .await
+            .0,
+        "live"
     );
 }
 
@@ -1003,31 +1064,49 @@ async fn concurrent_creates_take_the_last_slot_once() {
         ..Options::default()
     })
     .await;
+    let base = app.serve().await;
     let cookie = app.guest().await;
     for _ in 0..2 {
-        assert_eq!(
-            app.create(&cookie, short_req("fish")).await.status,
-            StatusCode::OK
-        );
+        let res = app.create(&cookie, short_req("fish")).await;
+        assert_eq!(res.status, StatusCode::OK, "{}", res.body);
+        go_live(&base, &res.body).await;
     }
+    // Unstarted sessions do not count, so all four are made; under the create lock each one replaces the ones
+    // before it, so only one is left waiting to start.
     let results =
         futures::future::join_all((0..4).map(|_| app.create(&cookie, short_req("fish")))).await;
-    let ok = results
+    let ok: Vec<&Value> = results
         .iter()
         .filter(|r| r.status == StatusCode::OK)
-        .count();
-    assert_eq!(
-        ok,
-        1,
-        "{:?}",
-        results.iter().map(|r| r.status).collect::<Vec<_>>()
-    );
-    assert!(
-        results
-            .iter()
-            .filter(|r| r.status != StatusCode::OK)
-            .all(|r| r.body["code"] == "guest_daily_limit")
-    );
+        .map(|r| &r.body)
+        .collect();
+    assert!(!ok.is_empty());
+    live::eventually(
+        "one unstarted session left",
+        Duration::from_secs(3),
+        || async {
+            count(
+                &app,
+                "select count(*) from sessions where status = 'created'",
+            )
+            .await
+                == 1
+        },
+    )
+    .await;
+    let waiting: Uuid = sqlx::query_scalar("select id from sessions where status = 'created'")
+        .fetch_one(&app.state.db)
+        .await
+        .unwrap();
+    let body = ok
+        .iter()
+        .find(|b| b["session_id"] == waiting.to_string())
+        .expect("the one left was handed out");
+    // It takes the last slot once it starts.
+    go_live(&base, body).await;
+    let res = app.create(&cookie, short_req("fish")).await;
+    assert_eq!(res.status, StatusCode::TOO_MANY_REQUESTS, "{}", res.body);
+    assert_eq!(res.body["code"], "guest_daily_limit");
 }
 
 #[tokio::test]
@@ -1304,9 +1383,10 @@ async fn an_old_voice_that_will_not_end_stays_open_for_settlement() {
 #[tokio::test]
 async fn the_sweep_skips_a_stuck_session_and_gives_up_after_enough_tries() {
     let app = live::test_app(Options::default()).await;
-    let cookie = app.guest().await;
     let mut ids = Vec::new();
     for _ in 0..2 {
+        // Two devices (one device's new session would replace its unstarted one).
+        let cookie = app.guest().await;
         let res = app.create(&cookie, short_req("fish")).await;
         ids.push(Uuid::parse_str(res.body["session_id"].as_str().unwrap()).unwrap());
     }

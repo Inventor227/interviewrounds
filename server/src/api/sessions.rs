@@ -496,6 +496,15 @@ async fn create_inner(
         tx.rollback().await?;
         return Ok(Err(cap));
     }
+    // The browser makes the session on the mic tap, before the user enters the room, and only rounds that went
+    // live count toward limits. So a new session replaces the caller's earlier ones that never started (found
+    // under the lock, so concurrent creates leave at most one): they end as abandoned right after this commit.
+    let replaced: Vec<Uuid> = sqlx::query_scalar(
+        "select id from sessions where identity_id = $1 and status = 'created' and started_at is null",
+    )
+    .bind(identity.id)
+    .fetch_all(&mut *tx)
+    .await?;
     sqlx::query(
         "insert into sessions (id, identity_id, parent_session_id, mode, round_id, meeting_plan_id, length, \
            level, style, voice, panel_mode, settings, panel, status, fish_reserved_usd, question_id) \
@@ -520,6 +529,11 @@ async fn create_inner(
     .await?;
     let (token, _, _) = persist::issue_token(&mut tx, session_id, false).await?;
     tx.commit().await?;
+    for old in replaced {
+        if let Err(err) = persist::end_session(app, old, "user_ended").await {
+            tracing::warn!(session_id = %old, error = %format!("{err:#}"), "could not end a session that never started");
+        }
+    }
 
     let voices = if fish {
         let specs = voiced(&st, mode)

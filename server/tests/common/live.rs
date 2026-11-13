@@ -360,6 +360,18 @@ impl TestApp {
     }
 }
 
+/// Opens the round's socket and waits until the round has started (the first hello starts it; only started
+/// rounds count toward limits).
+pub async fn go_live(base: &str, created: &Value) {
+    let id = created["session_id"].as_str().expect("session_id");
+    let token = created["client_token"].as_str().expect("client_token");
+    let mut ws = hello(base, id, token, 0).await;
+    let state = frame_of(&mut ws, "round.state", Duration::from_secs(3))
+        .await
+        .expect("round.state");
+    assert_eq!(state["d"]["status"], "live");
+}
+
 pub fn short_req(voice: &str) -> Value {
     json!({"mode": "interview", "round_id": "sde.system_design.short", "length": "short",
            "level": "mid", "style": "neutral", "voice": voice})
