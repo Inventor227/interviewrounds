@@ -49,7 +49,7 @@ await page(() => {
 
 const desk = await R.placeWithController(S, null, { rest: false });
 
-// A new guest's first round with a sheet teaches the one gesture first, for 20 seconds at most. Holding
+// A new guest's first round with a sheet teaches the one gesture first, for 30 seconds at most. Holding
 // controllers, the line asks for the trigger, and a box drawn by ray completes the step; the round starts after
 // it. Every scripted move takes about a second here, so the box is its four corners and nothing else comes first.
 const ob = await page(async () => {
@@ -111,57 +111,25 @@ b = await board();
 const drawn = b.items.filter((i) => i.kind === 'component' && i.label === null).sort((p, q) => p.x - q.x);
 if (drawn.length < 2) await fail('the box pinched after the change did not become a card', b);
 const [c1, c2] = drawn;
-await draw(L.along([[c1.x + c1.w + 0.4, c1.y + c1.h / 2], [c2.x + 1.5, c2.y + c2.h / 2]], 1.5));
+await draw(L.along([[c1.x + c1.w + 1.0, c1.y + c1.h / 2], [c2.x + 1.5, c2.y + c2.h / 2]], 1.5));
 await sleep(1200);
 b = await board();
 stage('box and connector by hand', { items: b.items.length, edges: b.edges });
-// As in the hands run: the scripted pinch can land a centimetre off and take the card instead of its edge.
-if (!b.edges.length) console.error('WARNING: the pinched connector did not become an edge');
+if (!b.edges.length) await fail('the connector pinched after the change did not become an edge', b);
 await look(S, -52);
 await sleep(600);
 await shot('s04-drawn-by-both');
 
-// A hand pokes Pause on the round bar (direct touch), then Resume. Recorded, not required: the emulator renders a
-// few frames a second, and a poke can fall between two of them.
-{
-  const poke = async (re) => {
-    const list = await R.clickables('roundBar');
-    const at = list.find((x) => re.test(x.label))?.at;
-    if (!at) return false;
-    // Along the bar's normal (it leans 35 degrees up from the desk, facing the user).
-    const off = (d) => ({ x: at.x, y: at.y + 0.819 * d, z: at.z + 0.574 * d });
-    await C.xr('run-sequence', {
-      device: 'hand-right',
-      steps: [
-        { label: 'above', position: off(0.06), anchor: 'index-tip', duration: 0.7, poseId: 'point' },
-        { label: 'press', position: off(-0.004), anchor: 'index-tip', duration: 0.5 },
-        { label: 'hold', duration: 1.2 },
-        { label: 'back', position: off(0.08), anchor: 'index-tip', duration: 0.6 },
-      ],
-      body: 'auto',
-      gaze: 'fixed',
-      idleHand: 'keep',
-    }).catch((e) => console.log('poke failed', String(e).slice(0, 300)));
-    await sleep(1500);
-    return true;
-  };
-  await look(S, -48);
-  await poke(/Pause/);
-  const paused = (await roundState()).state === 'paused';
-  if (paused) await shot('s03b-paused-by-poke');
-  let resumed = null;
-  if (paused) {
-    await poke(/Resume/);
-    resumed = (await roundState()).state === 'live';
-    if (!resumed) {
-      await page(() => globalThis.__round.controller.resume());
-      await waitState(['live'], 30000);
-    }
-  }
-  stage('hand poke on the round bar', { paused, resumed });
-  await call('xr', 'set-hand-pose', { device: 'hand-right', poseId: 'default' });
-  await look(S, -52);
-}
+// A hand pokes Pause on the round bar (direct touch), then Resume.
+await look(S, -48);
+await R.pokeBar(/Pause/, 0.5);
+await waitState(['paused'], 30000);
+await shot('s03b-paused-by-poke');
+await R.pokeBar(/Resume/, 0.5);
+await waitState(['live'], 30000);
+stage('paused and resumed by a hand poke', await roundState());
+await call('xr', 'set-hand-pose', { device: 'hand-right', poseId: 'default' });
+await look(S, -52);
 
 // A suggestion accepted by pinch, if one is waiting or comes with the next answer.
 stage('answer 2', await answer('The box on the left is the API service and the one on the right is the key value store. The service reads and writes the store.'));

@@ -2,7 +2,7 @@
 // controller, strokes on the sheet by touch and by ray, the round bar and the cards by ray.
 
 import { call, page, shot, sleep, stage, until, fail, look } from './round-lib.mjs';
-import { below, glide, hold, pull, stroke, trigger } from './input-lib.mjs';
+import { below, glide, hold, pull, stroke, trigger, xr } from './input-lib.mjs';
 
 /** A trigger pull long enough to span a frame of the emulator's few frames a second. */
 const PULL_S = 0.7;
@@ -237,3 +237,36 @@ export async function pressCard(hand, S, panel, re, shotName = null) {
 }
 
 export { below, glide };
+
+/** A fingertip press on a round bar button: in along the panel's normal, `holdS` on it, back out. */
+export async function pokeBar(re, holdS = 0.5) {
+  const b = await page((src) => {
+    const root = globalThis.__xrApp.ui.groups.roundBar;
+    root.updateWorldMatrix(true, true);
+    const rx = new RegExp(src);
+    let out = null;
+    root.traverse((o) => {
+      if (!o.properties?.peek?.().onPointerDown) return;
+      let label = '';
+      o.traverse((c) => {
+        const t = c.properties?.peek?.().text;
+        if (typeof t === 'string' && !label) label = t;
+      });
+      if (!rx.test(label)) return;
+      const e = o.matrixWorld.elements;
+      const m = root.matrixWorld.elements;
+      out = { at: { x: e[12], y: e[13], z: e[14] }, n: { x: m[8], y: m[9], z: m[10] } };
+    });
+    return out;
+  }, re.source);
+  if (!b) await fail(`no ${re} button on the round bar`);
+  const off = (d) => ({ x: b.at.x + b.n.x * d, y: b.at.y + b.n.y * d, z: b.at.z + b.n.z * d });
+  const steps = [
+    { label: 'above', position: off(0.07), anchor: 'index-tip', duration: 0.7, poseId: 'point' },
+    { label: 'press', position: off(0.002), anchor: 'index-tip', duration: 0.6 },
+    { label: 'hold', duration: holdS },
+    { label: 'back', position: off(0.09), anchor: 'index-tip', duration: 0.6 },
+  ];
+  await xr('run-sequence', { device: 'hand-right', steps, body: 'fixed', gaze: 'fixed', idleHand: 'keep' });
+  await sleep(700);
+}

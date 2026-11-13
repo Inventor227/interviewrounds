@@ -3,7 +3,6 @@
 // labels (Inter cap height is about 0.73 em, so 1.6 cm type), 0.8 cm minimum for secondary text.
 
 import { UIKit } from '@iwsdk/core';
-import { getPointerById } from '@pmndrs/pointer-events';
 import {
   CircleGeometry,
   Mesh,
@@ -84,6 +83,11 @@ export interface Button {
   setOn(on: boolean): void;
 }
 
+/** The pointer library keeps its live pointers in a page-wide map, by id. */
+function pointerOf(id: number): { getButtonsDown(): ReadonlySet<number> } | undefined {
+  return (globalThis as { pointerEventspointerMap?: Map<number, { getButtonsDown(): ReadonlySet<number> }> }).pointerEventspointerMap?.get(id);
+}
+
 /**
  * A large poke target (at least 4 × 4 cm, Meta hands guidance) with a pressed look.
  *
@@ -129,7 +133,7 @@ export function button(labelText: string, opts: ButtonOpts = {}): Button {
       if (e?.pointerType === 'touch') {
         queueMicrotask(() => {
           if (!armed.delete(pid)) return;
-          const lifted = getPointerById(pid)?.getButtonsDown().size === 0;
+          const lifted = pointerOf(pid)?.getButtonsDown().size === 0;
           if (lifted) {
             opts.onUp?.();
             opts.onClick?.();
