@@ -1181,4 +1181,28 @@ describe('RoundController in the room', () => {
     await vi.waitFor(() => expect(h2.xr.ui.showSummary).toHaveBeenCalledWith(REPORT));
     expect(errors2).toEqual([]);
   });
+
+  it('a_scorecard_that_beats_the_goodbye_still_ends_on_the_summary', async () => {
+    const h = harness();
+    const t = await live(h);
+    const states: string[] = [];
+    h.ctl.on('state', (s) => states.push(s));
+    const errors = errorsOf(h);
+    h.ui('end');
+    t.mode('speaking'); // the goodbye is still playing here when the server closes the round
+    h.socket.serverSend('round.ended', { reason: 'user_ended' });
+    h.socket.serverSend('report.progress', { stage: 'card', pct: 50, card: CARD });
+    h.socket.serverSend('report.ready', { session_id: 'sess1' });
+    h.socket.terminal(4409);
+    await vi.waitFor(() => expect(h.xr.ui.showSummary).toHaveBeenCalledWith(REPORT));
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(t.stopped).toBe(true);
+    expect(h.showCard).toHaveBeenCalledWith(CARD);
+    expect(h.ctl.state).toBe('summary');
+    expect(states.at(-1)).toBe('summary');
+    expect(states.filter((s) => s === 'summary')).toHaveLength(1);
+    expect(errors).toEqual([]);
+    expect(h.api.endSession).not.toHaveBeenCalled(); // the server ended it itself
+    expect(h.xr.ui.setStatus).toHaveBeenLastCalledWith(null);
+  });
 });

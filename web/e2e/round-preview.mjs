@@ -35,6 +35,10 @@ await waitReady();
 await go('/round/sde.system_design.short?preview=1');
 await until('the start page', () => !!document.querySelector('[data-test="mic-allow"]'));
 await setupTab({ offer: false });
+// The page read its voice choice before the dev key was stored: load it again, then stub the mic again.
+await go('/round/sde.system_design.short?preview=1');
+await until('the start page', () => !!document.querySelector('[data-test="mic-allow"]'));
+await setupTab({ offer: false });
 await shot('01-start');
 
 const tap1 = Date.now();

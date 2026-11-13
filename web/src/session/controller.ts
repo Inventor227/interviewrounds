@@ -258,6 +258,8 @@ export class RoundController {
   private endingTimer: ReturnType<typeof setTimeout> | null = null;
   private finishing: Promise<void> | null = null;
   private cardShown = false;
+  /** `round.ended` arrived: scoring frames count from here, even while the voices are still stopping. */
+  private serverEnded = false;
 
   constructor(private readonly deps: RoundControllerDeps) {
     this.timing = { ...DEFAULT_TIMING, ...deps.timing };
@@ -597,7 +599,7 @@ export class RoundController {
           this.socketTerminal = true;
           // After the round the server closes the room for good once the report is done (or late).
           if (this.st === 'summary') return;
-          if (this.st === 'scoring') {
+          if (this.st === 'scoring' || (this.serverEnded && this.st === 'ending')) {
             void this.showReport(true);
             return;
           }
@@ -1067,11 +1069,12 @@ export class RoundController {
     this.endingTimer = setTimeout(() => void this.finishEnding(), ENDING_GRACE_MS);
   }
 
+  /** The server closed the round (also in the middle of our goodbye): stop the voices and wait for the scorecard. */
   private onRoundEnded(): void {
-    if (isActive(this.st)) {
-      this.endReason = null;
-      void this.finishEnding();
-    }
+    if (!isActive(this.st) && this.st !== 'ending') return;
+    this.serverEnded = true;
+    this.endReason = null;
+    void this.finishEnding();
   }
 
   private finishEnding(): Promise<void> {
@@ -1089,8 +1092,11 @@ export class RoundController {
     this.flushSpoken();
     await this.panel?.stopAll();
     if (this.disposed) return;
-    this.setState('scoring');
-    this.deps.xr.ui.setStatus('Writing your scorecard', 0);
+    // The scorecard can beat the voices' shutdown: never go back from the summary or cover the card.
+    if (this.st !== 'summary') {
+      this.setState('scoring');
+      if (!this.cardShown) this.deps.xr.ui.setStatus('Writing your scorecard', 0);
+    }
     const res = this.res;
     if (res && this.endReason) {
       await this.deps.api.endSession(res.session_id, this.endReason).catch((e) => this.emitError(e as ApiError));
@@ -1099,7 +1105,7 @@ export class RoundController {
 
   /** Scoring progress (pct 0 to 100), and the quick card a few seconds after the round. */
   private onReportProgress(d: { stage: string; pct: number; card?: HeadsetCard }): void {
-    if (this.st !== 'scoring') return;
+    if (this.st !== 'scoring' && !(this.serverEnded && this.st === 'ending')) return;
     const ui = this.deps.xr.ui;
     if (d.stage === 'card' && d.card && ui.showCard) {
       this.cardShown = true;
@@ -1133,7 +1139,7 @@ export class RoundController {
 
   /** No report in the headset: keep the quick card, or show a short one, with See full report. */
   private reportUnavailable(): void {
-    if (this.st !== 'scoring' || this.disposed) return;
+    if ((this.st !== 'scoring' && !(this.serverEnded && this.st === 'ending')) || this.disposed) return;
     const ui = this.deps.xr.ui;
     if (!this.cardShown) {
       ui.setStatus(null);
