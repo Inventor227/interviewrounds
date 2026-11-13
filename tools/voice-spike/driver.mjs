@@ -33,7 +33,7 @@ const save = async () => {
     result.log = await page.evaluate(() => window.spikeLog);
     result.levels = await page.evaluate(() => window.spikeLevels);
   } catch (e) { result.save_error = String(e); }
-  result.console = consoleLines;
+  result.console = consoleLines.map((l) => l.split(DEV_KEY).join("<dev key>"));
   writeFileSync(out, JSON.stringify(result));
 };
 const watchdog = setTimeout(async () => {
@@ -49,7 +49,7 @@ try {
   page = await ctx.newPage();
   page.on("console", (m) => consoleLines.push(`${m.type()}: ${m.text()}`.slice(0, 500)));
   page.on("pageerror", (e) => consoleLines.push(`pageerror: ${e.message}`));
-  await page.goto(`${ORIGIN}/dev/voice-spike?key=${DEV_KEY}`);
+  await page.goto(`${ORIGIN}/dev/voice-spike?key=${encodeURIComponent(DEV_KEY)}`);
   await page.waitForFunction(() => window.spike, null, { timeout: 30_000 });
 
   const panel = MODE === "joined" ? 2 : 1;
@@ -94,7 +94,8 @@ try {
   await page.evaluate(() => window.spike.end());
   await sleep(1500);
 } catch (e) {
-  result.error = String(e && e.stack || e);
+  // Errors can quote the page address; the key never leaves this process.
+  result.error = String(e && e.stack || e).split(DEV_KEY).join("<dev key>").split(encodeURIComponent(DEV_KEY)).join("<dev key>");
   try { await page.evaluate(() => window.spike.end()); } catch {}
 } finally {
   clearTimeout(watchdog);

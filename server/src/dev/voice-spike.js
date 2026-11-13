@@ -15,11 +15,13 @@ function log(ev, data = {}) {
   out.textContent += JSON.stringify(entry) + "\n";
 }
 
+// The key goes in a header, never in an API address.
 async function api(path, body) {
-  const url = `/dev/voice-spike${path}${path.includes("?") ? "&" : "?"}key=${encodeURIComponent(key)}`;
-  const res = await fetch(url, body === undefined ? {} : {
+  const url = `/dev/voice-spike${path}`;
+  const headers = { "x-dev-key": key };
+  const res = await fetch(url, body === undefined ? { headers } : {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: { ...headers, "content-type": "application/json" },
     body: JSON.stringify(body),
   });
   if (!res.ok) throw new Error(`${path}: HTTP ${res.status} ${await res.text()}`);
