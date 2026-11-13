@@ -1,11 +1,40 @@
 // Quiet UI sounds: small recorded samples (public/sfx, credits in CREDITS.md) for presses, the sheet landing, the
-// scorecard, cards, strokes and the bin. Hands have no haptics, so every press gets a sound; every sample is
+// scorecard, cards, strokes and the bin, plus round cues (start, time check, suggestion, hand-over, pause, resume).
+// Hands have no haptics, so every press gets a sound; every sample is
 // normalised low (peak -24 dBFS, the chime -20) so nothing leaks into the microphone. If a sample has not loaded
 // (yet, or ever), the same sound is synthesized instead, so a press is never silent.
 
-export type SoundName = 'click' | 'flap' | 'chime' | 'snap' | 'pen' | 'erase';
+export type SoundName =
+  | 'click'
+  | 'flap'
+  | 'chime'
+  | 'snap'
+  | 'pen'
+  | 'erase'
+  | 'start'
+  | 'tick'
+  | 'ghost'
+  | 'handover'
+  | 'pause'
+  | 'resume';
 
-export const SOUND_NAMES: readonly SoundName[] = ['click', 'flap', 'chime', 'snap', 'pen', 'erase'];
+export const SOUND_NAMES: readonly SoundName[] = [
+  'click',
+  'flap',
+  'chime',
+  'snap',
+  'pen',
+  'erase',
+  'start',
+  'tick',
+  'ghost',
+  'handover',
+  'pause',
+  'resume',
+];
+
+/** The names that have a recorded sample in public/sfx (`<name>.ogg`); any other name is always synthesized. */
+export const SAMPLED: readonly SoundName[] = SOUND_NAMES;
 
 export interface Sounds {
   click(): void;
@@ -17,6 +46,18 @@ export interface Sounds {
   pen(): void;
   /** Something goes in the bin. */
   erase(): void;
+  /** A round begins. */
+  start(): void;
+  /** A time check. */
+  tick(): void;
+  /** A suggestion (ghost) appears. */
+  ghost(): void;
+  /** One interviewer hands over to another. */
+  handover(): void;
+  /** The round pauses. */
+  pause(): void;
+  /** The round resumes. */
+  resume(): void;
   /** By name (the board's sfx port). */
   play(name: SoundName): void;
   setVolume(v: number): void;
@@ -24,7 +65,7 @@ export interface Sounds {
 
 export interface SampledSounds extends Sounds {
   /**
-   * Fetches and decodes every sample once. Safe to call before any AudioContext exists (it never creates one) and
+   * Fetches and decodes every recorded sample once. Safe to call before any AudioContext exists (it never creates one) and
    * any number of times; it never rejects. A sample that fails to load stays synthesized.
    */
   preload(): Promise<void>;
@@ -134,7 +175,30 @@ export function createSounds(
     src.start(t);
     src.stop(t + ms / 1000 + 0.01);
   };
+  // Soft sine notes, one after another (chime, start, pause, resume).
+  const notes = (ctx: AudioContext, hz: number[], gap: number, len: number, level: number) => {
+    const t = ctx.currentTime;
+    hz.forEach((f, i) => {
+      const o = ctx.createOscillator();
+      o.type = 'sine';
+      o.frequency.value = f;
+      const g = out(ctx, level);
+      const s = t + i * gap;
+      g.gain.setValueAtTime(0.0001, s);
+      g.gain.exponentialRampToValueAtTime(level * volume, s + 0.015);
+      g.gain.exponentialRampToValueAtTime(0.0001, s + len);
+      o.connect(g);
+      o.start(s);
+      o.stop(s + len + 0.05);
+    });
+  };
   const synth: Record<SoundName, (ctx: AudioContext) => void> = {
+    start: (ctx) => notes(ctx, [523, 784], 0.1, 0.4, 0.03),
+    tick: (ctx) => tone(ctx, 'triangle', 1300, 1100, 25, 0.015),
+    ghost: (ctx) => tone(ctx, 'sine', 520, 820, 70, 0.03),
+    handover: (ctx) => noiseBurst(ctx, 'lowpass', 450, 220, 0.03),
+    pause: (ctx) => notes(ctx, [523, 392], 0.09, 0.16, 0.025),
+    resume: (ctx) => notes(ctx, [392, 523], 0.09, 0.16, 0.025),
     snap: (ctx) => tone(ctx, 'square', 520, 260, 45, 0.03),
     pen: (ctx) => noiseBurst(ctx, 'highpass', 3500, 60, 0.025),
     erase: (ctx) => noiseBurst(ctx, 'lowpass', 700, 140, 0.05),
@@ -156,22 +220,7 @@ export function createSounds(
       src.start(t);
       src.stop(t + 0.22);
     },
-    chime: (ctx) => {
-      const t = ctx.currentTime;
-      [660, 990].forEach((hz, i) => {
-        const o = ctx.createOscillator();
-        o.type = 'sine';
-        o.frequency.value = hz;
-        const g = out(ctx, 0.035);
-        const s = t + i * 0.12;
-        g.gain.setValueAtTime(0.0001, s);
-        g.gain.exponentialRampToValueAtTime(0.035 * volume, s + 0.02);
-        g.gain.exponentialRampToValueAtTime(0.0001, s + 0.6);
-        o.connect(g);
-        o.start(s);
-        o.stop(s + 0.65);
-      });
-    },
+    chime: (ctx) => notes(ctx, [660, 990], 0.12, 0.6, 0.035),
   };
 
   const play = (name: SoundName) =>
@@ -192,7 +241,7 @@ export function createSounds(
     }
   };
 
-  const preload = () => (preloading ??= Promise.all(SOUND_NAMES.map(fetchOne)).then(() => undefined));
+  const preload = () => (preloading ??= Promise.all(SAMPLED.map(fetchOne)).then(() => undefined));
 
   return {
     click: () => play('click'),
@@ -201,6 +250,12 @@ export function createSounds(
     snap: () => play('snap'),
     pen: () => play('pen'),
     erase: () => play('erase'),
+    start: () => play('start'),
+    tick: () => play('tick'),
+    ghost: () => play('ghost'),
+    handover: () => play('handover'),
+    pause: () => play('pause'),
+    resume: () => play('resume'),
     play,
     setVolume: (v: number) => {
       volume = Math.max(0, Math.min(1, v));
