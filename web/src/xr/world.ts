@@ -4,7 +4,8 @@
 //          raised to 90 only after the room and people are on screen and frames show headroom. Placement is
 //          explicit: place() asks "Touch your desk where the sheet should go", builds the room around the desk and
 //          anchors it. Everything placed belongs to one session: a session end forgets the desk and the anchor, hides
-//          the room and rejects a pending place(). XRSession visibility changes pause a live round.
+//          the room and rejects a pending place(). XRSession visibility changes and the session's end are
+//          reported (onVisibility, onSessionEnd); the round controller pauses on them.
 // preview: no WebXR. The same room in a calm virtual meeting room, camera at seated eye height, mouse input.
 //
 // The round controller drives it through createXRPort (port.ts).
@@ -104,10 +105,7 @@ export interface XRApp {
   /** Shows a texture on the wall board (the board mirrors the sheet); null clears it. */
   wallboardTexture(tex: Texture | null): void;
   visibility$: ReadonlySignal<VisibilityState>;
-  /**
-   * XRSession visibility changes (Quest system menu, headset off). The app also asks the round UI to pause by
-   * itself (a 'pause' action, so the Resume card shows) when a live round loses visibility.
-   */
+  /** XRSession visibility changes (Quest system menu, headset off, back again). The round controller pauses on them. */
   onVisibility(cb: (v: XRVisibility) => void): () => void;
   /** The immersive session ended; byApp is true when exit() asked for it (End), false for the system or the user. */
   onSessionEnd(cb: (e: { byApp: boolean }) => void): () => void;
@@ -411,8 +409,8 @@ export async function createXRApp(root: HTMLElement, opts: XRAppOptions): Promis
     room.root.visible = true;
     placementView.finish(room.sheet, now);
     ui.hideStatus();
-    // Back in a paused round (the resume path): keep the Resume card up.
-    if (ui.paused) ui.setStatus('paused');
+    // Back in a round that is paused or reconnecting (the resume path): its card comes back.
+    ui.restoreNotice();
     if (desk.source === 'fallback') {
       ui.layoutHint(headPose());
       ui.showHint('No desk? We set one up for you.', now, 6000);
@@ -588,8 +586,8 @@ export async function createXRApp(root: HTMLElement, opts: XRAppOptions): Promis
     controllersHinted = false;
     lastXRFrameAt = null;
     s?.addEventListener('visibilitychange', () => {
+      // The round controller pauses on anything but `visible`, in every active state, and never resumes by itself.
       const v = s.visibilityState as XRVisibility;
-      if (v !== 'visible') ui.systemPause();
       for (const cb of visCbs) cb(v);
     });
     if (s) selects.attach(s);
@@ -610,7 +608,6 @@ export async function createXRApp(root: HTMLElement, opts: XRAppOptions): Promis
     armAt = null;
     const byApp = exitByApp;
     exitByApp = false;
-    if (!byApp) ui.systemPause();
     for (const cb of endCbs) cb({ byApp });
   };
   renderer.xr.addEventListener('sessionstart', onSessionStart);

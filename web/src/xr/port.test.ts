@@ -150,6 +150,33 @@ describe('createXRPort', () => {
     expect(app.ui.showQuickCard).toHaveBeenLastCalledWith(card, { pending: false });
   });
 
+  it('visibility_the_session_end_notices_and_the_paused_flag_pass_through', () => {
+    const { app } = fakeApp();
+    const vis = new Set<(v: 'visible' | 'visible-blurred' | 'hidden') => void>();
+    const ends = new Set<(e: { byApp: boolean }) => void>();
+    const setNotice = vi.fn();
+    const setPaused = vi.fn();
+    Object.assign(app, {
+      onVisibility: (cb: (v: 'visible' | 'visible-blurred' | 'hidden') => void) => (vis.add(cb), () => vis.delete(cb)),
+      onSessionEnd: (cb: (e: { byApp: boolean }) => void) => (ends.add(cb), () => ends.delete(cb)),
+    });
+    Object.assign(app.ui, { setNotice, setPaused });
+    const port = createXRPort(app);
+    const seen: string[] = [];
+    const offV = port.onVisibility!((v) => seen.push(v));
+    port.onSessionEnd!((e) => seen.push(`end:${e.byApp}`));
+    vis.forEach((cb) => cb('hidden'));
+    vis.forEach((cb) => cb('visible'));
+    ends.forEach((cb) => cb({ byApp: false }));
+    expect(seen).toEqual(['hidden', 'visible', 'end:false']);
+    offV();
+    expect(vis.size).toBe(0);
+    port.ui.setNotice!('welcome_back');
+    port.ui.setPaused!(true);
+    expect(setNotice).toHaveBeenCalledWith('welcome_back');
+    expect(setPaused).toHaveBeenCalledWith(true);
+  });
+
   it('a_completed_pinch_is_a_gesture', () => {
     const { app, pinch } = fakeApp();
     const cb = vi.fn();

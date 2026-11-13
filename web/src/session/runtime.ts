@@ -28,7 +28,7 @@ import type { RoundControllerDeps } from './controller';
 import { wireCues, type Cues } from './cues';
 import { createHeadPort } from './headPort';
 import { People, type AvatarLike } from './people';
-import type { HeadSamplerPort, SocketPort, UiAction, XRPort } from './ports';
+import type { HeadSamplerPort, SocketPort, UiAction, XRPort, XRVisibilityLike } from './ports';
 import { clearLiveRoom, setLiveRoom, type LiveRoom } from './room';
 import { createRoundClock, itemCentre } from './roundClock';
 import { StageTimings } from './timings';
@@ -116,6 +116,10 @@ export function createRoundRuntime({ preview }: RuntimeOptions): RoundController
   let imageSent = false;
   const actionCbs = new Set<(a: UiAction) => void>();
   const gestureCbs = new Set<() => void>();
+  const visibilityCbs = new Set<(v: XRVisibilityLike) => void>();
+  const sessionEndCbs = new Set<(e: { byApp: boolean }) => void>();
+  /** The round is paused: no cue plays, and nothing of the board or the user's words reaches the Scribe. */
+  let paused = false;
   const activityCbs = new Set<() => void>();
   const active = () => {
     for (const cb of [...activityCbs]) cb();
@@ -153,7 +157,7 @@ export function createRoundRuntime({ preview }: RuntimeOptions): RoundController
     }
     if (app) {
       const a = app;
-      const cu = wireCues((name) => a.sounds.play(name), so);
+      const cu = wireCues((name) => a.sounds.play(name), so, { paused: () => paused });
       cues = cu;
       socketCleanups.push(() => cu.dispose());
     }
@@ -250,7 +254,9 @@ export function createRoundRuntime({ preview }: RuntimeOptions): RoundController
         active();
       },
       sendGhostReject: (id) => sync?.sendGhostReject(id),
-      sendFocus: (id) => sync?.sendFocus(id),
+      sendFocus: (id) => {
+        if (!paused) sync?.sendFocus(id);
+      },
       sfx: { play: (n) => a.sounds.play(n) },
       pointer: relay ?? undefined,
       ghostSettleMs: Number(devFlag('ghost_settle')) > 0 ? Number(devFlag('ghost_settle')) * 1000 : undefined,
@@ -316,8 +322,13 @@ export function createRoundRuntime({ preview }: RuntimeOptions): RoundController
   const ui: XRPort['ui'] = {
     setRoundState: (s) => port?.ui.setRoundState(s),
     showSummary: (r) => port?.ui.showSummary(r),
-    showCard: (c) => port?.ui.showCard?.(c),
+    showCard: (c, o) => port?.ui.showCard?.(c, o),
     setStatus: (t, p) => port?.ui.setStatus(t, p),
+    setNotice: (k) => port?.ui.setNotice?.(k),
+    setPaused(p) {
+      paused = p;
+      port?.ui.setPaused?.(p);
+    },
     onAction(cb) {
       actionCbs.add(cb);
       return () => actionCbs.delete(cb);
@@ -359,6 +370,15 @@ export function createRoundRuntime({ preview }: RuntimeOptions): RoundController
       gestureCbs.add(cb);
       return () => gestureCbs.delete(cb);
     },
+    onVisibility(cb) {
+      visibilityCbs.add(cb);
+      return () => visibilityCbs.delete(cb);
+    },
+    onSessionEnd(cb) {
+      sessionEndCbs.add(cb);
+      return () => sessionEndCbs.delete(cb);
+    },
+    cue: (name) => app?.sounds.play(name),
     dispose() {
       if (disposed) return;
       disposed = true;
@@ -411,9 +431,14 @@ export function createRoundRuntime({ preview }: RuntimeOptions): RoundController
         p.onGesture?.(() => {
           for (const cb of [...gestureCbs]) cb();
         }) ?? (() => undefined),
-        a.onSessionEnd(({ byApp }) => {
-          if (byApp || disposed) return;
-          // The user left the headset view mid round: the page offers the way back.
+        a.onVisibility((v) => {
+          for (const cb of [...visibilityCbs]) cb(v);
+        }),
+        a.onSessionEnd((e) => {
+          if (disposed) return;
+          // The controller first (it pauses a running round), then the page, which offers the way back.
+          for (const cb of [...sessionEndCbs]) cb(e);
+          if (e.byApp) return;
           room.sessionLost = true;
           changed();
         }),
@@ -501,7 +526,7 @@ export function createRoundRuntime({ preview }: RuntimeOptions): RoundController
     // Captions follow the words as they play; the board hears what the user said.
     t.on('agentText', (e) => app?.ui.setCaption(p.display_name, e.text));
     t.on('userTranscript', (e) => {
-      if (e.final && !isMarker(e.text)) board?.say(e.text);
+      if (e.final && !isMarker(e.text) && !paused) board?.say(e.text);
     });
     return t;
   };
