@@ -1,7 +1,9 @@
 // Ghosts on the board: Scribe suggestions and local voice suggestions, drawn faded.
 // - Pinch a ghost to accept it (the caller sends it as a normal board.op with the same op_id).
 // - Pinch-hold it 0.6 s, or drag it onto the bin, to dismiss it (board.ghost_reject).
-// - A ghost nobody touches settles (is accepted) 4 s after it first shows.
+// - A Scribe ghost nobody touches settles (is accepted) 4 s after it first shows.
+// - A local suggestion (a voice statement like "that's the URL store") never settles: only a
+//   pinch accepts it, and untouched it fades away after 8 s. Talk never changes the board.
 // GhostLayer sits between a pointer source and BoardInput: pinches that land on a ghost are
 // its own, everything else passes through unchanged.
 import type { Board, GhostOp } from '../shared/types';
@@ -13,6 +15,8 @@ import type { BoardStore } from './ops';
 
 export const GHOST_SETTLE_MS = 4000;
 export const GHOST_HOLD_MS = 600;
+/** An untouched local suggestion goes away after this long, without changing the board. */
+export const LOCAL_GHOST_FADE_MS = 8000;
 /** One slow frame adds at most this much to a pinch-hold, so a hitch never dismisses a ghost. */
 const HOLD_FRAME_CAP_MS = 100;
 /** Extra reach around a ghost's target, for fingertip error. */
@@ -97,6 +101,8 @@ export interface GhostLayerOptions {
   now?: () => number;
   settleMs?: number;
   holdMs?: number;
+  /** Local suggestions (never auto-accepted). Default: the store's isLocalGhost. */
+  isLocal?: (opId: string) => boolean;
 }
 
 type Cb = (p: BoardPoint) => void;
@@ -250,9 +256,15 @@ export class GhostLayer implements PointerAdapter {
     const pressed = new Set([...this.presses.values()].map((p) => p.opId));
     for (const g of [...this.store.board.ghosts]) {
       const t0 = this.firstSeen.get(g.op_id);
-      if (t0 === undefined || this.touched.has(g.op_id) || pressed.has(g.op_id)) continue;
-      if (nowMs - t0 >= this.settleMs && this.ghost(g.op_id)) this.opts.accept(g);
+      if (t0 === undefined || this.touched.has(g.op_id) || pressed.has(g.op_id) || !this.ghost(g.op_id)) continue;
+      if (this.local(g.op_id)) {
+        if (nowMs - t0 >= LOCAL_GHOST_FADE_MS) this.opts.reject(g.op_id);
+      } else if (nowMs - t0 >= this.settleMs) this.opts.accept(g);
     }
+  }
+
+  private local(opId: string): boolean {
+    return (this.opts.isLocal ?? ((id: string) => this.store.isLocalGhost(id)))(opId);
   }
 
   /** Settle rings for untouched ghosts, for the renderer. */
@@ -260,7 +272,8 @@ export class GhostLayer implements PointerAdapter {
     const out: GhostRing[] = [];
     for (const g of this.store.board.ghosts) {
       const t0 = this.firstSeen.get(g.op_id);
-      if (t0 === undefined || this.touched.has(g.op_id)) continue;
+      // Local suggestions wait for a pinch: no settle ring.
+      if (t0 === undefined || this.touched.has(g.op_id) || this.local(g.op_id)) continue;
       const r = ghostRect(this.store.board, g);
       if (!r) continue;
       const [cx] = center(r);

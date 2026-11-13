@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { BoardOp, GhostOp } from '../shared/types';
-import { ghostRect, GhostLayer, GHOST_HOLD_MS, GHOST_SETTLE_MS } from './ghosts';
+import { ghostRect, GhostLayer, GHOST_HOLD_MS, GHOST_SETTLE_MS, LOCAL_GHOST_FADE_MS } from './ghosts';
 import { BoardInput } from './input';
 import { HLD_KIT } from './kits';
 import { emptyBoard } from './model';
@@ -150,5 +150,31 @@ describe('ghosts', () => {
     adapter.up(44, 22);
     expect(sent).toEqual([]);
     expect(rejected).toEqual([]);
+  });
+
+  it('a local suggestion never settles by itself: it waits for a pinch, then fades after 8 s untouched', () => {
+    const { store, adapter, sent, rejected, tick, layer, at } = setup([]);
+    const local: GhostOp = { op_id: 'v1', src: 'scribe', op: 'item.label', args: { id: 'n1', text: 'Orders' } };
+    store.suggest(local);
+    expect(layer.rings(at()).map((r) => r.op_id)).toEqual([]);
+    for (let t = 0; t < GHOST_SETTLE_MS + 1000; t += 100) tick(100);
+    expect(sent).toEqual([]);
+    expect(store.board.ghosts.map((g) => g.op_id)).toEqual(['v1']);
+    for (let t = 0; t < LOCAL_GHOST_FADE_MS; t += 100) tick(100);
+    expect(rejected).toEqual(['v1']);
+    expect(store.board.items[0]).toMatchObject({ label: null });
+    // A pinch accepts one.
+    store.suggest({ ...local, op_id: 'v2' });
+    const r = ghostRect(store.board, store.board.ghosts[0]!)!;
+    adapter.down(r.x + r.w / 2, r.y + r.h / 2);
+    adapter.up(r.x + r.w / 2, r.y + r.h / 2);
+    expect(sent.map((o) => o.op_id)).toEqual(['v2']);
+  });
+
+  it("a local suggestion gives way to the Scribe's label ghost for the same card", () => {
+    const { store } = setup([]);
+    store.suggest({ op_id: 'v1', src: 'scribe', op: 'item.label', args: { id: 'n1', text: 'Orders' } });
+    store.setGhosts([G_LABEL]);
+    expect(store.board.ghosts.map((g) => g.op_id)).toEqual(['g3']);
   });
 });

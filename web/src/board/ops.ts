@@ -488,7 +488,14 @@ export class BoardStore {
   /** Replaces the server's pending ghost list (board.ghosts), minus any already committed; local suggestions stay. */
   setGhosts(ghosts: GhostOp[]): void {
     const committed = new Set(this.board.op_ids);
-    const local = this.board.ghosts.filter((g) => this.localGhosts.has(g.op_id) && !ghosts.some((x) => x.op_id === g.op_id));
+    // A local label suggestion gives way to the Scribe's label ghost for the same card.
+    const scribeLabels = new Set(ghosts.flatMap((g) => (g.op === 'item.label' ? [g.args.id] : [])));
+    const local = this.board.ghosts.filter(
+      (g) =>
+        this.localGhosts.has(g.op_id) &&
+        !ghosts.some((x) => x.op_id === g.op_id) &&
+        !(g.op === 'item.label' && scribeLabels.has(g.args.id)),
+    );
     this.set({ ...this.board, ghosts: [...ghosts, ...local].filter((g) => !committed.has(g.op_id)) });
   }
 
