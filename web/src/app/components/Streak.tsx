@@ -23,7 +23,7 @@ export function Streak(props: { streak: StreakData; now?: Date }) {
     <div class="streak" data-test="streak" data-current={current}>
       <ol class="streak-days" aria-label={label}>
         {days.map((x, i) => (
-          <li key={i} class={`${x.done ? 'on' : ''}${x.today ? ' today' : ''}`} aria-hidden="true">
+          <li key={i} class={`${x.done ? 'on' : ''}${x.today ? ' is-today' : ''}`} aria-hidden="true">
             <span class="streak-dot" />
             <span class="streak-day">{letter.format(x.d)}</span>
           </li>

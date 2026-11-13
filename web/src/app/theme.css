@@ -710,6 +710,10 @@ h4 {
   align-items: baseline;
   gap: var(--space-3);
 }
+.tile .tile-head {
+  color: var(--ink);
+  font-size: 1rem;
+}
 .tile .tile-title {
   font-size: 1.12rem;
   margin: 0;
@@ -792,7 +796,7 @@ h4 {
   min-height: var(--tap);
 }
 .how {
-  margin-top: var(--space-2);
+  margin-top: var(--space-5);
 }
 .today {
   position: relative;
@@ -951,7 +955,7 @@ h4 {
 .streak-days .on .streak-dot {
   background: var(--accent);
 }
-.streak-days .today .streak-dot {
+.streak-days .is-today .streak-dot {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }

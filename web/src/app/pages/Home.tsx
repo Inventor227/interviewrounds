@@ -148,10 +148,11 @@ export function Home() {
               Rehearse a real meeting
             </a>
           </div>
-          <HowItWorks />
         </div>
         <TodayCard me={m} catalog={catalog.data} />
       </div>
+
+      <HowItWorks />
 
       <div class="home-foot">
         <a href="/history" data-test="history-link">

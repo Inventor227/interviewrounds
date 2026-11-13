@@ -38,7 +38,8 @@ function Rounds(props: { catalog: Catalog; role: string }) {
             </Tile>
             {full && (
               <a class="round-full" href={`/round/${full.id}`} data-test={`round-${full.id}`}>
-                Or the full round, <span class="num">{full.target_minutes} min</span>
+                Or the full round,{' '}
+                <span class="num">{full.target_minutes} min</span>
               </a>
             )}
           </li>
