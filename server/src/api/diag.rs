@@ -210,7 +210,7 @@ async fn echo_session(
         });
     }
     let reserve = ECHO_RESERVE_MIN * app.config.fish_rate_per_min;
-    let spent = usage::fish_build_spend(&mut *tx, &app.config).await?;
+    let spent = usage::fish_build_spend(&mut tx, &app.config).await?;
     if spent + reserve > app.config.fish_build_cap_usd {
         return Err(AppError::Limited {
             code: "fish_cap",
