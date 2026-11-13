@@ -2300,6 +2300,25 @@ describe('RoundController start, carried over', () => {
     expect(n.markers()).toEqual(['[event: start]']);
   });
 
+  it('coming_back_into_the_headset_during_onboarding_starts_the_round_once', async () => {
+    let taught!: (r: 'done' | 'skipped' | 'none') => void;
+    const wait = new Promise<'done' | 'skipped' | 'none'>((r) => (taught = r));
+    const h = harness({ onboard: () => wait });
+    void h.ctl.start(h.req);
+    await vi.waitFor(() => expect(h.log).toContain('xr.place'));
+    await vi.advanceTimersByTimeAsync(0);
+    // The headset view is lost while the ghost hand shows; the page's way back enters again.
+    h.setInSession(false);
+    const again = h.ctl.returnToRoom();
+    await vi.advanceTimersByTimeAsync(0);
+    taught('done');
+    await again;
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.markers()).toEqual(['[event: start]']); // one opening, not two
+    expect(h.log.filter((l) => l === 'xr.startCue')).toHaveLength(1);
+    expect(h.api.onboardingDone).toHaveBeenCalledTimes(1);
+  });
+
   it('ending_during_onboarding_cancels_a_round_that_never_began', async () => {
     const h = harness({ onboard: () => new Promise(() => undefined) });
     const errors = errorsOf(h);

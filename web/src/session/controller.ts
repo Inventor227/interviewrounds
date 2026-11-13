@@ -536,6 +536,8 @@ export class RoundController {
     // the server's clock, the opening) starts only when that is done or skipped.
     if (xr.onboard) {
       const taught = await xr.onboard().catch(() => 'none' as const);
+      // Also when a second enter() (the page's way back) waited on the same step: the first to
+      // get here moves the round on, the other finds it no longer placing.
       if (this.disposed || this.st !== 'placing') return;
       if (taught !== 'none') {
         void this.deps.api.onboardingDone?.().catch(() => undefined);

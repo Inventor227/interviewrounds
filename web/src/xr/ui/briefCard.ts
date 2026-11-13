@@ -8,7 +8,9 @@ import { button, col, INK_MUTED, panel, row, set, show, text, TEXT_SECONDARY, ty
 export const BRIEF_WIDTH_CM = 30;
 /** Smallest text on the card (the heading). */
 export const BRIEF_MIN_FONT_CM = TEXT_SECONDARY;
-const MAX_LINES = 4;
+/** Requirement lines the card has rows for; the content never has more (see longest.test.ts). */
+export const BRIEF_MAX_LINES = 4;
+const MAX_LINES = BRIEF_MAX_LINES;
 
 export class BriefCard {
   readonly group = new Group();
