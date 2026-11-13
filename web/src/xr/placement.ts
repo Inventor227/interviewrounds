@@ -150,6 +150,8 @@ export interface DeskPose {
   source: 'touch' | 'fallback' | 'preview';
   /** The head at placement time, when known (cards that stand in front of the eyes use it). */
   head?: Vec3;
+  /** The hand that touched the desk: a hint for the dominant side (the tray goes opposite). */
+  hand?: 'left' | 'right';
 }
 
 export type PlacementState = 'waiting' | 'dwelling' | 'done';
@@ -203,7 +205,7 @@ export class DeskPlacement {
       while (hist.length > 2 && hist[0]!.t_ms < t_ms - DWELL_MS * 2) hist.shift();
       const dwell = detectDeskDwell(hist);
       if (dwell) {
-        this.result = { origin: dwell.at, yaw: head.yaw, deskY: dwell.deskY, source: 'touch', head: { ...head.pos } };
+        this.result = { origin: dwell.at, yaw: head.yaw, deskY: dwell.deskY, source: 'touch', head: { ...head.pos }, hand: h.hand };
         return { state: 'done', progress: 1, tip: dwell.at, hand: h.hand, result: this.result };
       }
       const rest = restingMs(hist);

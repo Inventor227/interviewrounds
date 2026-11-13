@@ -20,7 +20,7 @@ import {
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { addScaled, DEG, forwardOf, v3 } from './math';
 import type { DeskPose, HeadPose } from './placement';
-import { REAL_DESK_FAR, tableSlab, userPoint, wallboardPose, type SeatPose } from './seats';
+import { SLAB_FAR, tableSlab, userPoint, wallboardPose, type SeatPose } from './seats';
 import { SLAB_COLOR } from './room';
 
 /** The desk in preview: a 0.74 m table, the user facing -Z. */
@@ -111,9 +111,9 @@ export function buildPreviewRoom(desk: DeskPose, n: 1 | 2 | 3, seats: SeatPose[]
   // The table: the user's end (under the sheet) to the panel's end, one top, dark legs and a modesty panel.
   const slab = tableSlab(n, desk);
   const nearD = -0.38; // behind the sheet's near edge, under the user's forearms
-  const farD = REAL_DESK_FAR + slab.depth;
+  const farD = SLAB_FAR;
   const depth = farD - nearD;
-  const centre = addScaled(v3(slab.center.x, 0, slab.center.z), f, (nearD + farD) / 2 - (REAL_DESK_FAR + slab.depth / 2));
+  const centre = addScaled(v3(slab.center.x, 0, slab.center.z), f, (nearD + farD) / 2 - (SLAB_FAR - slab.depth / 2));
   const t = 0.035;
   const top = new Mesh(new BoxGeometry(slab.width, t, depth).translate(0, desk.deskY - t / 2, 0), new MeshStandardMaterial({ color: SLAB_COLOR, roughness: 0.55 }));
   top.position.set(centre.x, 0, centre.z);

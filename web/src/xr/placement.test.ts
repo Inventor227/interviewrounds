@@ -55,6 +55,22 @@ describe('DeskPlacement', () => {
     expect(s.result!.source).toBe('fallback');
     expect(s.result!.deskY).toBeCloseTo(HEAD_Y - 0.45, 6);
     expect(s.result!.yaw).toBeCloseTo(0.3, 6);
+    // The sheet's near edge lands 0.2 m ahead of the head, on the assumed desk.
+    expect(Math.hypot(s.result!.origin.x - head.pos.x, s.result!.origin.z - head.pos.z)).toBeCloseTo(0.2, 6);
+    expect(s.result!.head).toEqual(head.pos);
+  });
+
+  it('fallback_with_hands_in_view_but_no_rest', () => {
+    // Hands waving in front of the face never rest on a desk: still the fallback at 6 s.
+    const p = new DeskPlacement(0);
+    let s = p.update(0, head, []);
+    for (let t = 0; t <= 6000; t += 50) {
+      const tip = { x: Math.sin(t / 100) * 0.1, y: 1.05, z: -0.35 };
+      s = p.update(t, head, [{ hand: 'left', tracked: true, indexTip: tip, tips: [tip], pinch: 0 }]);
+    }
+    expect(s.state).toBe('done');
+    expect(s.result!.source).toBe('fallback');
+    expect(s.result!.deskY).toBeCloseTo(HEAD_Y - 0.45, 6);
   });
 
   it('touch_places_the_desk_at_the_tip', () => {
@@ -66,6 +82,7 @@ describe('DeskPlacement', () => {
     }
     expect(s.state).toBe('done');
     expect(s.result!.source).toBe('touch');
+    expect(s.result!.hand).toBe('right');
     expect(s.result!.deskY).toBeCloseTo(0.744, 3);
     expect(s.result!.origin.y).toBeCloseTo(0.744, 3);
   });

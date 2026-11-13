@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { seatLayout, userPoint, wallboardPose, AVATAR_DESK_Y } from './seats';
+import { seatLayout, tableSlab, userPoint, wallboardPose, AVATAR_DESK_Y, REAL_DESK_FAR } from './seats';
 
 const DEG = Math.PI / 180;
 
@@ -52,6 +52,15 @@ describe('seatLayout', () => {
     expect(lead!.lead).toBe(true);
     expect(lead!.pos.x).toBeCloseTo(0, 6);
     expect(Math.abs(other!.pos.x)).toBeCloseTo(0.75, 6);
+  });
+
+  it('slab_meets_the_real_desk_or_becomes_the_whole_desk_without_one', () => {
+    const desk = { origin: { x: 0, y: 0.74, z: -0.4 }, yaw: 0, deskY: 0.74 };
+    const part = tableSlab(1, desk);
+    expect(part.center.z + part.depth / 2).toBeCloseTo(-0.4 - REAL_DESK_FAR, 6); // near edge at the real desk's far edge
+    const full = tableSlab(1, { ...desk, source: 'fallback' });
+    expect(full.center.z + full.depth / 2).toBeGreaterThan(-0.4); // reaches under the sheet and the user's forearms
+    expect(full.center.z - full.depth / 2).toBeCloseTo(part.center.z - part.depth / 2, 6);
   });
 
   it('wallboard_stands_behind_the_panel_facing_the_user', () => {

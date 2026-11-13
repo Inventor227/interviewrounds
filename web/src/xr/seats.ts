@@ -8,7 +8,7 @@
 import { add, addScaled, DEG, forwardOf, rightOf, v3, type Vec3 } from './math';
 import type { DeskPose } from './placement';
 
-export type DeskFrame = Pick<DeskPose, 'origin' | 'yaw' | 'deskY'> & { head?: DeskPose['head'] };
+export type DeskFrame = Pick<DeskPose, 'origin' | 'yaw' | 'deskY'> & { head?: DeskPose['head']; source?: DeskPose['source'] };
 
 /** Desk height the seated clips were authored at: hands land on a 0.74 m desk with the root on the floor. */
 export const AVATAR_DESK_Y = 0.74;
@@ -77,10 +77,19 @@ export interface SlabFrame {
   depth: number;
 }
 
-/** The virtual table slab: from just before the real desk's far edge to under the panelists' hands. */
+/** The slab's far edge (under the panelists' forearms), beyond the sheet's near edge. */
+export const SLAB_FAR = LEAD_DISTANCE - USER_TO_ORIGIN - AVATAR_TO_TABLE_EDGE + 0.02;
+
+/** Without a real desk (fallback) the slab is the whole desk: it starts this far behind the sheet's near edge. */
+export const FULL_DESK_NEAR = -0.32;
+
+/**
+ * The virtual table slab: from just before the real desk's far edge to under the panelists' hands. With no real
+ * desk (the head-height fallback) it reaches back under the sheet and the user's forearms instead.
+ */
 export function tableSlab(n: 1 | 2 | 3, desk: DeskFrame): SlabFrame {
-  const near = REAL_DESK_FAR;
-  const far = LEAD_DISTANCE - USER_TO_ORIGIN - AVATAR_TO_TABLE_EDGE + 0.02;
+  const near = desk.source === 'fallback' ? FULL_DESK_NEAR : REAL_DESK_FAR;
+  const far = SLAB_FAR;
   const width = n === 1 ? 1.5 : n === 2 ? 2.3 : 2.6;
   const center = addScaled(v3(desk.origin.x, desk.deskY, desk.origin.z), forwardOf(desk.yaw), (near + far) / 2);
   // With two people the table shifts toward the occupied left side.

@@ -30,7 +30,7 @@ import { addScaled, forwardOf, rightOf, v3 } from './math';
 import type { DeskPose } from './placement';
 import {
   AVATAR_DESK_Y,
-  REAL_DESK_FAR,
+  SLAB_FAR,
   SHEET_D,
   SHEET_TILT,
   SHEET_W,
@@ -124,12 +124,12 @@ export class Room {
 
       // Depth-only stand-in for the real desk and the space under the slab, drawn first.
       const near = -OCCLUDER_NEAR;
-      const far = REAL_DESK_FAR + slab.depth;
+      const far = SLAB_FAR;
       const bottom = Math.min(0, desk.deskY - AVATAR_DESK_Y) - 0.05;
       const h = desk.deskY - 0.002 - bottom;
       this.occluder = new Mesh(new BoxGeometry(slab.width + 0.3, h, far - near), this.occluderMat);
       this.occluder.name = 'desk-occluder';
-      const c = addScaled(v3(slab.center.x, 0, slab.center.z), f, (near + far) / 2 - (REAL_DESK_FAR + slab.depth / 2));
+      const c = addScaled(v3(slab.center.x, 0, slab.center.z), f, (near + far) / 2 - (SLAB_FAR - slab.depth / 2));
       this.occluder.position.set(c.x, bottom + h / 2, c.z);
       this.occluder.rotation.y = desk.yaw;
       this.occluder.renderOrder = -100;
