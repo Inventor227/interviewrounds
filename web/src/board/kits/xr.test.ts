@@ -1,12 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { Vector3 } from 'three';
 import type { Board, BoardOp } from '../../shared/types';
-import { createBoardXR } from '../boardXR';
+import { createBoardXR, sfxForOp } from '../boardXR';
 import { emptyBoard } from '../model';
 import { BoardStore } from '../ops';
 import { panelToLocal } from '../sheetMath';
 import { FakePort, stubCanvas } from '../xrtestkit';
-import { codeLineRect } from './coding';
+import { CODE_FONT_CM, codeLineRect } from './coding';
 
 function codingBoard(): Board {
   return {
@@ -105,5 +105,60 @@ describe('kits in XR', () => {
     store.apply({ op_id: 'c1', src: 'scribe', op: 'code.insert', args: { line: { id: 'l4', indent: 1, text: 'return s', src: 'scribe' }, after: 'l3' } });
     port.frame();
     expect(xr.panel!.stats.uploads).toBe(before + 1);
+  });
+
+  it('code text is big enough to read at the panel distance (0.9 cm at 0.6 m, scaled)', () => {
+    const { port, xr } = setup(codingBoard());
+    port.scene.updateMatrixWorld(true);
+    const rect = xr.kit.panel!;
+    // Seated eyes: about 0.48 m over the desk, the sheet's near edge 0.20 m in front (plan, Task 15).
+    const desk = port.deskPose;
+    const eye = new Vector3(desk.origin.x, desk.deskY + 0.48, desk.origin.z + 0.2);
+    const centre = xr.panel!.frame.localToWorld(panelToLocal(rect, rect.x + rect.w / 2, rect.y + rect.h / 2, 0));
+    const d = centre.distanceTo(eye);
+    expect(d).toBeGreaterThan(0.5);
+    expect(CODE_FONT_CM).toBeGreaterThanOrEqual((0.9 * d) / 0.6);
+  });
+
+  it('kit ops play their sounds: snap to place or reorder, click for ticks and chips, erase for the bin', () => {
+    const op = (name: string, args: object) => ({ op_id: 'x', src: 'hand', op: name, args }) as unknown as BoardOp;
+    expect(sfxForOp(op('code.move', { id: 'l1', after: null }))).toBe('snap');
+    expect(sfxForOp(op('code.indent', { id: 'l1', delta: 1 }))).toBe('snap');
+    expect(sfxForOp(op('member.move', { id: 'm1', to_class_id: 'c2' }))).toBe('snap');
+    expect(sfxForOp(op('present.show', { kind: 'number', ref: 'k1', t: 1 }))).toBe('snap');
+    expect(sfxForOp(op('code.complexity', { slot: 'time', value: 'O(n)' }))).toBe('click');
+    expect(sfxForOp(op('agenda.check', { id: 'a1', done: true, t: 1 }))).toBe('click');
+    expect(sfxForOp(op('edge.set_rel', { id: 'e1', rel: 'is_a' }))).toBe('click');
+    expect(sfxForOp(op('code.trace', { line: 'l1', t: 1 }))).toBe('click');
+    expect(sfxForOp(op('code.delete', { id: 'l1' }))).toBe('erase');
+    expect(sfxForOp(op('member.remove', { id: 'm1' }))).toBe('erase');
+    // And through the injected player, on a hand reorder.
+    const port = new FakePort();
+    const store = new BoardStore(codingBoard());
+    const played: string[] = [];
+    const xr = createBoardXR(port, { store, dominantHand: 'right', send: () => {}, sendGhostReject: () => {}, makeCanvas: stubCanvas, sfx: { play: (n) => played.push(n) } });
+    port.frame();
+    port.scene.updateMatrixWorld(true);
+    const rect = xr.kit.panel!;
+    const at = (x: number, y: number) => {
+      const w = xr.panel!.frame.localToWorld(panelToLocal(rect, x, y, 1));
+      port.setHand('right', { x: w.x, y: w.y, z: w.z });
+    };
+    const l2 = codeLineRect(rect, 1);
+    for (let i = 0; i < 12; i++) {
+      at(l2.x + 8, l2.y + l2.h / 2);
+      port.frame();
+    }
+    port.select('right', 'start');
+    for (let i = 0; i < 8; i++) port.frame();
+    for (let i = 0; i <= 10; i++) {
+      at(l2.x + 8, l2.y + l2.h / 2 + (2 * l2.h * i) / 10);
+      port.frame();
+    }
+    for (let i = 0; i < 12; i++) port.frame();
+    port.select('right', 'end');
+    port.frame();
+    expect(store.board.code!.lines.map((l) => l.id)).toEqual(['l1', 'l3', 'l2']);
+    expect(played).toContain('snap');
   });
 });

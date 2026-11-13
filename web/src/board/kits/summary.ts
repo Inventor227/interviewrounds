@@ -1,7 +1,8 @@
 // The parts of the interviewer's board summary that come from the LLD and PM kits, written
 // exactly as the server prints them (server/src/board/summary.rs: member_sig, describe,
-// item_lines, pm_lines). The kits use them for what a card shows ("what the interviewer
-// reads"), and the tests pin that what the kits make reads the way the server prints it.
+// item_lines, pm_lines). A test mirror only: the tests pin that what the kits make reads the
+// way the server prints it. It leaves out the server's caps (40 items), its stripping of
+// untrusted text and its section order; the server's own tests cover those.
 import type { Board, ClassItem, ClassMember, StickyItem } from '../../shared/types';
 
 /** Longest candidate field the server prints (MAX_FIELD_CHARS). */

@@ -64,16 +64,29 @@ export function sfxForOp(op: BoardOp): SfxName | null {
   switch (op.op) {
     case 'item.create':
       return op.args.kind === 'ink' ? 'pen' : 'snap';
+    // Placements and reorders.
     case 'item.move':
+    case 'member.move':
+    case 'code.move':
+    case 'code.indent':
+    case 'present.show':
       return 'snap';
+    // The bin.
     case 'item.delete':
     case 'edge.delete':
+    case 'member.remove':
+    case 'code.delete':
     case 'undo':
       return 'erase';
+    // Ticks, chips and steps.
     case 'edge.create':
     case 'edge.set_dir':
+    case 'edge.set_rel':
     case 'item.label':
     case 'edge.label':
+    case 'code.complexity':
+    case 'code.trace':
+    case 'agenda.check':
       return 'click';
     default:
       return null;
