@@ -1,0 +1,69 @@
+// Adapter from the XR app to the round controller's XRPort (session/ports.ts). Thin on purpose: the controller owns
+// the round; the app owns the room, the placement and the panels.
+
+import type { ControllerState, SeatPoseLike, UiAction, XRPort } from '../session/ports';
+import type { Report, RoundStatePayload } from '../shared/types';
+import type { DeskPose } from './placement';
+import type { SeatPose } from './seats';
+import type { RoundAction, RoundUIState, StatusStage } from './ui/types';
+
+/** The parts of XRApp the adapter needs (kept narrow so tests can fake it). */
+export interface XRAppLike {
+  enter(): Promise<void>;
+  exit(): void;
+  place(): Promise<DeskPose>;
+  room: { seatPoses(): SeatPose[] };
+  ui: {
+    setRoundState(s: RoundUIState): void;
+    showSummary(r: Report): void;
+    setStatus(stage: StatusStage, pct?: number | null): void;
+    showStatusText(text: string, pct?: number | null): void;
+    hideStatus(): void;
+    onAction(cb: (a: RoundAction) => void): () => void;
+  };
+}
+
+/** The controller's "audio seems blocked" line; it gets the Tap to hear button. */
+const HEAR_LINE = /hear your interviewer/i;
+
+export function createXRPort(app: XRAppLike): XRPort {
+  // The round state from the server has no mute flag: the bar keeps what the user last pressed.
+  let muted = false;
+  app.ui.onAction((a) => {
+    if (a === 'mute') muted = true;
+    else if (a === 'unmute') muted = false;
+  });
+
+  return {
+    enter: () => app.enter(),
+    place: () => app.place().then(() => undefined),
+    exit: () => app.exit(),
+    ui: {
+      setRoundState(s: RoundStatePayload & { controller: ControllerState }) {
+        const status = s.controller === 'paused' ? 'paused' : s.status;
+        app.ui.setRoundState({
+          status,
+          elapsed_s: s.elapsed_s,
+          total_s: s.elapsed_s + s.remaining_s,
+          muted,
+          brief: s.brief,
+        });
+      },
+      showSummary: (r: Report) => app.ui.showSummary(r),
+      setStatus(text: string | null, progress?: number) {
+        if (text === null) app.ui.hideStatus();
+        else if (HEAR_LINE.test(text)) app.ui.setStatus('hear');
+        else app.ui.showStatusText(text, progress ?? null);
+      },
+      onAction(cb: (a: UiAction) => void) {
+        return app.ui.onAction((a) => {
+          // Captions are a local view setting; everything else is the controller's.
+          if (a !== 'captions') cb(a);
+        });
+      },
+    },
+    room: {
+      seatPoses: (): SeatPoseLike[] => app.room.seatPoses().map((p) => ({ position: { ...p.pos }, yaw: p.yaw })),
+    },
+  };
+}
