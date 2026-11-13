@@ -344,9 +344,19 @@ fn scribe_call_numbers_never_reuse_a_prefix() {
         serde_json::from_value(json!({"id": "x1_1", "kind": "component", "type": "db", "label": null, "x": 1, "y": 30, "w": 8, "h": 5}))
             .unwrap(),
     );
+    board.op_ids.push("sc2.1".into());
     let mut session = BoardSession::new(board);
-    assert_eq!(session.next_scribe_call(), 2, "x1_ is in use on the board");
-    assert_eq!(session.next_scribe_call(), 3);
+    session.record_rejected(
+        &serde_json::from_value(json!({"op_id": "sc3.2", "src": "scribe", "op": "item.label", "args": {"id": "n2", "text": "A"}}))
+            .unwrap(),
+        1.0,
+    );
+    assert_eq!(
+        session.next_scribe_call(),
+        4,
+        "x1_ is on the board, sc2.1 committed, sc3.2 logged"
+    );
+    assert_eq!(session.next_scribe_call(), 5);
 }
 
 /// Real model call. Run with the key:

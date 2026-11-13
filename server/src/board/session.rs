@@ -176,13 +176,26 @@ impl BoardSession {
         }
     }
 
-    /// The next Scribe call number; its id prefix `x<n>_` is not used by any item or edge on the board.
+    /// The next Scribe call number. Neither its id prefix `x<n>_` (items, edges) nor its ghost op ids `sc<n>.<i>`
+    /// are in use, so a session rebuilt from a stored board and log never repeats an earlier call.
     pub fn next_scribe_call(&mut self) -> u64 {
         loop {
             self.scribe_calls += 1;
             let prefix = format!("x{}_", self.scribe_calls);
+            let op_prefix = format!("sc{}.", self.scribe_calls);
             let used = self.board.items.iter().any(|i| i.id().starts_with(&prefix))
-                || self.board.edges.iter().any(|e| e.id.starts_with(&prefix));
+                || self.board.edges.iter().any(|e| e.id.starts_with(&prefix))
+                || self
+                    .board
+                    .op_ids
+                    .iter()
+                    .any(|id| id.starts_with(&op_prefix))
+                || self
+                    .board
+                    .ghosts
+                    .iter()
+                    .any(|g| g.op_id.starts_with(&op_prefix))
+                || self.op_log.iter().any(|e| e.op_id.starts_with(&op_prefix));
             if !used {
                 return self.scribe_calls;
             }
