@@ -147,8 +147,18 @@ async function draw(points, segment = 0.1) {
   return xr('run-sequence', input);
 }
 
-/** A short pinch on a board point (select a card, accept a ghost). */
-const tap = (x, y) => draw([[x, y]]);
+/** A quick pinch on a board point (select a card, accept a ghost): well under the 0.6 s hold that dismisses a ghost. */
+async function tap(x, y) {
+  const [p] = (await page((q) => globalThis.__boardxr.toWorld(q, 1), [[x, y]])).map(r4);
+  const steps = [
+    { label: 'reach', position: p, anchor: 'grasp', duration: 0.6, pinch: 0 },
+    { label: 'settle', duration: 0.3 },
+    { label: 'pinch', pinch: 1, duration: 0.12 },
+    { label: 'release', pinch: 0, duration: 0.12 },
+    { label: 'lift', position: { x: p.x, y: p.y + 0.06, z: p.z }, duration: 0.3 },
+  ];
+  return xr('run-sequence', { device: 'hand-right', steps, body: 'auto', gaze: 'fixed', idleHand: 'keep' });
+}
 
 /** Holds the hand over a board point, 3 cm up, without pinching. */
 async function hover(x, y) {
