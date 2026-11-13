@@ -46,6 +46,9 @@ export const ROUTES = {
   devAvatar: '/dev/avatar',
 } as const;
 
+// Dev only: the board with a mouse (web/src/board), for development and screenshots.
+const DevBoard = import.meta.env.DEV ? lazy(() => import('../board/DevBoard')) : null;
+const DevSheet = import.meta.env.DEV ? lazy(() => import('../board/DevSheet')) : null;
 // Developer page for the avatar runtime: dev server only. In production builds the condition is false at build time,
 // so the page, its chunk and its test voices are left out of dist entirely.
 const AvatarDev = import.meta.env.DEV ? lazy(() => import('../xr/avatar/dev/AvatarDev')) : null;
@@ -206,6 +209,8 @@ export function App() {
             <Route path={ROUTES.pricing} component={Pricing} />
             <Route path={ROUTES.notSupported} component={NotSupported} />
             <Route path={ROUTES.resume} component={Resume} />
+            {DevBoard ? [<Route key="dev-board" path="/dev/board" component={DevBoard} />] : []}
+            {DevSheet ? [<Route key="dev-sheet" path="/dev/sheet" component={DevSheet} />] : []}
             {AvatarDev ? [<Route key="dev-avatar" path={ROUTES.devAvatar} component={AvatarDev} />] : []}
             <Route default component={NotFound} />
           </Router>
