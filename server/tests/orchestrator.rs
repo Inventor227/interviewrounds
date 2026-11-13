@@ -1278,11 +1278,8 @@ async fn dropped_draft_that_was_never_played_is_forgotten() {
     assert_eq!(res.text(), "Okay. Why a cache?");
     let st = state.registry.get("s1").unwrap();
     let st = st.lock().await;
-    // The draft's words were recorded when it started; only the new words are added.
-    assert_eq!(
-        user_texts(&st.history),
-        vec!["I'd put", "a cache in front."]
-    );
+    // The draft's words were recorded when it started; the still-unanswered message is revised in place.
+    assert_eq!(user_texts(&st.history), vec!["I'd put a cache in front."]);
     assert!(st.provisional.is_empty());
     let candidate: Vec<&str> = st
         .turns
@@ -1688,10 +1685,10 @@ async fn speculative_replies_wait_for_the_voice_platform() {
     )
     .await;
     assert_eq!(r2.text(), "Assigned seating.");
-    // The model never saw the dropped draft, and the repeated words are not doubled.
+    // The model never saw the dropped draft, and the repeated words are revised in place, not doubled.
     assert_eq!(
         user_texts(&llm.request(1).messages),
-        vec!["So first,", "are the seats assigned?"]
+        vec!["So first, are the seats assigned?"]
     );
     assert!(
         llm.request(1)
@@ -1709,7 +1706,7 @@ async fn speculative_replies_wait_for_the_voice_platform() {
         assert!(st.provisional.is_empty());
         assert_eq!(
             user_texts(&st.history),
-            vec!["So first,", "are the seats assigned?"]
+            vec!["So first, are the seats assigned?"]
         );
         assert!(st.provisional.is_empty());
     }
@@ -1733,7 +1730,7 @@ async fn speculative_replies_wait_for_the_voice_platform() {
     let st = st.lock().await;
     assert_eq!(
         user_texts(&st.history),
-        vec!["So first,", "are the seats assigned?", "Got it."]
+        vec!["So first, are the seats assigned?", "Got it."]
     );
     assert_eq!(st.provisional.len(), 1, "the newest reply waits in turn");
     let speakers: Vec<&str> = st.turns.iter().map(|t| t.speaker.as_str()).collect();
@@ -2071,5 +2068,130 @@ fn the_most_urgent_waiting_event_is_kept() {
             "So".into(),
             EventKind::LongAnswer
         ))
+    );
+}
+
+// ---------- fix round 2: revised transcripts, dropped replies after a browser confirm ----------
+
+#[tokio::test]
+async fn revised_interim_transcripts_are_recorded_once() {
+    let llm = ScriptedLlm::new(vec![reply("Mm-hm."), reply("Go on."), reply("Assigned.")]);
+    let (app, state) = test_app_with(llm.clone(), |o| o.confirm_speech_turns = true);
+    state
+        .registry
+        .insert(new_state("s1", "sde.system_design.short", VoiceKind::Fish));
+    // Speculative requests on interim transcripts; the second one revises an earlier word.
+    for text in [
+        "So fast",
+        "So first, are",
+        "So first, are the seats assigned?",
+    ] {
+        post_chat(
+            &app,
+            SECRET,
+            chat_body("s1", "p1", json!([{"role": "user", "content": text}])),
+        )
+        .await;
+    }
+    let st = state.registry.get("s1").unwrap();
+    let st = st.lock().await;
+    assert_eq!(
+        user_texts(&st.history),
+        vec!["So first, are the seats assigned?"]
+    );
+    let candidate: Vec<&str> = st
+        .turns
+        .iter()
+        .filter(|t| t.speaker == "candidate")
+        .map(|t| t.text.as_str())
+        .collect();
+    assert_eq!(candidate, vec!["So first, are the seats assigned?"]);
+    // The model saw the latest transcript once, never the earlier versions.
+    assert_eq!(
+        user_texts(&llm.request(2).messages),
+        vec!["So first, are the seats assigned?"]
+    );
+}
+
+#[tokio::test]
+async fn words_are_not_repeated_when_fish_drops_a_confirmed_reply() {
+    let llm = ScriptedLlm::new(vec![reply("Okay. Why sections?"), reply("Got it.")]);
+    let (app, state) = test_app_with(llm.clone(), |o| o.confirm_speech_turns = true);
+    state
+        .registry
+        .insert(new_state("s1", "sde.system_design.short", VoiceKind::Fish));
+    post_chat(
+        &app,
+        SECRET,
+        chat_body(
+            "s1",
+            "p1",
+            json!([{"role": "user", "content": "I'd shard by section."}]),
+        ),
+    )
+    .await;
+    // The browser saw the reply start, then the candidate cut in after one word and Fish dropped the reply.
+    state
+        .registry
+        .get("s1")
+        .unwrap()
+        .lock()
+        .await
+        .confirm_spoken("p1", "Okay.");
+    post_chat(
+        &app,
+        SECRET,
+        chat_body(
+            "s1",
+            "p1",
+            json!([
+                {"role": "user", "content": "I'd shard by section."},
+                {"role": "user", "content": "Because load spreads."}
+            ]),
+        ),
+    )
+    .await;
+    let st = state.registry.get("s1").unwrap();
+    let st = st.lock().await;
+    assert_eq!(
+        user_texts(&st.history),
+        vec!["I'd shard by section.", "Because load spreads."]
+    );
+    let log: Vec<(&str, &str)> = st
+        .turns
+        .iter()
+        .map(|t| (t.speaker.as_str(), t.text.as_str()))
+        .collect();
+    assert_eq!(
+        log,
+        vec![
+            ("candidate", "I'd shard by section."),
+            ("p1", "Okay. Why sections?"),
+            ("candidate", "Because load spreads."),
+        ]
+    );
+}
+
+#[test]
+fn an_early_report_survives_parking_another_reply() {
+    let mut st = new_state("s1", "sde.system_design.short", VoiceKind::Fish);
+    // The browser reports A1 while it streams; meanwhile the hold line for this panelist is parked.
+    assert!(st.confirm_spoken("p1", "So walk me").is_empty());
+    let id = st.new_turn_id();
+    st.park(ir_server::orchestrator::Provisional {
+        id,
+        panelist_id: "p1".into(),
+        input: UserInput::Speech("Hello?".into()),
+        draft: None,
+        extra: Vec::new(),
+        reply: vec![ContentBlock::text("Sorry, give me a second.")],
+        spoken: "Sorry, give me a second.".into(),
+        tool_calls: Vec::new(),
+        parked_at: Instant::now(),
+    });
+    assert_eq!(st.provisional.len(), 1, "the hold line waits");
+    assert!(
+        st.early_confirm.contains_key("p1"),
+        "the report waits for A1"
     );
 }

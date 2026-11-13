@@ -43,11 +43,8 @@ pub fn system_text(speaker_system: &str) -> String {
 }
 
 /// The last user message: the turn's input and note as the speaker saw them, then the spoken line.
-pub fn line_message(draft: &TurnDraft, speaker: &str, spoken: &str) -> String {
-    let mut parts: Vec<String> = vec![format!(
-        "The candidate's turn: {}",
-        draft.input.text().trim()
-    )];
+pub fn line_message(candidate: &str, draft: &TurnDraft, speaker: &str, spoken: &str) -> String {
+    let mut parts: Vec<String> = vec![format!("The candidate's turn: {}", candidate.trim())];
     for m in draft.messages.iter().filter(|m| m.role == Role::System) {
         parts.push(format!(
             "The app note the speaker saw:\n{}",
@@ -101,7 +98,17 @@ pub fn build_request(
     {
         block.set_cache_control(Some(CacheControl::ephemeral()));
     }
+    // The whole utterance this reply answers (the request may have carried only part of it).
+    let candidate = match draft.input.speech() {
+        Some(_) => state
+            .unanswered
+            .get(&panelist.panelist_id)
+            .map(|u| u.text.clone())
+            .unwrap_or_else(|| draft.input.text()),
+        None => draft.input.text(),
+    };
     messages.push(Message::user_text(line_message(
+        &candidate,
         draft,
         &panelist.persona.display_name,
         spoken,

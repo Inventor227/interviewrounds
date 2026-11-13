@@ -405,14 +405,11 @@ fn turn_stream(
                 let mut st = session.lock().await;
                 let panelist_id = st.resolve_panelist(panelist_req.as_deref());
                 let now = Instant::now();
-                let (draft, input) = match st.new_words(&panelist_id, input.clone()) {
-                    Some(new) => {
-                        let mut draft = draft_turn(&st, &panelist_id, &new, now);
-                        st.record_user(&mut draft, false, now);
-                        (Some(draft), new)
-                    }
-                    None => (None, input.clone()),
-                };
+                st.sync_unanswered(&panelist_id, fish_last.as_deref());
+                let mut draft = draft_turn(&st, &panelist_id, &input, now);
+                st.record_user(&mut draft, now);
+                let draft = Some(draft);
+                let input = input.clone();
                 let id = st.new_turn_id();
                 st.park(Provisional {
                     id,
@@ -447,7 +444,7 @@ fn turn_stream(
         }
 
         // The panelist first: only its own parked replies are settled against its own Fish transcript.
-        let (panelist, handover_line, input, repeat_only, draft, live) = {
+        let (panelist, handover_line, input, draft, live) = {
             let mut st = session.lock().await;
             let panelist = st.resolve_panelist(panelist_req.as_deref());
             st.resolve_provisional(&panelist, fish_last.as_deref());
@@ -456,13 +453,11 @@ fn turn_stream(
                 UserInput::Event(EventKind::Handover) => st.pending_handover.get(&panelist).cloned(),
                 _ => None,
             };
-            // Words Fish repeats from an earlier request (its draft reply was never played) are recorded already.
-            let (input, repeat_only) = match st.new_words(&panelist, input.clone()) {
-                Some(new) => (new, false),
-                None => (input.clone(), true),
-            };
+            // Fish sends the whole utterance again on each request; `record_user` revises or extends what is
+            // recorded instead of adding it twice.
+            st.sync_unanswered(&panelist, fish_last.as_deref());
             let draft = draft_turn(&st, &panelist, &input, Instant::now());
-            (panelist, handover_line, input, repeat_only, draft, st.live.clone())
+            (panelist, handover_line, input.clone(), draft, st.live.clone())
         };
         let mut guard = TurnGuard {
             session: session.clone(),
@@ -517,7 +512,7 @@ fn turn_stream(
         let mut draft = draft;
         let mut req = {
             let mut st = session.lock().await;
-            st.record_user(&mut draft, repeat_only, Instant::now());
+            st.record_user(&mut draft, Instant::now());
             request_for_draft(&st, &panelist, &draft)
         };
         guard.draft = Some(draft.clone());
@@ -793,12 +788,19 @@ async fn run_director(
         })
         .collect();
     let names: Vec<&str> = calls.iter().map(|c| c.name.as_str()).collect();
+    // Drafts that are never played run the director too; the count shows what that costs per session.
+    let director_calls = {
+        let mut st = session.lock().await;
+        st.director_calls += 1;
+        st.director_calls
+    };
     tracing::info!(
         session_id = %session_id,
         panelist_id = %panelist,
         model = %req.model,
         turn_id,
         director_ms = ms,
+        director_calls,
         tools = ?names,
         cache_read_input_tokens = resp.usage.cache_read_input_tokens,
         input_tokens = resp.usage.input_tokens,
