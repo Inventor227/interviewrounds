@@ -1,0 +1,62 @@
+# Coolify Docker Compose service for rounds.dijmo.com.
+# The image is built on the server (see deploy/Dockerfile) and never pulled.
+# APP_TAG and every secret (DATABASE_URL, ANTHROPIC_*, FISH_*, DEV_KEY, GOOGLE_*)
+# come from the service's environment in Coolify. Do not set a Coolify domain on
+# this service: the Traefik labels below are the only router.
+services:
+  ir-app:
+    image: ir-app:${APP_TAG}
+    pull_policy: never
+    restart: unless-stopped
+    environment:
+      PORT: "8080"
+      PUBLIC_DIR: /app/public
+      CONTENT_DIR: /app/content
+      DATA_DIR: /app/data
+      APP_ORIGIN: ${APP_ORIGIN:-https://rounds.dijmo.com}
+      RUST_LOG: ${RUST_LOG:-info}
+      LOG_FORMAT: json
+    cpus: 2
+    mem_limit: 2g
+    memswap_limit: 2g
+    stop_grace_period: 20s
+    volumes:
+      - ir-data:/app/data
+    healthcheck:
+      test: ["CMD", "/app/ir-server", "healthcheck"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 30s
+      start_interval: 2s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+    networks:
+      - coolify
+      - ir-net
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=coolify
+      - traefik.http.middlewares.ir-to-https.redirectscheme.scheme=https
+      - traefik.http.routers.ir-http.entrypoints=http
+      - traefik.http.routers.ir-http.rule=Host(`rounds.dijmo.com`)
+      - traefik.http.routers.ir-http.middlewares=ir-to-https
+      - traefik.http.routers.ir-http.service=ir-app
+      - traefik.http.routers.ir-https.entrypoints=https
+      - traefik.http.routers.ir-https.rule=Host(`rounds.dijmo.com`)
+      - traefik.http.routers.ir-https.tls=true
+      - traefik.http.routers.ir-https.tls.certresolver=letsencrypt
+      - traefik.http.routers.ir-https.service=ir-app
+      - traefik.http.services.ir-app.loadbalancer.server.port=8080
+
+volumes:
+  ir-data:
+
+networks:
+  coolify:
+    external: true
+  ir-net:
+    driver: bridge
