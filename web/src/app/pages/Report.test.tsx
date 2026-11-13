@@ -104,6 +104,18 @@ describe('Report', () => {
     }
   });
 
+  it('report_share_change_rolls_back_when_the_old_link_cannot_go', async () => {
+    const server = useFakeServer({
+      routes: { 'DELETE /api/shares/k7m2q1': () => new Response('{"code":"boom","message":"x"}', { status: 500 }) },
+    });
+    const root = await renderApp('/report/demo');
+    await click($(root, 'share-toggle'));
+    await click($(root, 'share-transcript'));
+    expect(($(root, 'share-transcript') as HTMLInputElement).checked).toBe(false);
+    expect([...server.state.shares.values()]).toEqual([{ session_id: 'demo', include_transcript: false }]);
+    expect(root.querySelector('.share [role="alert"]')).not.toBeNull();
+  });
+
   it('report_meeting_without_details_shows_no_decision', async () => {
     const report = { ...fakeReport('meeting'), round_details: undefined };
     useFakeServer({ routes: { 'GET /api/sessions/meeting/report': () => report } });

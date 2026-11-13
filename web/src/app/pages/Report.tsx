@@ -393,16 +393,13 @@ function Share(props: { r: ReportData }) {
   const [err, setErr] = useState<string | null>(null);
   const [copied, setCopied] = useState<'no' | 'yes' | 'manual'>('no');
 
+  // A new link: "Copied" belonged to the old one.
+  useEffect(() => setCopied('no'), [slug]);
+
   const create = async (transcript: boolean) => {
     setBusy(true);
     setErr(null);
     try {
-      // Changing what is shared: take the old link down first, so only one stays public.
-      if (slug) {
-        await api.deleteShare(slug);
-        setSlug(null);
-        setUrl(null);
-      }
       const res = await api.createShare(props.r.session.id, transcript);
       setSlug(res.slug);
       setUrl(res.url);
@@ -411,6 +408,26 @@ function Share(props: { r: ReportData }) {
     } finally {
       setBusy(false);
     }
+  };
+  /** Changing what a live link shares: take the old link down first, so only one stays public. */
+  const change = async (transcript: boolean) => {
+    const was = withTranscript;
+    setWithTranscript(transcript);
+    if (!slug) return;
+    setBusy(true);
+    setErr(null);
+    try {
+      await api.deleteShare(slug);
+    } catch {
+      // The old link is still live and still shares the old choice: show that.
+      setWithTranscript(was);
+      setErr('Could not change the link. It still shares what it did. Try again.');
+      setBusy(false);
+      return;
+    }
+    setSlug(null);
+    setUrl(null);
+    await create(transcript);
   };
   const remove = async () => {
     if (!slug) return;
@@ -454,11 +471,7 @@ function Share(props: { r: ReportData }) {
           type="checkbox"
           checked={withTranscript}
           disabled={busy}
-          onChange={(e) => {
-            const v = e.currentTarget.checked;
-            setWithTranscript(v);
-            if (on) void create(v);
-          }}
+          onChange={(e) => void change(e.currentTarget.checked)}
           data-test="share-transcript"
         />
         <span>Include the transcript and quotes</span>
