@@ -119,7 +119,9 @@ Sequencing and acks:
 - `round.state` is a full snapshot and always has `seq: 0` (never buffered or replayed). The server sends one right after
   `hello`, one on every change (status, phase, floor, brief), and one every second while the round is `live` or `paused`.
   `elapsed_s` is round time without pauses; the clock also stops while no socket is connected and starts at the first
-  `hello` (status `created` until then). `time_check_due: true` is sent once per phase boundary, on the snapshot when the
+  `hello` (status `created` until then). After a drop (or a server restart) a reconnect alone does not restart it: the
+  next live turn (the resume flow's `[event: resume]`) or `ui.event {kind: "resume"}` does. Nothing is spoken on a
+  reconnect. `time_check_due: true` is sent once per phase boundary, on the snapshot when the
   current phase runs out of time, and again on the snapshot after a `hello` while that time check is still owed (no
   `[event: time_check]` has reached the server since the boundary); it is `false` otherwise. On `true` the browser sends
   `[event: time_check]`. In an interview `brief` holds the question card's title and brief lines from the first snapshot,
