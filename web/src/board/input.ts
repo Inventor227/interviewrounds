@@ -179,6 +179,12 @@ export class BoardInput {
     return [...this.gestures.entries()].map(([hand, g]) => toOverlay(hand, g, kitOverlay)).filter((o) => o.kind !== 'none');
   }
 
+  /** What a pointer holds now: a card or control it picked ('pick'), a stroke it draws ('ink'), or nothing. */
+  holding(hand: Hand): 'pick' | 'ink' | null {
+    const g = this.gestures.get(hand);
+    return g ? (g.kind === 'ink' ? 'ink' : 'pick') : null;
+  }
+
   /** The first live overlay, or none. */
   get overlay(): Overlay {
     return this.overlays[0] ?? { kind: 'none' };
