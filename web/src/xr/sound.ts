@@ -2,10 +2,20 @@
 // chime when the scorecard is ready. Hands have no haptics, so every press gets a sound; all of them stay low so
 // nothing leaks into the microphone.
 
+export type SoundName = 'click' | 'flap' | 'chime' | 'snap' | 'pen' | 'erase';
+
 export interface Sounds {
   click(): void;
   flap(): void;
   chime(): void;
+  /** A card snaps into place on the sheet. */
+  snap(): void;
+  /** A stroke starts. */
+  pen(): void;
+  /** Something goes in the bin. */
+  erase(): void;
+  /** By name (the board's sfx port). */
+  play(name: SoundName): void;
   setVolume(v: number): void;
 }
 
@@ -44,7 +54,39 @@ export function createSounds(getContext: () => AudioContext | null = defaultCont
     }
   };
 
-  return {
+  const tone = (ctx: AudioContext, type: OscillatorType, from: number, to: number, ms: number, level: number) => {
+    const t = ctx.currentTime;
+    const o = ctx.createOscillator();
+    o.type = type;
+    o.frequency.setValueAtTime(from, t);
+    o.frequency.exponentialRampToValueAtTime(to, t + ms / 1000);
+    const g = out(ctx, level);
+    g.gain.setValueAtTime(level * volume, t);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + ms / 1000);
+    o.connect(g);
+    o.start(t);
+    o.stop(t + ms / 1000 + 0.01);
+  };
+  const noiseBurst = (ctx: AudioContext, type: BiquadFilterType, hz: number, ms: number, level: number) => {
+    const t = ctx.currentTime;
+    const src = ctx.createBufferSource();
+    src.buffer = noiseBuffer(ctx);
+    const f = ctx.createBiquadFilter();
+    f.type = type;
+    f.frequency.value = hz;
+    const g = out(ctx, level);
+    g.gain.setValueAtTime(level * volume, t);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + ms / 1000);
+    src.connect(f).connect(g);
+    src.start(t);
+    src.stop(t + ms / 1000 + 0.01);
+  };
+
+  const api: Sounds = {
+    snap: () => run((ctx) => tone(ctx, 'square', 520, 260, 45, 0.03)),
+    pen: () => run((ctx) => noiseBurst(ctx, 'highpass', 3500, 60, 0.025)),
+    erase: () => run((ctx) => noiseBurst(ctx, 'lowpass', 700, 140, 0.05)),
+    play: (name) => api[name](),
     click: () =>
       run((ctx) => {
         const t = ctx.currentTime;
@@ -98,6 +140,7 @@ export function createSounds(getContext: () => AudioContext | null = defaultCont
       volume = Math.max(0, Math.min(1, v));
     },
   };
+  return api;
 }
 
 let shared: AudioContext | null = null;
