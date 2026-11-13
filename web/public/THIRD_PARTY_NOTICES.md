@@ -1,6 +1,7 @@
 # Third-party notices
 
-Third-party code and assets that this app serves to the browser for the avatar runtime, with their licences.
+Third-party code and assets that this app serves to the browser for the avatar runtime and the controllers, with
+their licences.
 Rocketbox avatars and animations have their own notice in `avatars/LICENSE.md`.
 
 ## HeadAudio
@@ -107,3 +108,33 @@ use the output commercially and keep all rights in it.
 
 The source file, pack and page of each recording, and the prompt and take of each generated cue, are listed in
 `sfx/CREDITS.md`.
+
+## WebXR input profiles: Meta Quest Touch Plus controller models
+
+`vendor/input-profiles/meta-quest-touch-plus/left.glb` and `right.glb`, from `@webxr-input-profiles/assets` 1.0.20
+(`dist/profiles/meta-quest-touch-plus/`), shown when the user holds controllers.
+https://github.com/immersive-web/webxr-input-profiles
+
+```
+MIT License
+
+Copyright (c) 2019 Amazon
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is furnished
+to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice (including the next
+paragraph) shall be included in all copies or substantial portions of the
+Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS
+OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
+WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF
+OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+```
