@@ -6,7 +6,7 @@
     {
       "id": "coding.two_per_trip",
       "round_type": "coding",
-      "title": "Two per trip",
+      "title": "Fewest bike trips",
       "levels": [
         "junior",
         "mid",
@@ -118,7 +118,7 @@
     {
       "id": "coding.quiet_logger",
       "round_type": "coding",
-      "title": "Quiet logger",
+      "title": "Repeat message filter",
       "levels": [
         "junior",
         "mid"
@@ -223,7 +223,7 @@
     {
       "id": "coding.calm_stretch",
       "round_type": "coding",
-      "title": "Calm stretch",
+      "title": "Longest calm stretch",
       "levels": [
         "mid",
         "senior",
@@ -369,7 +369,7 @@
     {
       "id": "coding.unlock_order",
       "round_type": "coding",
-      "title": "Unlock order",
+      "title": "Course module order",
       "levels": [
         "mid",
         "senior"
@@ -506,7 +506,7 @@
     {
       "id": "coding.prefix_picks",
       "round_type": "coding",
-      "title": "Prefix picks",
+      "title": "Search suggestions",
       "levels": [
         "junior",
         "mid",

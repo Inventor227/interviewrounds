@@ -19,7 +19,7 @@
       "id": "problem",
       "title": "Problem",
       "minutes": 1.5,
-      "goal": "Introduce yourself in one line, state the problem once and call show_question. Answer clarifying questions briefly; do not prompt for them."
+      "goal": "Open in about twenty words: first name, round and length, then ask how they would approach the problem, and call show_question. Answer clarifying questions briefly; do not prompt for them."
     },
     {
       "id": "approach",

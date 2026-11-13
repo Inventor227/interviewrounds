@@ -19,7 +19,7 @@
       "id": "segment",
       "title": "Users",
       "minutes": 1.5,
-      "goal": "Introduce yourself in one line, give the prompt and call show_question. Ask them to pick one group of users and say why."
+      "goal": "Open in about twenty words: first name, round and length, the prompt in short, then ask who they would build for first, and call show_question. Ask why that group if they do not say."
     },
     {
       "id": "problem",

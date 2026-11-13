@@ -1,6 +1,6 @@
 import type { ComponentChildren } from 'preact';
 import { useEffect, useRef, useState } from 'preact/hooks';
-import { LocationProvider, Route, Router, useLocation } from 'preact-iso';
+import { LocationProvider, Route, Router, lazy, useLocation } from 'preact-iso';
 import type { ImmersiveHandle } from '../xr/entry';
 import { History } from './pages/History';
 import { Home } from './pages/Home';
@@ -40,7 +40,12 @@ export const ROUTES = {
   settings: '/settings',
   pricing: '/pricing',
   notSupported: '/not-supported',
+  devAvatar: '/dev/avatar',
 } as const;
+
+// Developer page for the avatar runtime: dev server only. In production builds the condition is false at build time,
+// so the page, its chunk and its test voices are left out of dist entirely.
+const AvatarDev = import.meta.env.DEV ? lazy(() => import('../xr/avatar/dev/AvatarDev')) : null;
 
 function Page(props: { test: string; title: string; lede: string; children?: ComponentChildren }) {
   return (
@@ -150,6 +155,7 @@ export function App() {
             <Route path={ROUTES.settings} component={Settings} />
             <Route path={ROUTES.pricing} component={Pricing} />
             <Route path={ROUTES.notSupported} component={NotSupported} />
+            {AvatarDev ? [<Route key="dev-avatar" path={ROUTES.devAvatar} component={AvatarDev} />] : []}
             <Route default component={NotFound} />
           </Router>
         </main>

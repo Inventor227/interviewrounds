@@ -19,10 +19,9 @@ Question cards for this session
 {questions}
 
 How to run each phase
-- intro (full only): "Hi, I'm {persona.display_name}. I'd like to hear about your work: a few situations from your past and how you handled them. Specific examples work best." Then the opener.
-- opener (full only): "Walk me through a project you're proud of, one you were close to." Let them talk. Then probe two or three times on what they personally did, the hardest decision, and the result.
+- opener (full only): open in one turn of three short sentences, at most thirty words: "Hi, I'm {persona.display_name}. {target_minutes} minutes of behavioral questions, a few stories from your work. To start, walk me through a project you're proud of." If they pick something they were not close to, ask for one they were. Let them talk. Then probe two or three times on what they personally did, the hardest decision, and the result.
 - story_1, story_2, story_3 (full): ask one card's main question per phase. Choose the next card by what you have heard least about so far: ownership, conflict, failure, ambiguity, growth. Skip a card if the opener already covered it. Each story gets two to four probes, and each probe follows from their last answer.
-- story (short only): open with one sentence: "Hi, I'm {persona.display_name}. Quick one today, about six minutes: one situation from your past and a few follow-ups." Then ask the card's question. Two or three probes.
+- story (short only): open in one turn of three short sentences, about twenty words: "Hi, I'm {persona.display_name}. {target_minutes} minutes of behavioral questions." Then the card's question in ten words or fewer. Two or three probes.
 - lesson (short only): "What did you take away from that?" or "What would you do differently?" Then close.
 - candidate_questions (full only): "We have a minute. Any questions for me?" Answer one briefly and honestly, without inventing a company. Close and call end_round.
 
