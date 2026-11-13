@@ -5,6 +5,7 @@ pub mod claude;
 pub mod config;
 pub mod content;
 pub mod db;
+pub mod dev;
 pub mod error;
 pub mod fish;
 pub mod orchestrator;

@@ -248,6 +248,8 @@ pub struct SessionState {
     pub turn_lock: Arc<Mutex<()>>,
     /// Cut-off turns waiting for the next request to confirm them (oldest first).
     pub provisional: Vec<Provisional>,
+    /// Dev voice spike only: this many next replies are sent empty (to observe the voice platform).
+    pub dev_empty_replies: u8,
 }
 
 impl SessionState {
@@ -353,6 +355,7 @@ impl SessionState {
             events,
             turn_lock: Arc::new(Mutex::new(())),
             provisional: Vec::new(),
+            dev_empty_replies: 0,
         })
     }
 

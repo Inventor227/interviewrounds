@@ -81,6 +81,8 @@ pub fn router(state: AppState) -> Router {
         .route("/healthz", get(healthz))
         // Fish custom LLM endpoint (and the fake-voice path from the browser).
         .route("/v1/chat/completions", post(oai::chat_completions))
+        // Developer pages (DEV_KEY; 404 without it).
+        .merge(crate::dev::routes())
         // Unknown API paths answer JSON 404 instead of the web app.
         .route("/api", any(api_not_found))
         .route("/api/{*rest}", any(api_not_found))

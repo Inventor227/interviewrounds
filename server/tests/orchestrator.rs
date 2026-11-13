@@ -1589,3 +1589,39 @@ async fn director_mode_speaks_without_tools_then_applies_the_directors_calls() {
             .all(|b| !matches!(b, ContentBlock::ToolUse { .. }))
     }));
 }
+
+// ---------- dev voice spike page ----------
+
+#[tokio::test]
+async fn dev_voice_spike_page_needs_the_dev_key() {
+    let (app, _state) = test_app(ScriptedLlm::new(vec![]));
+    let get = |uri: &str| Request::get(uri.to_string()).body(Body::empty()).unwrap();
+    let res = app.clone().oneshot(get("/dev/voice-spike")).await.unwrap();
+    assert_eq!(res.status(), StatusCode::NOT_FOUND);
+    let res = app
+        .clone()
+        .oneshot(get("/dev/voice-spike?key=wrong"))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::NOT_FOUND);
+    let res = app
+        .clone()
+        .oneshot(get("/dev/voice-spike?key=test-dev-key"))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let csp = res.headers()[header::CONTENT_SECURITY_POLICY]
+        .to_str()
+        .unwrap()
+        .to_string();
+    assert!(csp.contains("https://esm.sh"), "{csp}");
+    let html = String::from_utf8(common::body_bytes(res).await).unwrap();
+    assert!(html.contains("/dev/voice-spike.js"));
+    // The state and session APIs refuse without the key.
+    let res = app
+        .clone()
+        .oneshot(get("/dev/voice-spike/state?session_id=spike-x"))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::NOT_FOUND);
+}

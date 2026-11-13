@@ -130,6 +130,15 @@ pub async fn chat_completions(
         .map(OaiMessage::text)
         .collect();
     let fish_last = last_assistant.map(|i| req.messages[i].text());
+    tracing::info!(
+        session_id = %session_id,
+        fish_session_id = req.session_id.as_deref().unwrap_or(""),
+        panelist_id = panelist_id.as_deref().unwrap_or(""),
+        messages = req.messages.len(),
+        new_user_messages = parts.len(),
+        fish_last_chars = fish_last.as_ref().map(|t| t.len()).unwrap_or(0),
+        "voice request"
+    );
     let model_name = req
         .model
         .clone()
@@ -398,6 +407,20 @@ fn turn_stream(
             yield Ok(Chunks::done());
             return;
         };
+
+        let empty_reply = {
+            let mut st = session.lock().await;
+            let empty = st.dev_empty_replies > 0;
+            st.dev_empty_replies = st.dev_empty_replies.saturating_sub(1);
+            empty
+        };
+        if empty_reply {
+            tracing::info!(session_id = %session_id, "dev: empty reply sent");
+            drop(turn);
+            yield Ok(chunks.finish(&Usage::default()));
+            yield Ok(Chunks::done());
+            return;
+        }
 
         let (panelist, handover_line, req, draft, live) = {
             let mut st = session.lock().await;
