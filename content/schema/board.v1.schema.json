@@ -448,13 +448,13 @@
       "allOf": [{ "$ref": "#/$defs/op_args" }]
     },
     "ghost_op": {
-      "description": "A suggested op shown faded on the board. Accepting it sends a board.op with the same op_id; committing that op_id removes the ghost.",
+      "description": "A Scribe suggestion shown faded on the board. Accept: send it as a board.op with the same op_id and src scribe. Dismiss: board.ghost_reject {op_id}.",
       "type": "object",
       "additionalProperties": false,
       "required": ["op_id", "src", "op", "args"],
       "properties": {
         "op_id": { "type": "string", "minLength": 1 },
-        "src": { "enum": ["scribe", "interviewer"] },
+        "src": { "const": "scribe" },
         "op": { "$ref": "#/$defs/op_name" },
         "args": { "type": "object" }
       },
