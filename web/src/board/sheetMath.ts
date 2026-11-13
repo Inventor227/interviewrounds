@@ -47,3 +47,66 @@ export class SheetProjector {
     return localToBoard(this.v.set(p.x, p.y, p.z).applyMatrix4(this.inv));
   }
 }
+
+/** How the code panel stands: tilted back 15 degrees from upright, yawed 25 degrees toward the user. */
+export const PANEL_TILT = (75 * Math.PI) / 180;
+export const PANEL_YAW = (25 * Math.PI) / 180;
+
+/**
+ * Puts the code panel's frame under the sheet anchor: its bottom edge on the desk beside the
+ * sheet (on `side`), standing like a laptop screen and turned toward the user. The frame has
+ * the sheet's convention: origin at the bottom edge centre, +X right, -Z up the panel, +Y the
+ * screen's normal (toward the user).
+ */
+export function placePanelFrame(frame: Object3D, side: 'left' | 'right', panelWidthM = 0.4): void {
+  const s = side === 'right' ? 1 : -1;
+  // In the desk frame (yaw only), relative to the sheet's near edge centre (the anchor origin).
+  const halfSheet = SHEET.w / 200;
+  const offset = new Vector3(s * (halfSheet + 0.04 + (panelWidthM / 2) * Math.cos(PANEL_YAW)), -SHEET_LIFT + 0.01, -0.12);
+  const untilt = new Matrix4().makeRotationX(-SHEET_TILT);
+  frame.position.copy(offset.applyMatrix4(untilt));
+  const q = new Matrix4()
+    .makeRotationX(-SHEET_TILT)
+    .multiply(new Matrix4().makeRotationY(-s * PANEL_YAW))
+    .multiply(new Matrix4().makeRotationX(PANEL_TILT));
+  frame.quaternion.setFromRotationMatrix(q);
+  frame.updateMatrixWorld(true);
+}
+
+/** A point on the panel: its rect in board cm (x, y from its top-left) to the panel frame (m). */
+export function panelToLocal(panel: { x: number; y: number; w: number; h: number }, xCm: number, yCm: number, hCm = 0, out = new Vector3()): Vector3 {
+  return out.set((xCm - panel.x - panel.w / 2) / 100, hCm / 100, -(panel.y + panel.h - yCm) / 100);
+}
+
+/**
+ * Projects onto the sheet, or onto the code panel when the hand is at the panel (inside its
+ * area and closer to its screen than to the sheet). Both give board cm: the panel maps to its
+ * region beside the sheet (kit.panel).
+ */
+export class SurfaceProjector {
+  private readonly sheet: SheetProjector;
+  private readonly inv = new Matrix4();
+  private readonly v = new Vector3();
+
+  constructor(
+    anchor: Object3D,
+    private readonly panel?: { frame: Object3D; rect: { x: number; y: number; w: number; h: number } },
+  ) {
+    this.sheet = new SheetProjector(anchor);
+  }
+
+  project(p: Vec3): { x_cm: number; y_cm: number; h_cm: number } {
+    const onSheet = this.sheet.project(p);
+    if (!this.panel) return onSheet;
+    const { frame, rect } = this.panel;
+    frame.updateWorldMatrix(true, false);
+    this.inv.copy(frame.matrixWorld).invert();
+    const l = this.v.set(p.x, p.y, p.z).applyMatrix4(this.inv);
+    const onPanel = { x_cm: rect.x + rect.w / 2 + l.x * 100, y_cm: rect.y + rect.h + l.z * 100, h_cm: l.y * 100 };
+    const m = 3;
+    const inPanel = onPanel.x_cm >= rect.x - m && onPanel.x_cm <= rect.x + rect.w + m && onPanel.y_cm >= rect.y - m && onPanel.y_cm <= rect.y + rect.h + m && onPanel.h_cm > -3 && onPanel.h_cm < 12;
+    if (!inPanel) return onSheet;
+    const sheetValid = onSheet.h_cm > -3 && onSheet.h_cm < 12 && onSheet.x_cm >= -3 && onSheet.x_cm <= SHEET.w + 3;
+    return sheetValid && Math.abs(onSheet.h_cm) < Math.abs(onPanel.h_cm) ? onSheet : onPanel;
+  }
+}

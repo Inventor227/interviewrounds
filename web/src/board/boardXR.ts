@@ -9,12 +9,15 @@ import { VOICE_FOCUS_MS, voiceLabel, type VoiceLabel } from './grammar';
 import { HandAdapter } from './hand';
 import { MAX_TEXT_CHARS } from './validate';
 import { BoardInput } from './input';
-import { HLD_KIT, type Kit } from './kits';
+import { CodePanel } from './codePanel';
+import type { Kit } from './kits';
+import { kitForBoard } from './kits/index';
 import { IdGen } from './model';
 import type { BoardStore } from './ops';
 import type { BoardXRPort, Sfx, SfxName } from './port';
 import { Sheet } from './sheet';
-import { SheetProjector } from './sheetMath';
+import { SHEET } from './model';
+import { SurfaceProjector } from './sheetMath';
 import { kitFor } from './tray';
 import type { MakeCanvas } from './xrmesh';
 
@@ -22,7 +25,10 @@ export interface BoardXROptions {
   store: BoardStore;
   /** Settings dominant_hand: the tray goes on the other side. */
   dominantHand: 'left' | 'right';
+  /** The kit; default: the one for the board's round type (board.round.type). */
   kit?: Kit;
+  /** Seconds since round start, for ops that carry a time (code.trace, agenda.check, present.show). */
+  now_s?: () => number;
   /** board.op to the server (already applied locally, pending until board.ack). */
   send(op: BoardOp): void;
   /** board.ghost_reject to the server (Scribe ghosts only; local suggestions stay local). */
@@ -40,6 +46,8 @@ export interface BoardXROptions {
 export interface BoardXR {
   kit: Kit;
   sheet: Sheet;
+  /** The code panel (coding rounds), standing beside the sheet on the dominant side. */
+  panel: CodePanel | null;
   hands: HandAdapter;
   ghosts: GhostLayer;
   input: BoardInput;
@@ -80,7 +88,7 @@ const clampText = (t: string) => [...t].slice(0, MAX_TEXT_CHARS).join('');
 
 export function createBoardXR(port: BoardXRPort, opts: BoardXROptions): BoardXR {
   const { store } = opts;
-  const kit = kitFor(opts.kit ?? HLD_KIT, opts.dominantHand);
+  const kit = kitFor(opts.kit ?? kitForBoard(store.board), opts.dominantHand);
   const ids = opts.ids ?? new IdGen();
   const play = (n: SfxName) => opts.sfx?.play(n);
 
@@ -92,7 +100,10 @@ export function createBoardXR(port: BoardXRPort, opts: BoardXROptions): BoardXR 
     clock = t;
   });
 
-  const projector = new SheetProjector(port.sheetAnchor);
+  // Coding: a panel beside the sheet; hands project onto whichever surface they are at.
+  const panel = kit.panel ? new CodePanel(kit, kit.panel.x >= SHEET.w / 2 ? 'right' : 'left', opts.makeCanvas) : null;
+  if (panel) port.sheetAnchor.add(panel.frame);
+  const projector = new SurfaceProjector(port.sheetAnchor, panel && kit.panel ? { frame: panel.frame, rect: kit.panel } : undefined);
   const hands = new HandAdapter(port, (p) => projector.project(p), { zone: kit.view });
 
   const commit = (op: BoardOp): boolean => {
@@ -120,7 +131,7 @@ export function createBoardXR(port: BoardXRPort, opts: BoardXROptions): BoardXR 
       play('erase');
     },
   });
-  const input = new BoardInput(store, ghosts, kit, commit, { ids, now });
+  const input = new BoardInput(store, ghosts, kit, commit, { ids, now, ...(opts.now_s ? { now_s: opts.now_s } : {}) });
 
   const sheet = new Sheet({ kit, makeCanvas: opts.makeCanvas });
   sheet.group.visible = false;
@@ -152,13 +163,17 @@ export function createBoardXR(port: BoardXRPort, opts: BoardXROptions): BoardXR 
       play('flap');
     }
     sheet.group.visible = placed;
+    if (panel) panel.frame.visible = placed;
     ghosts.update(t);
-    sheet.update(store.board, { hovers: input.hovers(), overlays: input.overlays, rings: ghosts.rings(t), pointers: hands.pointers() });
+    const overlays = input.overlays;
+    sheet.update(store.board, { hovers: input.hovers(), overlays, rings: ghosts.rings(t), pointers: hands.pointers() });
+    panel?.update(store.board, overlays);
   });
 
   return {
     kit,
     sheet,
+    panel,
     hands,
     ghosts,
     input,
@@ -179,6 +194,10 @@ export function createBoardXR(port: BoardXRPort, opts: BoardXROptions): BoardXR 
       ghosts.destroy();
       hands.destroy();
       port.sheetAnchor.remove(sheet.group);
+      if (panel) {
+        port.sheetAnchor.remove(panel.frame);
+        panel.dispose();
+      }
       port.wallboardTexture?.(null);
       sheet.dispose();
     },
