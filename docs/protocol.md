@@ -51,8 +51,16 @@ Sequencing and acks:
   Server frames with `seq: 0` (such as `pong`) are not buffered or replayed. Server `seq` stays per session across
   tokens: a client that kept its state sends the highest `seq` it saw; a reloaded page has none, sends `last_seq: 0`, and
   gets the whole buffer replayed, which is intended (it rebuilds its view from the replay).
-- After a reconnect the client sends `hello` first, then replays its unacked frames with their original `seq` (it keeps
-  at most 1000, dropping the oldest).
+- Only reliable frames are queued for replay: `board.op`, `board.ghost_reject`, `transcript.mark`, `ui.event`. After a
+  reconnect the client sends `hello` first, then replays its unacked reliable frames with their original `seq`. It keeps
+  at most 1000; if it has to evict one, it reports it to the app instead of dropping it silently.
+- `head.samples` and `voice.state` are telemetry: sent only while the socket is open, never queued or replayed. They
+  still take the next `seq`, so `seq` only grows in send order.
+- Close codes. A server close with `1000` or `4001`-`4999` is final and the client does not reconnect: `4401` the
+  `client_token` is unknown or expired, `4404` no such session, `4409` the session has ended (also sent after
+  `round.ended`). Any other close (`1001`, `1006`, `1011`, `1012`, ...) is transient: the client reconnects with backoff
+  0.5, 1, 2, 4 s (then every 4 s), and resets the backoff only after a frame arrives on the new connection. `4000` is the
+  client's own close when no frame arrived for a whole ping interval (20 s).
 - Duplicates are ignored by `seq`: the server skips a client frame whose `seq` it already processed for that
   `client_token`, and the client skips a server frame with `seq > 0` whose `seq` is not above the highest it has seen
   (frames with `seq: 0` are never treated as duplicates).
