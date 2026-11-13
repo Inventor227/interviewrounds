@@ -16,6 +16,7 @@ import {
   LoopOnce,
   LoopRepeat,
   Mesh,
+  SkinnedMesh,
   Vector3,
   type AnimationAction,
   type AnimationClip,
@@ -90,6 +91,8 @@ class Morphs {
       const d = m.morphTargetDictionary!;
       const same = Object.keys(this.index).every((k) => d[k] === this.index[k]);
       if (same && m.morphTargetInfluences!.length === this.influences.length) m.morphTargetInfluences = this.influences;
+      else if (import.meta.env.DEV)
+        console.warn(`avatar: mesh ${m.name} has different morph targets; it will not blink or lip sync`);
     }
     this.target = new Float32Array(this.influences.length);
   }
@@ -149,6 +152,7 @@ export class Avatar {
   private readonly beats: Beats;
   private readonly lip: LipSync;
   private userVoice: LipSync | null = null;
+  private disposed = false;
 
   private readonly face: Record<string, number> = {};
   private faceTarget: Record<string, number>;
@@ -207,7 +211,10 @@ export class Avatar {
     return new Avatar(entry, gltf.scene, clips, opts);
   }
 
-  /** Wraps an already loaded model (for example from an asset cache) and its clips. */
+  /**
+   * Wraps an already loaded model and its clips. The Avatar owns the model: dispose() frees its geometry, materials,
+   * textures and skeletons, so pass a clone (SkeletonUtils.clone) if the original belongs to a cache.
+   */
   static fromModel(entry: AvatarManifestEntry, model: Object3D, clips: AnimationClip[], opts: AvatarOptions = {}): Avatar {
     return new Avatar(entry, model, clips, opts);
   }
@@ -245,6 +252,8 @@ export class Avatar {
     this.faceTarget = faceFor(mode, this.mood);
     this.tiltTarget = mode === 'listening' ? (this.rng() < 0.5 ? -1 : 1) * between(this.rng, 2.5, 4) * DEG : 0;
     if (mode === 'thinking') this.blinker.trigger();
+    // A listening acknowledgement does not carry into the next mode.
+    this.endOneShot();
     // Thinking keeps the current body and only moves to the thoughtful clip if it lasts (see scheduleClips).
     if (mode !== 'thinking') this.playBase(this.baseFor(mode));
   }
@@ -275,6 +284,7 @@ export class Avatar {
 
   /** Drives lip sync from the interviewer's voice stream (analysis only; nothing is played). */
   async attachVoice(stream: MediaStream, ctx: AudioContext = sharedAudioContext()): Promise<LipSyncEngine> {
+    resume(ctx);
     await this.lip.attach(stream, ctx);
     return this.lip.engine;
   }
@@ -283,10 +293,14 @@ export class Avatar {
     this.lip.detach();
   }
 
-  /** Optional: the user's mic stream, so listening nods land on their pauses (loudness only, analysis only). */
+  /**
+   * Optional: the user's mic stream, so listening nods land on their pauses (loudness only, analysis only). Fine for
+   * one avatar; with a panel, run one shared VAD and call setUserSpeaking on each avatar instead of analysing the
+   * same mic once per avatar.
+   */
   async attachUserVoice(stream: MediaStream, ctx: AudioContext = sharedAudioContext()): Promise<void> {
-    this.userVoice?.detach();
-    this.userVoice = new LipSync({ createVisemeSource: () => Promise.reject(new Error('loudness only')) });
+    resume(ctx);
+    this.userVoice ??= new LipSync({ createVisemeSource: () => Promise.reject(new Error('loudness only')) });
     await this.userVoice.attach(stream, ctx);
   }
 
@@ -385,13 +399,18 @@ export class Avatar {
 
   /** Frees GPU resources and stops audio analysis. */
   dispose(): void {
-    this.lip.detach();
-    this.userVoice?.detach();
+    if (this.disposed) return;
+    this.disposed = true;
+    this.lip.dispose();
+    this.userVoice?.dispose();
+    this.userVoice = null;
     this.mixer.stopAllAction();
+    this.mixer.uncacheRoot(this.model);
     this.root.removeFromParent();
     const seen = new Set<unknown>();
     this.model.traverse((o) => {
       if (!(o instanceof Mesh)) return;
+      if (o instanceof SkinnedMesh) o.skeleton.dispose();
       o.geometry.dispose();
       const mats = (Array.isArray(o.material) ? o.material : [o.material]) as Material[];
       for (const mat of mats) {
@@ -458,22 +477,29 @@ export class Avatar {
     this.oneShot = a;
   }
 
+  /** Fades a running one-shot out and the base clip back in. */
+  private endOneShot(): void {
+    const a = this.oneShot;
+    if (!a) return;
+    this.oneShot = null;
+    a.fadeOut(ONESHOT_FADE_S);
+    const b = this.base;
+    if (!b) return;
+    b.reset();
+    b.setLoop(LoopRepeat, Infinity);
+    b.time = this.rng() * b.getClip().duration;
+    b.fadeIn(ONESHOT_FADE_S).play();
+  }
+
   private scheduleClips(dt: number): void {
     if (this.oneShot) {
       const a = this.oneShot;
-      if (a.time >= a.getClip().duration - ONESHOT_FADE_S - 0.05 || !a.isRunning()) {
-        const b = this.base!;
-        b.reset();
-        b.time = this.rng() * b.getClip().duration;
-        b.fadeIn(ONESHOT_FADE_S).play();
-        a.fadeOut(ONESHOT_FADE_S);
-        this.oneShot = null;
-      }
+      if (a.time >= a.getClip().duration - ONESHOT_FADE_S - 0.05 || !a.isRunning()) this.endOneShot();
       return;
     }
     if (this._mode === 'thinking') {
       if (this.modeTime >= THINK_CLIP_AFTER_S && this.base !== this.actions.get(CLIPS.thoughtful))
-        this.playBase(CLIPS.thoughtful, 0.6);
+        this.playBase(CLIPS.thoughtful);
       return;
     }
     // Every 14 to 26 s: idle may switch clips (looking around); a listener shifts the tilt of their head.
@@ -502,6 +528,11 @@ export class Avatar {
     s.meanMs = sum / n;
     s.maxMs = max;
   }
+}
+
+/** Analysers read zeros while a context is suspended; outside an XR session nothing else resumes three's. */
+function resume(ctx: AudioContext): void {
+  if (ctx.state !== 'running') void ctx.resume().catch(() => {});
 }
 
 /** three's shared AudioContext (the one its AudioListener uses), typed as the DOM one. */

@@ -1,4 +1,4 @@
-import { Bone, BufferGeometry, Float32BufferAttribute, Group, Mesh, MeshBasicMaterial, Quaternion, Vector3 } from 'three';
+import { AnimationClip, Bone, BufferGeometry, QuaternionKeyframeTrack, Float32BufferAttribute, Group, Mesh, MeshBasicMaterial, Quaternion, Vector3 } from 'three';
 import { describe, expect, it } from 'vitest';
 import { Avatar, CLIP_DESK_Y } from './avatar';
 import { DEG } from './gaze';
@@ -155,5 +155,35 @@ describe('avatar', () => {
     expect(mesh.morphTargetInfluences![i]).toBeGreaterThan(0.1);
     expect(a.isSpeaking).toBe(false);
     expect(a.voiceLevel).toBe(0);
+  });
+
+  it('avatar_one_shot_does_not_carry_into_the_next_mode', () => {
+    const clip = (name: string) =>
+      new AnimationClip(name, 3, [new QuaternionKeyframeTrack('Bip01_Spine.quaternion', [0, 3], [0, 0, 0, 1, 0, 0, 0, 1])]);
+    const model = rig();
+    const a = Avatar.fromModel(entry, model, [clip('sit_table_breathe_01'), clip('gestic_listen_accept_01')], { seed: 2 });
+    a.setMode('listening');
+    run(a, 1);
+    const inner = a as unknown as {
+      playOnce(n: string): void;
+      oneShot: unknown;
+      actions: Map<string, { getEffectiveWeight(): number; isRunning(): boolean }>;
+    };
+    inner.playOnce('gestic_listen_accept_01');
+    run(a, 0.5);
+    expect(inner.oneShot).not.toBeNull();
+    // Breathe is listening's base and speaking's too, so playBase alone would leave it faded out.
+    a.setMode('speaking');
+    expect(inner.oneShot).toBeNull();
+    run(a, 0.6);
+    expect(inner.actions.get('sit_table_breathe_01')!.getEffectiveWeight()).toBeGreaterThan(0.95);
+    expect(inner.actions.get('gestic_listen_accept_01')!.getEffectiveWeight()).toBeLessThan(0.05);
+  });
+
+  it('avatar_dispose_is_safe_twice', () => {
+    const { a } = make(4);
+    a.dispose();
+    a.dispose();
+    expect(a.root.parent).toBeNull();
   });
 });
