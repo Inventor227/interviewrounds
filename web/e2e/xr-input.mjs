@@ -89,11 +89,15 @@ const actions = () => app(() => globalThis.__acts.slice());
 await waitReady();
 await go('/session/emu?offer=1&standins=1&seats=1&fallback=600');
 await waitApp();
-await enterXR();
 await app(() => {
   // Room for the controller models in the resource timings (the dev server's modules fill the default buffer).
   performance.clearResourceTimings();
   performance.setResourceTimingBufferSize(2000);
+});
+// One capture of the page before the session (the emulator's room needs it to draw).
+await screenshot('00-page').catch(() => undefined);
+await enterXR();
+await app(() => {
   globalThis.__acts = [];
   globalThis.__inputs = [];
   globalThis.__xrApp.ui.onAction((a) => globalThis.__acts.push(a));
@@ -313,14 +317,15 @@ await hold('right', { x: 0.3, y: 0.95, z: -1.6 }, { x: 0.3, y: 0.9, z: -2.6 });
 await sleep(1500);
 st = await input();
 check('controllers picked up again are the active input', st.active === 'controllers', st.active);
-check('input changes were reported', JSON.stringify(await app(() => globalThis.__inputs)) === JSON.stringify(['controllers', 'hands', 'controllers']), await app(() => globalThis.__inputs));
+// (The emulator may already hold controllers when the session starts, before this script listens.)
+check('input changes were reported', (await app(() => globalThis.__inputs)).slice(-2).join(',') === 'hands,controllers', await app(() => globalThis.__inputs));
 await app(() => void globalThis.__xrApp.replace().catch(() => {}));
 await sleep(1200);
 check('placing again: the prompt is for controllers', (await input()).placingFor === 'controllers');
 const T2 = { x: -0.1, y: DESK_Y + 0.005, z: -1.78 };
 await hold('left', T2, below(T2));
 d = null;
-for (let i = 0; i < 25 && !d; i++) {
+for (let i = 0; i < 25 && !(d && d.hand === 'left'); i++) {
   await sleep(700);
   d = await desk();
 }

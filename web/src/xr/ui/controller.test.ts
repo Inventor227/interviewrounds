@@ -51,6 +51,9 @@ describe('panels with a controller', () => {
     const bar = new RoundBar((a) => actions.push(a));
     const scene = new Scene();
     scene.add(bar.group);
+    // In the room the panel's group is an interactable entity: it listens for pointers itself, which makes
+    // everything under it (the hold ring too) something a ray can land on.
+    bar.group.addEventListener('pointerenter' as never, () => {});
     place(bar.group, layoutDesk(DESK).roundBar);
     bar.setState({ status: 'live', elapsed_s: 5, total_s: 480, muted: false, captions: false });
     scene.updateMatrixWorld(true);
@@ -73,16 +76,34 @@ describe('panels with a controller', () => {
     press('mute');
     press('cc');
     expect(actions).toEqual(['pause', 'resume', 'mute', 'captions']);
-    // End is a hold: the trigger held on it for a second, then let go.
+    // A slow, deliberate pull (the trigger held for two seconds before letting go) still presses.
+    bar.setState({ status: 'live', elapsed_s: 5, total_s: 480, muted: false, captions: false });
+    rig.aim(from, centre('pause'));
+    rig.down();
+    for (let i = 0; i < 144; i++) rig.aim(from, centre('pause'));
+    rig.up();
+    expect(actions.at(-1)).toBe('pause');
+    // Sliding off the button before letting go cancels the press.
+    rig.aim(from, centre('mute'));
+    rig.down();
+    rig.aim(from, from.clone().setY(from.y + 1));
+    rig.up();
+    expect(actions.at(-1)).toBe('pause');
+    // End is a hold: the trigger held on it for a second, then let go. The ray stays on the button every frame
+    // while the ring fills around it.
     rig.aim(from, centre('end'));
     bar.tick(0, 1000);
     rig.down();
     bar.tick(0.3, 1300);
+    rig.aim(from, centre('end'));
     rig.up();
     expect(actions).not.toContain('end');
     bar.tick(0, 2000);
     rig.down();
-    bar.tick(END_HOLD_MS / 1000 + 0.05, 2000 + END_HOLD_MS + 50);
+    for (let t = 2000; t <= 2000 + END_HOLD_MS + 50; t += 14) {
+      bar.tick(0.014, t);
+      rig.aim(from, centre('end'));
+    }
     rig.up();
     expect(actions.at(-1)).toBe('end');
     // A ray that is not on the bar presses nothing.
@@ -111,8 +132,8 @@ describe('panels with a controller', () => {
       scene.updateMatrixWorld(true);
       const targets: Object3D[] = [];
       root.traverse((o) => {
-        const p = (o as unknown as { properties?: { peek?(): { onClick?: unknown; display?: string } } }).properties?.peek?.();
-        if (p?.onClick && p.display !== 'none') targets.push(o);
+        const p = (o as unknown as { properties?: { peek?(): { onPointerDown?: unknown; display?: string } } }).properties?.peek?.();
+        if (p?.onPointerDown && p.display !== 'none') targets.push(o);
       });
       for (const t of targets) {
         rig.aim(from, t.getWorldPosition(new Vector3()));

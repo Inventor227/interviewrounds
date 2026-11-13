@@ -83,10 +83,18 @@ export interface Button {
   setOn(on: boolean): void;
 }
 
-/** A large poke target (at least 4 × 4 cm, Meta hands guidance) with a pressed look. */
+/**
+ * A large poke target (at least 4 × 4 cm, Meta hands guidance) with a pressed look.
+ *
+ * A press counts when the pointer goes down on the button and comes up on it, however long it was held: a poke, a
+ * pinch on the hand ray or a controller's trigger on its ray. The pointer library's own click gives up after a
+ * fixed time, and a slow, deliberate trigger pull or pinch would then do nothing. Sliding off before letting go
+ * cancels.
+ */
 export function button(labelText: string, opts: ButtonOpts = {}): Button {
   const base = opts.primary ? ACCENT : BUTTON;
   const hover = opts.primary ? ACCENT_HI : BUTTON_HOVER;
+  let armed = false;
   const root = new UIKit.Container({
     width: opts.width ?? 8,
     height: opts.height ?? 4.4,
@@ -97,10 +105,20 @@ export function button(labelText: string, opts: ButtonOpts = {}): Button {
     cursor: 'pointer',
     hover: { backgroundColor: hover },
     active: { backgroundColor: opts.primary ? ACCENT_HI : BUTTON_ACTIVE, transformScaleX: 0.97, transformScaleY: 0.97 },
-    onClick: opts.onClick,
-    onPointerDown: opts.onDown,
-    onPointerUp: opts.onUp,
-    onPointerLeave: opts.onLeave ?? opts.onUp,
+    onPointerDown: () => {
+      armed = true;
+      opts.onDown?.();
+    },
+    onPointerUp: () => {
+      const pressed = armed;
+      armed = false;
+      opts.onUp?.();
+      if (pressed) opts.onClick?.();
+    },
+    onPointerLeave: () => {
+      armed = false;
+      (opts.onLeave ?? opts.onUp)?.();
+    },
   } as never);
   const label = text(labelText, { fontSize: opts.fontSize ?? TEXT_PRIMARY, fontWeight: 'medium', pointerEvents: 'none' });
   root.add(label);
@@ -159,6 +177,9 @@ export function holdRing(radius: number, color = INK): { mesh: Mesh; set(p: numb
   const c = parseHex(color);
   (mat.uniforms.uColor!.value as number[]).splice(0, 3, ...c);
   const mesh = new Mesh(new CircleGeometry(radius, 48), mat);
+  // Drawn only: a pointer goes through it to the button it surrounds (it would otherwise take the ray from the
+  // button the moment it shows, and a hold by ray could never finish).
+  mesh.raycast = () => {};
   mesh.renderOrder = 10;
   mesh.visible = false;
   return {
