@@ -1,6 +1,6 @@
 import type { ComponentChildren } from 'preact';
 import { useEffect, useRef, useState } from 'preact/hooks';
-import { LocationProvider, Route, Router, useLocation } from 'preact-iso';
+import { LocationProvider, Route, Router, lazy, useLocation } from 'preact-iso';
 import type { ImmersiveHandle } from '../xr/entry';
 
 // App shell: routes and a themed placeholder per page. Real pages replace the
@@ -16,7 +16,11 @@ export const ROUTES = {
   history: '/history',
   settings: '/settings',
   pricing: '/pricing',
+  devAvatar: '/dev/avatar',
 } as const;
+
+// Developer page for the avatar runtime, loaded only when visited.
+const AvatarDev = lazy(() => import('../xr/avatar/dev/AvatarDev'));
 
 const ROLE_NAMES: Record<string, string> = { sde: 'Software Engineer', pm: 'Product Manager' };
 
@@ -210,6 +214,7 @@ export function App() {
             <Route path={ROUTES.history} component={History} />
             <Route path={ROUTES.settings} component={SettingsPage} />
             <Route path={ROUTES.pricing} component={Pricing} />
+            <Route path={ROUTES.devAvatar} component={AvatarDev} />
             <Route default component={NotFound} />
           </Router>
         </main>
