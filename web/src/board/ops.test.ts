@@ -77,6 +77,30 @@ describe('applyOp', () => {
     }
   });
 
+  it('rejects ops past the server size limits, and takes ops right at them', () => {
+    const b = emptyBoard();
+    const card = (over: Record<string, unknown>) => ({ op_id: 'o1', src: 'hand', op: 'item.create', args: { id: 'n1', kind: 'component', type: 'db', label: null, x: 1, y: 1, w: 8, h: 5, ...over } }) as BoardOp;
+    const ink = (n: number) => ({ op_id: 'o2', src: 'hand', op: 'item.create', args: { id: 'i1', kind: 'ink', points: Array.from({ length: n }, (_, i) => [i / 100, 1]), recognized: null } }) as BoardOp;
+    const iCard = (body: string) => ({ op_id: 'o3', src: 'interviewer', op: 'item.create', args: { id: 'k1', kind: 'interviewer_card', title: 'Signal', body, x: 1, y: 1 } }) as BoardOp;
+    const ok = (op: BoardOp) => tryApplyOp(b, op).accepted;
+    expect(ok(card({ label: 'x'.repeat(200) }))).toBe(true);
+    expect(ok(card({ label: 'x'.repeat(201) }))).toBe(false);
+    // Characters, not UTF-16 units.
+    expect(ok(card({ label: '😀'.repeat(200) }))).toBe(true);
+    expect(ok(card({ id: 'n'.repeat(64) }))).toBe(true);
+    expect(ok(card({ id: 'n'.repeat(65) }))).toBe(false);
+    expect(ok(card({ notes: Array(200).fill('a') }))).toBe(true);
+    expect(ok(card({ notes: Array(201).fill('a') }))).toBe(false);
+    expect(ok(ink(5000))).toBe(true);
+    expect(ok(ink(5001))).toBe(false);
+    expect(ok(iCard('b'.repeat(2000)))).toBe(true);
+    expect(ok(iCard('b'.repeat(2001)))).toBe(false);
+    const withCard = applyOp(b, card({}));
+    const label = (text: string) => tryApplyOp(withCard, { op_id: 'o4', src: 'voice_grammar', op: 'item.label', args: { id: 'n1', text } } as BoardOp).accepted;
+    expect(label('y'.repeat(200))).toBe(true);
+    expect(label('y'.repeat(201))).toBe(false);
+  });
+
   it('shares unchanged items between revisions', () => {
     let b = emptyBoard();
     b = applyOp(b, { op_id: 'o1', src: 'hand', op: 'item.create', args: { id: 'n1', kind: 'component', type: 'db', label: null, x: 1, y: 1, w: 8, h: 5 } });

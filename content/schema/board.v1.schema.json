@@ -53,7 +53,7 @@
   },
   "$defs": {
     "board_kit": { "enum": ["hld", "lld", "coding", "pm", "meeting"] },
-    "id": { "type": "string", "minLength": 1, "pattern": "^[A-Za-z0-9_.:-]+$" },
+    "id": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[A-Za-z0-9_.:-]+$" },
     "cm": { "type": "number", "description": "Board centimetres." },
     "src": { "enum": ["hand", "voice_grammar", "scribe", "interviewer"] },
     "component_type": {
@@ -90,13 +90,13 @@
         "id": { "$ref": "#/$defs/id" },
         "kind": { "const": "component" },
         "type": { "$ref": "#/$defs/component_type" },
-        "label": { "type": ["string", "null"] },
+        "label": { "type": ["string", "null"], "maxLength": 200 },
         "x": { "$ref": "#/$defs/cm" },
         "y": { "$ref": "#/$defs/cm" },
         "w": { "$ref": "#/$defs/cm" },
         "h": { "$ref": "#/$defs/cm" },
-        "group": { "type": ["string", "null"] },
-        "notes": { "type": "array", "items": { "type": "string" } }
+        "group": { "type": ["string", "null"], "maxLength": 200 },
+        "notes": { "type": "array", "maxItems": 200, "items": { "type": "string", "maxLength": 200 } }
       }
     },
     "member": {
@@ -106,19 +106,19 @@
       "properties": {
         "id": { "$ref": "#/$defs/id" },
         "vis": { "$ref": "#/$defs/vis" },
-        "name": { "type": "string", "minLength": 1 },
-        "type": { "type": ["string", "null"], "description": "Fields: the field type." },
+        "name": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "type": { "type": ["string", "null"], "maxLength": 200, "description": "Fields: the field type." },
         "params": {
-          "type": "array",
+          "type": "array", "maxItems": 200,
           "description": "Methods only.",
           "items": {
             "type": "object",
             "additionalProperties": false,
             "required": ["name"],
-            "properties": { "name": { "type": "string" }, "type": { "type": ["string", "null"] } }
+            "properties": { "name": { "type": "string", "maxLength": 200 }, "type": { "type": ["string", "null"], "maxLength": 200 } }
           }
         },
-        "returns": { "type": ["string", "null"], "description": "Methods only." }
+        "returns": { "type": ["string", "null"], "maxLength": 200, "description": "Methods only." }
       }
     },
     "class": {
@@ -128,15 +128,15 @@
       "properties": {
         "id": { "$ref": "#/$defs/id" },
         "kind": { "const": "class" },
-        "label": { "type": ["string", "null"] },
+        "label": { "type": ["string", "null"], "maxLength": 200 },
         "class_kind": { "$ref": "#/$defs/class_kind" },
-        "fields": { "type": "array", "items": { "$ref": "#/$defs/member" } },
-        "methods": { "type": "array", "items": { "$ref": "#/$defs/member" } },
+        "fields": { "type": "array", "maxItems": 200, "items": { "$ref": "#/$defs/member" } },
+        "methods": { "type": "array", "maxItems": 200, "items": { "$ref": "#/$defs/member" } },
         "x": { "$ref": "#/$defs/cm" },
         "y": { "$ref": "#/$defs/cm" },
         "w": { "$ref": "#/$defs/cm" },
         "h": { "$ref": "#/$defs/cm" },
-        "group": { "type": ["string", "null"] }
+        "group": { "type": ["string", "null"], "maxLength": 200 }
       }
     },
     "sticky": {
@@ -147,8 +147,8 @@
         "id": { "$ref": "#/$defs/id" },
         "kind": { "const": "sticky" },
         "lane": { "oneOf": [{ "$ref": "#/$defs/lane" }, { "type": "null" }] },
-        "text": { "type": "string" },
-        "group": { "type": ["string", "null"] },
+        "text": { "type": "string", "maxLength": 200 },
+        "group": { "type": ["string", "null"], "maxLength": 200 },
         "votes": { "type": "integer", "minimum": 0 },
         "quad": { "oneOf": [{ "$ref": "#/$defs/quad" }, { "type": "null" }] },
         "rank": { "type": ["integer", "null"], "minimum": 1, "description": "Rung on the ranked ladder, 1 = top." },
@@ -165,7 +165,7 @@
       "properties": {
         "id": { "$ref": "#/$defs/id" },
         "kind": { "const": "group" },
-        "label": { "type": ["string", "null"] },
+        "label": { "type": ["string", "null"], "maxLength": 200 },
         "x": { "$ref": "#/$defs/cm" },
         "y": { "$ref": "#/$defs/cm" },
         "w": { "$ref": "#/$defs/cm" },
@@ -180,8 +180,8 @@
         "id": { "$ref": "#/$defs/id" },
         "kind": { "const": "metric" },
         "role": { "$ref": "#/$defs/metric_role" },
-        "label": { "type": ["string", "null"] },
-        "group": { "type": ["string", "null"] },
+        "label": { "type": ["string", "null"], "maxLength": 200 },
+        "group": { "type": ["string", "null"], "maxLength": 200 },
         "x": { "$ref": "#/$defs/cm" },
         "y": { "$ref": "#/$defs/cm" },
         "w": { "$ref": "#/$defs/cm", "default": 10 },
@@ -198,6 +198,7 @@
         "points": {
           "type": "array",
           "minItems": 2,
+          "maxItems": 5000,
           "description": "[x, y] in board cm, rounded to 1 decimal.",
           "items": { "type": "array", "prefixItems": [{ "type": "number" }, { "type": "number" }], "items": false, "minItems": 2 }
         },
@@ -214,8 +215,8 @@
       "properties": {
         "id": { "$ref": "#/$defs/id" },
         "kind": { "const": "interviewer_card" },
-        "title": { "type": "string" },
-        "body": { "type": "string" },
+        "title": { "type": "string", "maxLength": 200 },
+        "body": { "type": "string", "maxLength": 2000 },
         "x": { "$ref": "#/$defs/cm" },
         "y": { "$ref": "#/$defs/cm" },
         "w": { "$ref": "#/$defs/cm", "default": 14 },
@@ -231,7 +232,7 @@
         "from": { "$ref": "#/$defs/id" },
         "to": { "$ref": "#/$defs/id" },
         "dir": { "$ref": "#/$defs/dir" },
-        "label": { "type": ["string", "null"] },
+        "label": { "type": ["string", "null"], "maxLength": 200 },
         "rel": { "oneOf": [{ "$ref": "#/$defs/rel" }, { "type": "null" }], "description": "Class diagrams only." }
       }
     },
@@ -242,7 +243,7 @@
       "properties": {
         "id": { "$ref": "#/$defs/id" },
         "indent": { "type": "integer", "minimum": 0, "maximum": 6 },
-        "text": { "type": "string" },
+        "text": { "type": "string", "maxLength": 200 },
         "src": { "$ref": "#/$defs/src" }
       }
     },
@@ -251,14 +252,14 @@
       "additionalProperties": false,
       "required": ["language", "lines", "approach", "complexity", "trace"],
       "properties": {
-        "language": { "type": "string" },
+        "language": { "type": "string", "maxLength": 200 },
         "lines": { "type": "array", "items": { "$ref": "#/$defs/code_line" } },
         "approach": { "type": "array", "maxItems": 6, "items": { "type": "string", "maxLength": 120 } },
         "complexity": {
           "type": "object",
           "additionalProperties": false,
           "required": ["time", "space"],
-          "properties": { "time": { "type": ["string", "null"] }, "space": { "type": ["string", "null"] } }
+          "properties": { "time": { "type": ["string", "null"], "maxLength": 200 }, "space": { "type": ["string", "null"], "maxLength": 200 } }
         },
         "trace": {
           "type": "array",
@@ -313,7 +314,7 @@
             }
           }
         },
-        "parked": { "type": "array", "items": { "type": "string" } }
+        "parked": { "type": "array", "items": { "type": "string", "maxLength": 200 } }
       }
     },
 
@@ -348,13 +349,13 @@
           } } } } },
         { "if": { "type": "object", "required": ["op"], "properties": { "op": { "const": "item.note.add" } } }, "then": { "type": "object", "properties": { "args": {
           "type": "object", "additionalProperties": false, "required": ["id", "text"],
-          "properties": { "id": { "$ref": "#/$defs/id" }, "text": { "type": "string", "minLength": 1 } } } } } },
+          "properties": { "id": { "$ref": "#/$defs/id" }, "text": { "type": "string", "minLength": 1, "maxLength": 200 } } } } } },
         { "if": { "type": "object", "required": ["op"], "properties": { "op": { "const": "edge.create" } } }, "then": { "type": "object", "properties": { "args": {
           "type": "object", "additionalProperties": false, "required": ["id", "from", "to"],
           "properties": {
             "id": { "$ref": "#/$defs/id" }, "from": { "$ref": "#/$defs/id" }, "to": { "$ref": "#/$defs/id" },
             "dir": { "$ref": "#/$defs/dir", "default": "->" },
-            "label": { "type": ["string", "null"], "default": null },
+            "label": { "type": ["string", "null"], "maxLength": 200, "default": null },
             "rel": { "oneOf": [{ "$ref": "#/$defs/rel" }, { "type": "null" }], "default": null }
           } } } } },
         { "if": { "type": "object", "required": ["op"], "properties": { "op": { "const": "edge.delete" } } }, "then": { "type": "object", "properties": { "args": { "$ref": "#/$defs/args_id" } } } },
@@ -368,9 +369,9 @@
         { "if": { "type": "object", "required": ["op"], "properties": { "op": { "const": "group.create" } } }, "then": { "type": "object", "properties": { "args": {
           "type": "object", "additionalProperties": false, "required": ["id", "label", "x", "y", "w", "h", "members"],
           "properties": {
-            "id": { "$ref": "#/$defs/id" }, "label": { "type": ["string", "null"] },
+            "id": { "$ref": "#/$defs/id" }, "label": { "type": ["string", "null"], "maxLength": 200 },
             "x": { "$ref": "#/$defs/cm" }, "y": { "$ref": "#/$defs/cm" }, "w": { "$ref": "#/$defs/cm" }, "h": { "$ref": "#/$defs/cm" },
-            "members": { "type": "array", "items": { "$ref": "#/$defs/id" }, "description": "Items whose group becomes this id." }
+            "members": { "type": "array", "maxItems": 200, "items": { "$ref": "#/$defs/id" }, "description": "Items whose group becomes this id." }
           } } } } },
         { "if": { "type": "object", "required": ["op"], "properties": { "op": { "const": "member.add" } } }, "then": { "type": "object", "properties": { "args": {
           "type": "object", "additionalProperties": false, "required": ["class_id", "section", "member"],
@@ -391,21 +392,21 @@
           "type": "object", "additionalProperties": false, "required": ["line", "after"],
           "properties": {
             "line": { "$ref": "#/$defs/code_line" },
-            "after": { "type": ["string", "null"], "description": "Id of the line it goes after; null = first line." }
+            "after": { "type": ["string", "null"], "maxLength": 200, "description": "Id of the line it goes after; null = first line." }
           } } } } },
         { "if": { "type": "object", "required": ["op"], "properties": { "op": { "const": "code.edit" } } }, "then": { "type": "object", "properties": { "args": {
           "type": "object", "additionalProperties": false, "required": ["id", "text"],
-          "properties": { "id": { "$ref": "#/$defs/id" }, "text": { "type": "string" } } } } } },
+          "properties": { "id": { "$ref": "#/$defs/id" }, "text": { "type": "string", "maxLength": 200 } } } } } },
         { "if": { "type": "object", "required": ["op"], "properties": { "op": { "const": "code.move" } } }, "then": { "type": "object", "properties": { "args": {
           "type": "object", "additionalProperties": false, "required": ["id", "after"],
-          "properties": { "id": { "$ref": "#/$defs/id" }, "after": { "type": ["string", "null"] } } } } } },
+          "properties": { "id": { "$ref": "#/$defs/id" }, "after": { "type": ["string", "null"], "maxLength": 200 } } } } } },
         { "if": { "type": "object", "required": ["op"], "properties": { "op": { "const": "code.indent" } } }, "then": { "type": "object", "properties": { "args": {
           "type": "object", "additionalProperties": false, "required": ["id", "delta"],
           "properties": { "id": { "$ref": "#/$defs/id" }, "delta": { "type": "integer", "description": "Levels to add; the result is clamped to 0..6." } } } } } },
         { "if": { "type": "object", "required": ["op"], "properties": { "op": { "const": "code.delete" } } }, "then": { "type": "object", "properties": { "args": { "$ref": "#/$defs/args_id" } } } },
         { "if": { "type": "object", "required": ["op"], "properties": { "op": { "const": "code.complexity" } } }, "then": { "type": "object", "properties": { "args": {
           "type": "object", "additionalProperties": false, "required": ["slot", "value"],
-          "properties": { "slot": { "enum": ["time", "space"] }, "value": { "type": ["string", "null"] } } } } } },
+          "properties": { "slot": { "enum": ["time", "space"] }, "value": { "type": ["string", "null"], "maxLength": 200 } } } } } },
         { "if": { "type": "object", "required": ["op"], "properties": { "op": { "const": "code.trace" } } }, "then": { "type": "object", "properties": { "args": {
           "type": "object", "additionalProperties": false, "required": ["line", "t"],
           "properties": { "line": { "$ref": "#/$defs/id" }, "t": { "type": "number" } } } } } },
@@ -417,13 +418,13 @@
           "properties": { "id": { "$ref": "#/$defs/id" }, "done": { "type": "boolean" }, "t": { "type": ["number", "null"] } } } } } },
         { "if": { "type": "object", "required": ["op"], "properties": { "op": { "const": "present.show" } } }, "then": { "type": "object", "properties": { "args": {
           "type": "object", "additionalProperties": false, "required": ["kind", "ref", "t"],
-          "properties": { "kind": { "enum": ["slide", "number"] }, "ref": { "type": ["integer", "string"] }, "t": { "type": "number" } } } } } },
+          "properties": { "kind": { "enum": ["slide", "number"] }, "ref": { "type": ["integer", "string"], "maxLength": 200 }, "t": { "type": "number" } } } } } },
         { "if": { "type": "object", "required": ["op"], "properties": { "op": { "const": "park.add" } } }, "then": { "type": "object", "properties": { "args": {
           "type": "object", "additionalProperties": false, "required": ["text"],
-          "properties": { "text": { "type": "string", "minLength": 1 } } } } } },
+          "properties": { "text": { "type": "string", "minLength": 1, "maxLength": 200 } } } } } },
         { "if": { "type": "object", "required": ["op"], "properties": { "op": { "const": "undo" } } }, "then": { "type": "object", "properties": { "args": {
           "type": "object", "additionalProperties": false, "required": ["target_op_id"],
-          "properties": { "target_op_id": { "type": "string", "minLength": 1 } } } } } }
+          "properties": { "target_op_id": { "type": "string", "minLength": 1, "maxLength": 200 } } } } } }
       ]
     },
     "args_id": {
@@ -432,7 +433,7 @@
     },
     "args_id_text": {
       "type": "object", "additionalProperties": false, "required": ["id", "text"],
-      "properties": { "id": { "$ref": "#/$defs/id" }, "text": { "type": ["string", "null"] } }
+      "properties": { "id": { "$ref": "#/$defs/id" }, "text": { "type": ["string", "null"], "maxLength": 200 } }
     },
 
     "board_op": {

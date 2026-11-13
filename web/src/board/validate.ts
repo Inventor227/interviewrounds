@@ -40,7 +40,32 @@ function shape(v: unknown, required: string[], optional: string[] = [], where = 
   return o;
 }
 
-const id = (v: unknown, where: string) => (typeof v === 'string' && v.length > 0 && ID.test(v) ? v : fail(`${where} must be an id`));
+/** Server limits on op args (on top of the schema shapes); board.v1.schema.json mirrors them. */
+export const MAX_ID_CHARS = 64;
+export const MAX_TEXT_CHARS = 200;
+export const MAX_CARD_BODY_CHARS = 2000;
+export const MAX_ARRAY_LEN = 200;
+export const MAX_INK_POINTS = 5000;
+
+const id = (v: unknown, where: string) =>
+  typeof v === 'string' && v.length > 0 && v.length <= MAX_ID_CHARS && ID.test(v) ? v : fail(`${where} must be an id of at most ${MAX_ID_CHARS} characters`);
+
+/**
+ * The server's size pass over args, key by key: every string at most 200 characters (a
+ * `body` 2000), every array at most 200 entries (`points` 5000).
+ */
+function sizes(v: unknown, key: string): void {
+  if (typeof v === 'string') {
+    const max = key === 'body' ? MAX_CARD_BODY_CHARS : MAX_TEXT_CHARS;
+    if ([...v].length > max) fail(`${key} is longer than ${max} characters`);
+  } else if (Array.isArray(v)) {
+    const max = key === 'points' ? MAX_INK_POINTS : MAX_ARRAY_LEN;
+    if (v.length > max) fail(`${key} has more than ${max} entries`);
+    for (const x of v) sizes(x, key);
+  } else if (isObj(v)) {
+    for (const [k, x] of Object.entries(v)) sizes(x, k);
+  }
+}
 const num = (v: unknown, where: string) => (typeof v === 'number' && Number.isFinite(v) ? v : fail(`${where} must be a number`));
 const int = (v: unknown, where: string) => (typeof v === 'number' && Number.isInteger(v) ? v : fail(`${where} must be an integer`));
 const str = (v: unknown, where: string) => (typeof v === 'string' ? v : fail(`${where} must be a string`));
@@ -352,6 +377,7 @@ export function validateOp(op: unknown): string | null {
     if ('rev_base' in o && o.rev_base !== undefined && (int(o.rev_base, 'rev_base') as number) < 0) fail('rev_base is negative');
     if ('at_ms' in o && o.at_ms !== undefined) num(o.at_ms, 'at_ms');
     args(o.op as string, o.args);
+    sizes(o.args, 'args');
     return null;
   } catch (e) {
     if (e instanceof Invalid) return e.message;
