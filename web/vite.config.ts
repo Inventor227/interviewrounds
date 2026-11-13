@@ -1,6 +1,6 @@
 import { iwsdkDev } from '@iwsdk/vite-plugin-dev';
 import preact from '@preact/preset-vite';
-import { defineConfig, type Plugin } from 'vite';
+import { defineConfig, searchForWorkspaceRoot, type Plugin } from 'vite';
 
 // The Rust server owns /api, /ws, /v1, /auth and /s. In dev we proxy them so the
 // page stays same-origin, as it is in production.
@@ -33,6 +33,8 @@ export default defineConfig({
     host: '0.0.0.0',
     port: 8081,
     open: false,
+    // Dev only: `?fake=1` pages read fixtures from ../content.
+    fs: { allow: [searchForWorkspaceRoot(process.cwd()), '../content'] },
     // Headless emulator runs (the IWSDK CLI sets IWSDK_DEV_AI_MODE=agent) share a host whose
     // inotify instances can run out; polling avoids that and HMR speed does not matter there.
     watch: process.env.IWSDK_DEV_AI_MODE === 'agent' ? { usePolling: true, interval: 1000 } : undefined,
