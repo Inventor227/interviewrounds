@@ -30,10 +30,6 @@ const COPY: Record<LimitReason, { title: string; body: string }> = {
     title: 'You have used your free rounds',
     body: 'Your reports and history stay free. Pick a plan to keep practicing live.',
   },
-  model_budget_reached: {
-    title: 'Live rounds are paused',
-    body: 'Live practice is paused for now. Reports and history still work. Live rounds come back',
-  },
 };
 
 export function CapNotice(props: {
