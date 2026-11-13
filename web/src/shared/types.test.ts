@@ -94,7 +94,7 @@ const assertSame = <A, B>(ok: Same<A, B>) => ok;
 
 // Every op name and every message type is listed (compile time).
 assertSame<(typeof BOARD_OP_NAMES)[number], BoardOpName>(true);
-const CLIENT_TYPES = ['hello', 'board.op', 'transcript.mark', 'head.samples', 'voice.state', 'ui.event', 'board.ghost_reject', 'ping'] as const;
+const CLIENT_TYPES = ['hello', 'board.op', 'transcript.mark', 'head.samples', 'voice.state', 'voice.spoken', 'ui.event', 'board.ghost_reject', 'board.focus', 'ping'] as const;
 const SERVER_TYPES = [
   'round.state',
   'panel.hand_over',
