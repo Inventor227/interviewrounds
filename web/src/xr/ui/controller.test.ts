@@ -9,6 +9,7 @@ import { RoundUI } from './index';
 import { layoutDesk } from './layout';
 import { END_HOLD_MS, RoundBar } from './roundBar';
 import { PLACING_COPY, STATUS_COPY } from './statusCard';
+import { button } from './style';
 import type { RoundAction } from './types';
 
 const DESK = { origin: { x: 0, y: 0.74, z: -0.4 }, yaw: 0.2, deskY: 0.74, head: { x: 0.04, y: 1.19, z: -0.2 } };
@@ -257,6 +258,7 @@ function pokeRig(scene: Scene) {
       pointer.move(scene, { timeStamp: (t += 14) });
     },
     down: () => pointer.getButtonsDown().size > 0,
+    hit: () => pointer.getIntersection()?.object ?? null,
   };
 }
 
@@ -280,7 +282,7 @@ describe('panels with a hand poke', () => {
     return { actions, bar, rig, over, centre };
   }
 
-  it('a_hand_poke_taps_pause_and_the_other_round_bar_buttons', () => {
+  it('a_hand_poke_taps_pause_and_the_other_round_bar_buttons', async () => {
     const { actions, bar, rig, over } = barScene();
     // The finger comes in at 5 mm a frame, goes 4 mm through the panel and comes back.
     const poke = (name: 'mute' | 'pause' | 'cc') => {
@@ -302,6 +304,13 @@ describe('panels with a hand poke', () => {
     for (let i = 0; i < 144; i++) rig.at(over('pause', 0.001));
     for (let d = 0; d <= 0.06; d += 0.005) rig.at(over('pause', d));
     expect(actions.at(-1)).toBe('pause');
+    // At a few frames a second the finger is on the button in one frame and 4.5 cm out in the next, where the
+    // nearest thing under it can be the panel behind the button: still a press.
+    const before = actions.length;
+    for (let d = 0.06; d >= 0; d -= 0.005) rig.at(over('pause', d));
+    rig.at(over('pause', 0.045));
+    await Promise.resolve();
+    expect(actions.slice(before)).toEqual(['pause']);
     // A finger that slides off sideways before lifting presses nothing.
     const n = actions.length;
     for (let d = 0.06; d >= 0; d -= 0.005) rig.at(over('mute', d));
@@ -358,5 +367,36 @@ describe('panels with a hand poke', () => {
       for (let d = -0.003; d <= 0.08; d += 0.005) rig.at(c.clone().addScaledVector(normal, d));
     }
     expect(actions).toEqual(['resume', 'end']);
+  });
+
+  it('a_fingertip_lift_that_the_library_reports_as_a_leave_is_still_a_press', async () => {
+    // Seen in the headset emulator at a few frames a second: the finger is on the button in one frame and 4 cm
+    // out in the next, where the panel behind is the nearest thing. The button gets `pointerleave`, the release
+    // goes to the panel. The button's own handlers, with a real touch pointer that has nothing held down:
+    const clicks: string[] = [];
+    const b = button('Pause', { onClick: () => clicks.push('click'), onLeave: () => clicks.push('leave') });
+    const h = (b.root as unknown as { properties: { peek(): Record<string, (e: object) => void> } }).properties.peek();
+    const finger = createTouchPointer(() => new PerspectiveCamera(), { current: new Object3D() }, {}, {});
+    h.onPointerDown!({ pointerId: finger.id, pointerType: 'touch', button: 0 });
+    h.onPointerLeave!({ pointerId: finger.id, pointerType: 'touch' });
+    expect(clicks).toEqual([]);
+    await Promise.resolve();
+    expect(clicks).toEqual(['click']);
+    // A ray that leaves the button with the trigger still held is a slide: no press, and its later release is nothing.
+    h.onPointerDown!({ pointerId: 77, pointerType: 'ray', button: 0 });
+    h.onPointerLeave!({ pointerId: 77, pointerType: 'ray' });
+    h.onPointerUp!({ pointerId: 77, pointerType: 'ray', button: 0 });
+    await Promise.resolve();
+    expect(clicks).toEqual(['click', 'leave']);
+    // Another pointer crossing the button neither cancels nor completes a press, and a right button presses nothing.
+    h.onPointerDown!({ pointerId: 5, pointerType: 'ray', button: 0 });
+    h.onPointerLeave!({ pointerId: 6, pointerType: 'ray' });
+    h.onPointerUp!({ pointerId: 6, pointerType: 'ray', button: 0 });
+    expect(clicks).toEqual(['click', 'leave']);
+    h.onPointerUp!({ pointerId: 5, pointerType: 'ray', button: 0 });
+    expect(clicks).toEqual(['click', 'leave', 'click']);
+    h.onPointerDown!({ pointerId: 5, pointerType: 'screen-mouse', button: 2 });
+    h.onPointerUp!({ pointerId: 5, pointerType: 'screen-mouse', button: 2 });
+    expect(clicks).toEqual(['click', 'leave', 'click']);
   });
 });

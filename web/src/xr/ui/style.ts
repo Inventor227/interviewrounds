@@ -3,6 +3,7 @@
 // labels (Inter cap height is about 0.73 em, so 1.6 cm type), 0.8 cm minimum for secondary text.
 
 import { UIKit } from '@iwsdk/core';
+import { getPointerById } from '@pmndrs/pointer-events';
 import {
   CircleGeometry,
   Mesh,
@@ -119,8 +120,24 @@ export function button(labelText: string, opts: ButtonOpts = {}): Button {
       opts.onUp?.();
       opts.onClick?.();
     },
-    onPointerLeave: (e?: { pointerId?: number }) => {
-      if (!armed.delete(id(e))) return;
+    onPointerLeave: (e?: { pointerId?: number; pointerType?: string }) => {
+      const pid = id(e);
+      if (!armed.has(pid)) return;
+      // A fingertip lifts off in one move: it is on the button, then well clear of it, where the nearest thing
+      // under it may be the panel behind. The library then says "left" and gives the release to the panel. If the
+      // finger is up once that move is done, it was a lift, not a slide: the press counts.
+      if (e?.pointerType === 'touch') {
+        queueMicrotask(() => {
+          if (!armed.delete(pid)) return;
+          const lifted = getPointerById(pid)?.getButtonsDown().size === 0;
+          if (lifted) {
+            opts.onUp?.();
+            opts.onClick?.();
+          } else (opts.onLeave ?? opts.onUp)?.();
+        });
+        return;
+      }
+      armed.delete(pid);
       (opts.onLeave ?? opts.onUp)?.();
     },
   } as never);

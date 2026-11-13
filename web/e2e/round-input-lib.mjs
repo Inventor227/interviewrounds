@@ -33,11 +33,27 @@ export async function placeWithController(S, shotName, { rest = true } = {}) {
   await sleep(800);
   stage('placing with controllers', await inputState());
   if (shotName) await shot(shotName);
-  // The controller's tip (its front) rests on the desk: 5 mm above the desk top, pointing forward and a little down.
-  const tip = { x: S.tip.x, y: S.tip.y - 0.003, z: S.tip.z };
-  await hold('right', tip, { x: tip.x, y: tip.y - 0.03, z: tip.z - 0.3 });
+  // A trigger pull at the prompt card (the usual way to "click" a card) places nothing.
+  const card = await page(() => {
+    const g = globalThis.__xrApp.ui.status.group;
+    g.updateWorldMatrix(true, false);
+    const e = g.matrixWorld.elements;
+    return { x: e[12], y: e[13], z: e[14] };
+  });
+  await hold('right', { x: S.head.x + 0.2, y: S.head.y - 0.32, z: S.head.z - 0.1 }, card);
   await sleep(1200);
-  await pull('right', 0.25);
+  const onCard = await page(() => globalThis.__xrApp.controllers().find((c) => c.hand === 'right')?.busy);
+  await pull('right', 0.7);
+  await sleep(800);
+  const early = await page(() => globalThis.__xrApp.desk$.value);
+  stage('trigger at the prompt card', { rayOnCard: onCard, placed: !!early });
+  if (early) await fail('a trigger pull at the prompt card placed the desk', early);
+  // The controller's tip (its front) rests on the desk, 5 mm above the desk top, pointing down at it: after a
+  // moment the trigger places it (held still without the trigger it places too, a little later).
+  const tip = { x: S.tip.x, y: S.tip.y - 0.003, z: S.tip.z };
+  await hold('right', tip, below(tip));
+  await sleep(500);
+  await pull('right', 0.4);
   const desk = await until('the desk placement', () => globalThis.__xrApp.desk$.value, null, 120000, 700);
   if (rest) await hold('right', { x: S.head.x + 0.3, y: 0.9, z: S.head.z - 0.12 }, { x: S.head.x + 0.3, y: 0.85, z: S.head.z - 1.1 });
   return desk;

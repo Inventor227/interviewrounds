@@ -143,17 +143,21 @@ const glbs = await app(() => performance.getEntriesByType('resource').map((r) =>
 check('controller models are loaded from this origin', glbs.length >= 2 && glbs.every((u) => new URL(u).pathname.startsWith('/vendor/input-profiles/') && !/jsdelivr/.test(u)), glbs);
 await shot('01-prompt-controllers');
 
-// ---- the desk: the tip touches it, the trigger places it (the controller points almost level, so no dwell) ----
+// ---- the desk: a trigger with the controller level places nothing; the tip resting on the desk, pointing down, does ----
 await hold('right', TOUCH, { x: TOUCH.x, y: TOUCH.y - 0.02, z: TOUCH.z - 0.3 });
-await sleep(2500);
-check('a tip resting on the desk without pointing down waits for the trigger', (await desk()) === null);
-await pull('right', 0.25);
+await sleep(1500);
+await pull('right', 0.5);
+await sleep(1200);
+check('a trigger pull with the controller level does not place the desk', (await desk()) === null);
+await hold('right', TOUCH, below(TOUCH));
+await sleep(400);
+await pull('right', 0.4);
 let d = null;
 for (let i = 0; i < 20 && !d; i++) {
   await sleep(700);
   d = await desk();
 }
-check('the trigger with the tip on the desk places it', !!d && d.source === 'touch' && d.input === 'controllers' && d.hand === 'right', d);
+check('the tip resting on the desk, pointing down, places it', !!d && d.source === 'touch' && d.input === 'controllers' && d.hand === 'right', d);
 check('the sheet lands on the desk top, not above it', !!d && near(d.deskY, DESK_Y, 0.002) && near(d.origin.x, TOUCH.x, 0.003) && near(d.origin.z, TOUCH.z, 0.003), d && { deskY: d.deskY, origin: d.origin });
 await hold('right', { x: 0.3, y: 0.95, z: -1.6 }, { x: 0.3, y: 0.9, z: -2.6 });
 await sleep(1500);
