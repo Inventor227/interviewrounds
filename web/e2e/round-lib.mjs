@@ -72,9 +72,20 @@ export function stage(name, detail = null) {
   console.log(`[stage] ${name} @${s.at_s}s ${detail ? JSON.stringify(detail).slice(0, 600) : ''}`);
 }
 
-export function fail(msg, extra) {
+export async function consoleLines(count = 200) {
+  const out = await iwsdk('browser', 'logs', '--input-json', JSON.stringify({ count })).catch(() => null);
+  const list = out?.data?.result ?? out?.result ?? out?.data?.logs ?? [];
+  return Array.isArray(list) ? list.map((l) => `[${l.level}] ${String(l.message ?? l.text ?? '').slice(0, 400)}`) : [JSON.stringify(out).slice(0, 2000)];
+}
+
+export async function fail(msg, extra) {
   console.error(`FAILED: ${msg}`, extra ? JSON.stringify(extra).slice(0, 3000) : '');
-  save('failed', { error: msg, extra });
+  const logs = await consoleLines().catch(() => []);
+  const where = await page(() => ({ path: location.pathname, text: document.querySelector('main')?.innerText.slice(0, 800), launch: document.querySelector('[data-launch]')?.getAttribute('data-launch'), rec: globalThis.__rec ?? null })).catch((e) => String(e).slice(0, 300));
+  console.error('page', JSON.stringify(where).slice(0, 3000));
+  console.error('console', logs.filter((l) => !/▀|▄|██/.test(l)).slice(-60).join('\n'));
+  save('failed', { error: msg, extra, where, logs });
+  await screenshot('failed').catch(() => undefined);
   process.exit(1);
 }
 
@@ -89,7 +100,7 @@ export async function until(what, fn, arg = null, timeoutMs = 60000, everyMs = 1
   for (;;) {
     last = await page(fn, arg).catch((e) => ({ __error: String(e).slice(0, 300) }));
     if (last && !last.__error) return last;
-    if (Date.now() > end) fail(`timed out waiting for ${what}`, last);
+    if (Date.now() > end) await fail(`timed out waiting for ${what}`, last);
     await sleep(everyMs);
   }
 }
@@ -100,7 +111,7 @@ export async function until(what, fn, arg = null, timeoutMs = 60000, everyMs = 1
  */
 export async function setupTab({ offer = true, fallback = 180 } = {}) {
   const key = process.env.DEV_KEY;
-  if (!key) fail('DEV_KEY is not set (pass --env-file)');
+  if (!key) await fail('DEV_KEY is not set (pass --env-file)');
   await page(
     (a) => {
       sessionStorage.setItem('ir_dev_key', a.key);
@@ -160,7 +171,7 @@ export async function answer(text, timeoutMs = 90000) {
       return agent.length > b && last && Date.now() - last.at > 4000 ? { who: last.who, text: last.text } : null;
     }, before);
     if (reply) return reply;
-    if (Date.now() > end) fail('no reply to a typed answer', await roundState());
+    if (Date.now() > end) await fail('no reply to a typed answer', await roundState());
   }
 }
 
@@ -186,7 +197,7 @@ export async function enterFromTap(test = 'start-round') {
     if (again) await click('enter-room');
     inXr = await page(() => !!globalThis.__xrApp?.world.session).catch(() => false);
   }
-  if (!inXr) fail('no XR session');
+  if (!inXr) await fail('no XR session');
   return inXr;
 }
 

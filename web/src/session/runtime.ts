@@ -267,8 +267,8 @@ export function createRoundRuntime({ preview }: RuntimeOptions): RoundController
   const xr: XRPort = {
     async preload(res) {
       if (app || disposed) return;
-      // In dev the managed emulator browser keeps a small tooling world on 2D pages; one world at a time.
-      if (import.meta.env.DEV) await import('../xr/devtools').then((m) => m.stopToolingWorld()).catch(() => undefined);
+      // In dev the managed emulator browser keeps a small tooling world on 2D pages; a script can ask to drop it.
+      if (devFlag('one_world') === '1') await import('../xr/devtools').then((m) => m.stopToolingWorld()).catch(() => undefined);
       timings.begin('chunk');
       const [world, project, portMod, me] = await Promise.all([
         import('../xr/world'),
@@ -376,7 +376,7 @@ export function createRoundRuntime({ preview }: RuntimeOptions): RoundController
       if (import.meta.env.DEV) {
         delete (globalThis as { __xrApp?: XRApp }).__xrApp;
         // The managed emulator browser needs a world on the 2D pages again.
-        if (navigator.webdriver) void import('../xr/devtools').then((m) => m.startToolingWorld()).catch(() => undefined);
+        if (navigator.webdriver && devFlag('one_world') === '1') void import('../xr/devtools').then((m) => m.startToolingWorld()).catch(() => undefined);
       }
     },
     ui,
