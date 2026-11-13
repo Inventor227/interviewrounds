@@ -102,13 +102,15 @@ pub fn start_board(st: &SessionState) -> Option<Board> {
 type StoredOp = (String, String, String, Value, Option<i64>);
 
 impl LiveBoard {
-    /// The session's board: the start board, then every stored op replayed in order (a reload after a restart
-    /// gets the same board, log and rev). `None` for a round without a board.
+    /// The session's board: the start board, then the accepted ops replayed in the order they were accepted (by
+    /// rev), so a reload after a restart gets the same board and rev. Rejected ops and dismissed suggestions are
+    /// never replayed. `None` for a round without a board.
     pub async fn load(db: &PgPool, id: Uuid, st: &SessionState) -> Option<LiveBoard> {
         let start = start_board(st)?;
         let mut session = BoardSession::new(start);
         let stored: Vec<StoredOp> = sqlx::query_as(
-            "select op_id, src, op, args, t_ms from board_ops where session_id = $1 order by id",
+            "select op_id, src, op, args, t_ms from board_ops \
+             where session_id = $1 and accepted is not false order by rev nulls last, id",
         )
         .bind(id)
         .fetch_all(db)

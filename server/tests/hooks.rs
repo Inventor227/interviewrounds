@@ -244,6 +244,24 @@ async fn board_ops_reach_the_interviewer_and_the_scribe_suggests_after_an_answer
             .await
             .unwrap();
     assert_eq!(accepted, Some(false));
+
+    // After a restart the board is rebuilt from the accepted ops only: the dismissed suggestion and the rejected
+    // edge stay out, and the rev is unchanged.
+    let handle = app.state.registry.get(&id).expect("in memory");
+    let st = handle.lock().await;
+    let reloaded = ir_server::live_board::LiveBoard::load(&app.state.db, uuid, &st)
+        .await
+        .expect("a board round");
+    let ids: Vec<&str> = reloaded
+        .session
+        .board
+        .items
+        .iter()
+        .map(|i| i.id())
+        .collect();
+    assert_eq!(ids, ["n1"]);
+    assert!(reloaded.session.board.edges.is_empty());
+    assert_eq!(reloaded.session.rev(), 1);
 }
 
 #[tokio::test]
