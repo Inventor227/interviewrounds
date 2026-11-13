@@ -105,11 +105,13 @@ export class RoundUI {
   }
 
   /** The quick card (one line, top strength, top fix) in the summary card's place, until the report is ready. */
-  showQuickCard(card: HeadsetCard): void {
+  showQuickCard(card: HeadsetCard, opts: { pending?: boolean } = {}): void {
+    const first = !this.summary.group.visible;
     this.status.hide();
     this.setChromeVisible(false);
-    this.summary.showQuick(quickCardFromHeadset(card));
-    this.sounds?.chime();
+    this.summary.showQuick(quickCardFromHeadset(card), opts.pending ?? true);
+    // One chime when the card appears; an update of the same card stays quiet.
+    if (first) this.sounds?.chime();
   }
 
   hideSummary(): void {

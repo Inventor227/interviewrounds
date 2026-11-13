@@ -21,6 +21,7 @@ import type { CreateSessionRes, Panelist, Settings } from '../shared/types';
 import { isMarker, type TransportOptions, type VoiceTransport } from '../voice/transport';
 import type { Avatar } from '../xr/avatar';
 import type { XRApp } from '../xr/world';
+import { uploadBoard } from './boardImage';
 import { syncBoard, type BoardSync } from './boardSync';
 import * as browser from './browser';
 import type { RoundControllerDeps } from './controller';
@@ -33,6 +34,8 @@ import { StageTimings } from './timings';
 
 /** Longest the mic tap waits for the avatars; slower ones appear when they are loaded. */
 export const AVATAR_WAIT_MS = 12_000;
+/** How long the start chime plays; the mic opens and the greeting is asked for only after it. */
+export const START_CUE_MS = 650;
 /** The board items are pointed at a little above the sheet (cm). */
 const POINT_ABOVE_CM = 2;
 
@@ -107,6 +110,9 @@ export function createRoundRuntime({ preview }: RuntimeOptions): RoundController
   let cues: Cues | null = null;
   let sheetToWorld: ((x: number, y: number, h: number) => { x: number; y: number; z: number }) | null = null;
   const cleanups: (() => void)[] = [];
+  const socketCleanups: (() => void)[] = [];
+  let sessionId: string | null = null;
+  let imageSent = false;
   const actionCbs = new Set<(a: UiAction) => void>();
   const gestureCbs = new Set<() => void>();
   const activityCbs = new Set<() => void>();
@@ -124,13 +130,6 @@ export function createRoundRuntime({ preview }: RuntimeOptions): RoundController
       changeCbs.add(cb);
       return () => changeCbs.delete(cb);
     },
-    async reenter() {
-      if (!app) throw new Error('The room is not loaded');
-      await app.enter();
-      room.sessionLost = false;
-      changed();
-      await app.place();
-    },
   };
   setLiveRoom(room);
 
@@ -140,29 +139,71 @@ export function createRoundRuntime({ preview }: RuntimeOptions): RoundController
   let clock = { elapsed: 0, at: 0, running: false };
   const roundClock = () => clock.elapsed + (clock.running ? (performance.now() - clock.at) / 1000 : 0);
 
+  /** Binds the board, the cues and the pointing to the current room socket (again when the session was remade). */
   const wireSocket = () => {
-    if (!socket) return;
-    if (store && !sync) {
-      sync = syncBoard(store, socket);
-      cleanups.push(() => sync?.dispose());
+    for (const c of socketCleanups.splice(0)) c();
+    sync = null;
+    cues = null;
+    const so = socket;
+    if (!so) return;
+    if (store) {
+      const sy = syncBoard(store, so);
+      sync = sy;
+      socketCleanups.push(() => sy.dispose());
     }
-    if (!cues && app) {
+    if (app) {
       const a = app;
-      cues = wireCues((name) => a.sounds.play(name), socket);
-      cleanups.push(() => cues?.dispose());
+      const cu = wireCues((name) => a.sounds.play(name), so);
+      cues = cu;
+      socketCleanups.push(() => cu.dispose());
     }
-    cleanups.push(
-      socket.on('round.state', (d) => {
+    socketCleanups.push(
+      so.on('round.state', (d) => {
         clock = { elapsed: d.elapsed_s, at: performance.now(), running: d.status === 'live' };
       }),
-      socket.on('avatar.point_at', (d) => {
+      so.on('avatar.point_at', (d) => {
         const item = store?.board.items.find((i) => i.id === d.item_id);
         if (!item || !sheetToWorld || !('x' in item)) return;
         const w = 'w' in item && typeof item.w === 'number' ? item.w : 0;
         const h = 'h' in item && typeof item.h === 'number' ? item.h : 0;
         people?.pointAt(d.panelist_id, sheetToWorld(item.x + w / 2, item.y + h / 2, POINT_ABOVE_CM));
       }),
+      // The round is over: the sheet goes to the server as a picture for the report, while the
+      // scorecard is written. Nothing waits for it.
+      so.on('round.ended', () => {
+        const canvas = board?.sheet.texture.image as HTMLCanvasElement | undefined;
+        const id = sessionId;
+        if (imageSent || !canvas || !id || typeof canvas.toBlob !== 'function') return;
+        imageSent = true;
+        void uploadBoard(canvas, (png) => api.uploadBoardImage(id, png)).then((ok) => {
+          if (import.meta.env.DEV) console.info(`[round] board image ${ok ? 'sent' : 'not sent'}`);
+        });
+      }),
     );
+  };
+
+  /** Frees everything preload built (also a half built room after a failed load), so it can be built again. */
+  const teardown = () => {
+    for (const c of socketCleanups.splice(0)) c();
+    for (const c of cleanups.splice(0)) c();
+    sync = null;
+    cues = null;
+    board?.destroy();
+    board = null;
+    store = null;
+    sheetToWorld = null;
+    relay?.destroy();
+    relay = null;
+    people?.dispose();
+    people = null;
+    port?.dispose();
+    port = null;
+    app?.destroy();
+    app = null;
+    room.hasBoard = false;
+    room.attachBoardCanvas = undefined;
+    room.debug = undefined;
+    if (import.meta.env.DEV) delete (globalThis as { __xrApp?: XRApp }).__xrApp;
   };
 
   // ---------- loading ----------
@@ -213,6 +254,7 @@ export function createRoundRuntime({ preview }: RuntimeOptions): RoundController
       sendFocus: (id) => sync?.sendFocus(id),
       sfx: { play: (n) => a.sounds.play(n) },
       pointer: relay ?? undefined,
+      ghostSettleMs: Number(devFlag('ghost_settle')) > 0 ? Number(devFlag('ghost_settle')) * 1000 : undefined,
     });
     sheetToWorld = (x, y, h) => toWorld(a.sheetAnchor, x, y, h);
     wireSocket();
@@ -286,6 +328,53 @@ export function createRoundRuntime({ preview }: RuntimeOptions): RoundController
   const xr: XRPort = {
     async preload(res) {
       if (app || disposed) return;
+      try {
+        await build(res);
+      } catch (err) {
+        // A half built room is never reused: the next try builds it again from nothing.
+        teardown();
+        throw err;
+      }
+    },
+    enter() {
+      // Synchronous on purpose: the XR request must run inside the Enter tap.
+      if (!port) return Promise.reject(new Error('The room is not loaded'));
+      return port.enter().then(() => {
+        if (!room.sessionLost) return;
+        room.sessionLost = false;
+        changed();
+      });
+    },
+    place: () => (port ? port.place() : Promise.reject(new Error('The room is not loaded'))),
+    inSession: () => preview || !!app?.world.session,
+    startCue() {
+      // The desk is down: the round begins. The chime plays with every mic still closed.
+      const a = app;
+      if (!a || settings?.sfx_volume === 0) return Promise.resolve();
+      if (cues) cues.roundStarted();
+      else a.sounds.play('start');
+      return new Promise<void>((r) => setTimeout(r, START_CUE_MS));
+    },
+    exit: () => port?.exit?.(),
+    onGesture(cb) {
+      gestureCbs.add(cb);
+      return () => gestureCbs.delete(cb);
+    },
+    dispose() {
+      if (disposed) return;
+      disposed = true;
+      teardown();
+      host.remove();
+      clearLiveRoom(room);
+      // The managed emulator browser needs a world on the 2D pages again.
+      if (import.meta.env.DEV && navigator.webdriver && devFlag('one_world') === '1') void import('../xr/devtools').then((m) => m.startToolingWorld()).catch(() => undefined);
+    },
+    ui,
+    room: { seatPoses: () => port?.room.seatPoses() ?? [] },
+  };
+
+  async function build(res: CreateSessionRes): Promise<void> {
+    {
       // In dev the managed emulator browser keeps a small tooling world on 2D pages; a script can ask to drop it.
       if (devFlag('one_world') === '1') await import('../xr/devtools').then((m) => m.stopToolingWorld()).catch(() => undefined);
       timings.begin('chunk');
@@ -370,44 +459,8 @@ export function createRoundRuntime({ preview }: RuntimeOptions): RoundController
       // A slow avatar never holds the start: it appears when it is loaded.
       await Promise.all([after(peopleReady, AVATAR_WAIT_MS), hasBoard ? loadBoard(a, res) : Promise.resolve()]);
       changed();
-    },
-    enter() {
-      // Synchronous on purpose: the XR request must run inside the Enter tap.
-      if (!port) return Promise.reject(new Error('The room is not loaded'));
-      return port.enter();
-    },
-    place: () =>
-      port
-        ? port.place().then(() => {
-            cues?.roundStarted(); // the desk is down: the round begins
-          })
-        : Promise.reject(new Error('The room is not loaded')),
-    exit: () => port?.exit?.(),
-    onGesture(cb) {
-      gestureCbs.add(cb);
-      return () => gestureCbs.delete(cb);
-    },
-    dispose() {
-      if (disposed) return;
-      disposed = true;
-      for (const c of cleanups.splice(0)) c();
-      board?.destroy();
-      relay?.destroy();
-      people?.dispose();
-      port?.dispose();
-      app?.destroy();
-      app = null;
-      host.remove();
-      clearLiveRoom(room);
-      if (import.meta.env.DEV) {
-        delete (globalThis as { __xrApp?: XRApp }).__xrApp;
-        // The managed emulator browser needs a world on the 2D pages again.
-        if (navigator.webdriver && devFlag('one_world') === '1') void import('../xr/devtools').then((m) => m.startToolingWorld()).catch(() => undefined);
-      }
-    },
-    ui,
-    room: { seatPoses: () => port?.room.seatPoses() ?? [] },
-  };
+    }
+  }
 
   // ---------- head, voices, socket ----------
 
@@ -456,6 +509,7 @@ export function createRoundRuntime({ preview }: RuntimeOptions): RoundController
 
   const makeSocket = (wsUrl: string, clientToken: string): SocketPort => {
     socket = new SessionSocket(wsUrl, clientToken);
+    sessionId = /\/ws\/session\/([^/?#]+)/.exec(wsUrl)?.[1] ?? null;
     wireSocket();
     return socket;
   };

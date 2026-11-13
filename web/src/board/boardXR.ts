@@ -46,6 +46,8 @@ export interface BoardXROptions {
    * the same board. The sheet, the wall mirror, ghosts, voice labels and sounds work the same.
    */
   pointer?: PointerAdapter & { destroy(): void };
+  /** How long an untouched suggestion waits before it settles by itself (default 4 s; tooling raises it). */
+  ghostSettleMs?: number;
 }
 
 export interface BoardXR {
@@ -137,6 +139,7 @@ export function createBoardXR(port: BoardXRPort, opts: BoardXROptions): BoardXR 
 
   const ghosts = new GhostLayer(pointer, store, kit, {
     now,
+    ...(opts.ghostSettleMs ? { settleMs: opts.ghostSettleMs } : {}),
     accept: (g) => {
       const local = store.isLocalGhost(g.op_id);
       const ok = commit({ op_id: g.op_id, src: local ? 'voice_grammar' : 'scribe', op: g.op, args: g.args } as BoardOp);

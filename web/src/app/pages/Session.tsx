@@ -101,28 +101,51 @@ function BoardCanvas(props: { room: LiveRoom }) {
   );
 }
 
+/** Where "Try again" goes after a round that never began: the same start it came from. */
+export function startHref(launch: Pick<Taken, 'input' | 'session'>): string {
+  const { input, session } = launch;
+  if (input.kind === 'resume') return `/resume/${encodeURIComponent(input.sessionId)}`;
+  if (input.kind === 'retry') return `/round/${encodeURIComponent(session.round.id)}?retry=${encodeURIComponent(input.parentSessionId)}`;
+  return input.req.mode === 'meeting' ? '/meeting/new' : `/round/${encodeURIComponent(session.round.id)}`;
+}
+
 function LiveSession(props: { launch: Taken }) {
-  const { controller, session, preview } = props.launch;
+  const { controller, preview } = props.launch;
   const { route } = useLocation();
   const [room] = useState(liveRoom);
   const [state, setState] = useState(controller.state);
+  // The session can be made again before the voices join (a voice token that ran out): links follow it.
+  const [session, setSession] = useState(props.launch.session);
   const [error, setError] = useState<{ code: string } | null>(null);
   const [note, setNote] = useState('');
+  // Whether the interviewer ever spoke: a failure before that is a round that never began.
+  const [began, setBegan] = useState(controller.state === 'live');
   const [, bump] = useState(0);
   const debug = isDebug();
   const dev = import.meta.env.DEV;
   const fakeVoice = session.panel.some((p) => p.voice.transport === 'fake');
 
   useEffect(() => {
-    const sid = encodeURIComponent(session.session_id);
+    const current = () => controller.session ?? props.launch.session;
     const offs = [
-      controller.on('state', setState),
-      controller.on('error', (e) => setError(e as { code: string })),
+      controller.on('state', (s) => {
+        setState(s);
+        if (s === 'live') setBegan(true);
+      }),
+      controller.on('session', setSession),
+      controller.on('error', (e) => {
+        // The user ended the round before it began: nothing to show, back home.
+        if ((e as { code: string }).code === 'cancelled') route('/');
+        else setError(e as { code: string });
+      }),
       // The room's own buttons: leaving this page ends the headset session and frees the room.
-      controller.on('action', (a) => route(a === 'report' ? `/report/${sid}` : `/round/${encodeURIComponent(session.round.id)}?retry=${sid}`)),
+      controller.on('action', (a) => {
+        const sid = encodeURIComponent(current().session_id);
+        route(a === 'report' ? `/report/${sid}` : `/round/${encodeURIComponent(current().round.id)}?retry=${sid}`);
+      }),
       room?.onChange(() => bump((n) => n + 1)) ?? (() => undefined),
     ];
-    if (dev) (globalThis as { __round?: unknown }).__round = { controller, room, session, timings: () => room?.timings.spans() };
+    if (dev) (globalThis as { __round?: unknown }).__round = { controller, room, get session() { return current(); }, timings: () => room?.timings.spans() };
     return () => {
       offs.forEach((o) => o());
       if (dev) delete (globalThis as { __round?: unknown }).__round;
@@ -132,41 +155,39 @@ function LiveSession(props: { launch: Taken }) {
 
   // The canvas shows on the page in the preview; in the headset only tooling needs to see it.
   const stage = useStage(room, preview || dev);
-  const retryEnter = error?.code === 'xr_enter_failed' || error?.code === 'placement_failed';
+  const sid = encodeURIComponent(session.session_id);
   const over = state === 'scoring' || state === 'summary';
-  const fatal = !!error && (state === 'failed' || FATAL.has(error.code)) && !over;
-  const lost = !!room?.sessionLost && !over && !preview;
+  const lost = !!room?.sessionLost && !over && !preview && state !== 'failed';
+  const retryEnter = !lost && state !== 'failed' && (error?.code === 'xr_enter_failed' || error?.code === 'placement_failed');
+  const failed = !over && (state === 'failed' || (!!error && FATAL.has(error.code)));
+  // Before the first word there is no round to lose and no report to see: offer the start again.
+  const neverBegan = failed && !began;
+  const lostRound = failed && began;
   const lede = preview ? 'No headset here, so this is a preview of the room on your screen.' : 'Your round runs in the headset. This page waits for you.';
+  const back = (tap: () => Promise<void>) => {
+    setNote('');
+    setError(null);
+    tap().catch(() => setNote('The headset did not start the room. Tap again.'));
+  };
 
   return (
     <Page test="session" title={props.launch.title ?? session.round.title ?? 'Live round'} lede={lede} wide={preview}>
-      <p class="note" role="status" data-test="session-state" data-state={state}>
-        {STATE_LINE[state]}
-      </p>
-      {retryEnter && !lost && (
+      {!failed && (
+        <p class="note" role="status" data-test="session-state" data-state={state}>
+          {STATE_LINE[state]}
+        </p>
+      )}
+      {retryEnter && (
         <div class="row">
-          <button
-            class="btn btn-primary btn-big"
-            data-test="enter-room"
-            onClick={() => {
-              setError(null);
-              controller.enter().catch(() => undefined);
-            }}
-          >
+          <button class="btn btn-primary btn-big" data-test="enter-room" onClick={() => back(() => controller.enter())}>
             Enter the room
           </button>
         </div>
       )}
       {lost && (
         <div class="row">
-          <button
-            class="btn btn-primary btn-big"
-            data-test="return-to-room"
-            onClick={() => {
-              setNote('');
-              room?.reenter().catch(() => setNote('The headset did not start the room. Tap again.'));
-            }}
-          >
+          {/* Through the controller: before the round began this is the start itself, later a paused round to resume. */}
+          <button class="btn btn-primary btn-big" data-test="return-to-room" onClick={() => back(() => controller.returnToRoom())}>
             Return to the room
           </button>
           <button class="btn" data-test="end-from-page" onClick={() => controller.end()}>
@@ -176,17 +197,31 @@ function LiveSession(props: { launch: Taken }) {
       )}
       {over && (
         <div class="row">
-          <a class="btn btn-primary" data-test="see-report" href={`/report/${encodeURIComponent(session.session_id)}`}>
+          <a class="btn btn-primary" data-test="see-report" href={`/report/${sid}`}>
             See full report
           </a>
         </div>
       )}
-      {fatal && (
+      {neverBegan && (
+        <div class="state state-error" role="alert" data-test="session-not-started" data-code={error?.code}>
+          <h2>Couldn't start the round</h2>
+          <p>Your interviewer did not make it into the room. Nothing was used up. Try it again.</p>
+          <div class="row">
+            <a class="btn btn-primary" href={startHref({ input: props.launch.input, session })} data-test="try-again">
+              Try again
+            </a>
+            <a class="btn" href="/">
+              Go home
+            </a>
+          </div>
+        </div>
+      )}
+      {lostRound && (
         <div class="state state-error" role="alert" data-test="session-error" data-code={error?.code}>
           <h2>We lost the round</h2>
           <p>The connection to your interviewer dropped. What you said so far is saved.</p>
           <div class="row">
-            <a class="btn btn-primary" href={`/report/${encodeURIComponent(session.session_id)}`}>
+            <a class="btn btn-primary" href={`/report/${sid}`}>
               See the report
             </a>
             <a class="btn" href="/">

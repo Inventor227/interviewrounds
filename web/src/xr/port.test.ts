@@ -131,18 +131,23 @@ describe('createXRPort', () => {
     const { app } = fakeApp();
     const card = { one_line: 'Clear on scale.', top_strength: null, top_fix: null };
     createXRPort(app).ui.showCard!(card);
-    expect(app.ui.showQuickCard).toHaveBeenCalledWith(card);
+    expect(app.ui.showQuickCard).toHaveBeenCalledWith(card, undefined);
+    createXRPort(app).ui.showCard!(card, { pending: false });
+    expect(app.ui.showQuickCard).toHaveBeenLastCalledWith(card, { pending: false });
   });
 
-  it('a_pinch_start_is_a_gesture', () => {
+  it('a_completed_pinch_is_a_gesture', () => {
     const { app, pinch } = fakeApp();
     const cb = vi.fn();
     const off = createXRPort(app).onGesture!(cb);
     pinch('start');
+    expect(cb).toHaveBeenCalledTimes(0);
     pinch('end');
+    pinch('start');
+    pinch('cancel'); // the system took the pinch away: no activation
     expect(cb).toHaveBeenCalledTimes(1);
     off();
-    pinch('start');
+    pinch('end');
     expect(cb).toHaveBeenCalledTimes(1);
   });
 });

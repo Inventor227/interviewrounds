@@ -156,7 +156,7 @@ export class SummaryCard {
   }
 
   /** The quick card: one line, the top strength and the top fix. See full report already works. */
-  showQuick(v: QuickCardView): void {
+  showQuick(v: QuickCardView, pending = true): void {
     show(this.head, false);
     show(this.bars, false);
     set(this.lead, { text: v.oneLine });
@@ -169,7 +169,8 @@ export class SummaryCard {
     };
     pick(this.strengthBox, this.strength, this.strengthQuote, v.strength);
     pick(this.fixBox, this.fix, this.fixQuote, v.fix);
-    show(this.pending, !!(v.strength || v.fix));
+    // "Almost ready" only while the full scorecard is really still on its way.
+    show(this.pending, pending && !!(v.strength || v.fix));
     show(this.retry.root, false);
     this.group.visible = true;
   }

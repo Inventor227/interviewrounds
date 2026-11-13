@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { DEG, dist, v3 } from '../math';
-import { SHEET_D, sheetPoint, userPoint } from '../seats';
+import { seatLayout, SHEET_D, sheetPoint, userPoint } from '../seats';
 import { BRIEF_MIN_FONT_CM } from './briefCard';
 import { CAPTION_MAX_CHARS, CAPTIONS_MIN_FONT_CM, captionLines } from './captions';
 import { layoutBriefBeyondSheet, layoutDesk } from './layout';
@@ -38,7 +38,24 @@ describe('readability and reach', () => {
     expect(p.pos.y).toBeGreaterThan(sheetPoint(desk, 0, SHEET_D, 0).y);
     const deg = Math.atan(BRIEF_MIN_FONT_CM / 100 / dist(eye, p.pos)) / DEG;
     expect(deg).toBeGreaterThanOrEqual(MIN_DEG);
-    expect(p.tilt).toBeLessThan(0); // leans back to face the eyes
+    expect(p.tilt).toBeLessThan(0); // leans back
+  });
+
+  it('the_brief_card_beyond_the_sheet_stays_low_and_clear_of_every_seat', () => {
+    const p = layoutBriefBeyondSheet(desk);
+    const far = sheetPoint(desk, 0, SHEET_D, 0);
+    // Low: its top edge is under the seated hands' height plus a hand (the clips rest hands on the desk top).
+    const top = p.pos.y + 0.06 * Math.cos(-p.tilt);
+    expect(top).toBeLessThan(far.y + 0.09);
+    for (const n of [1, 2, 3] as const) {
+      for (const seat of seatLayout(n, desk)) {
+        // Hands and chest take about 0.22 m to each side of a seat's centre line.
+        const left = p.pos.x - 0.15;
+        const right = p.pos.x + 0.15;
+        const clear = right < seat.pos.x - 0.1 || left > seat.pos.x + 0.22;
+        expect(clear, `seat ${seat.seat} of ${n}`).toBe(true);
+      }
+    }
   });
 
   it('summary_card_buttons_are_in_direct_touch_reach_below_the_eyes', () => {

@@ -18,7 +18,7 @@ export interface XRAppLike {
   ui: {
     setRoundState(s: RoundUIState): void;
     showSummary(r: Report): void;
-    showQuickCard(c: HeadsetCard): void;
+    showQuickCard(c: HeadsetCard, opts?: { pending?: boolean }): void;
     setStatus(stage: StatusStage, pct?: number | null): void;
     showStatusText(text: string, pct?: number | null): void;
     hideStatus(): void;
@@ -48,7 +48,8 @@ export function createXRPort(app: XRAppLike): XRPort & { dispose(): void } {
     enter: () => app.enter(),
     place: () => app.place().then(() => undefined),
     exit: () => app.exit(),
-    onGesture: (cb: () => void) => app.onSelect?.((_hand, phase) => phase === 'start' && cb()) ?? (() => {}),
+    // WebXR grants user activation on `select` (a completed pinch), which is when `end` arrives; not on its start.
+    onGesture: (cb: () => void) => app.onSelect?.((_hand, phase) => phase === 'end' && cb()) ?? (() => {}),
     ui: {
       setRoundState(s: RoundStatePayload & { controller: ControllerState }) {
         const status = s.controller === 'paused' ? 'paused' : s.status;
@@ -61,7 +62,7 @@ export function createXRPort(app: XRAppLike): XRPort & { dispose(): void } {
         });
       },
       showSummary: (r: Report) => app.ui.showSummary(r),
-      showCard: (c: HeadsetCard) => app.ui.showQuickCard(c),
+      showCard: (c: HeadsetCard, opts?: { pending?: boolean }) => app.ui.showQuickCard(c, opts),
       setStatus(text: string | null, progress?: number) {
         if (text === null) app.ui.hideStatus();
         else if (HEAR_LINE.test(text)) app.ui.setStatus('hear');
