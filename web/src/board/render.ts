@@ -71,7 +71,7 @@ type Ctx = CanvasRenderingContext2D;
 
 // ---------- small drawing helpers (all in pixels) ----------
 
-function roundRect(ctx: Ctx, x: number, y: number, w: number, h: number, r: number): void {
+export function roundRect(ctx: Ctx, x: number, y: number, w: number, h: number, r: number): void {
   const rr = Math.max(0, Math.min(r, w / 2, h / 2));
   ctx.beginPath();
   ctx.moveTo(x + rr, y);
@@ -82,7 +82,7 @@ function roundRect(ctx: Ctx, x: number, y: number, w: number, h: number, r: numb
   ctx.closePath();
 }
 
-const font = (px: number, weight = 400, style = '') => `${style ? style + ' ' : ''}${weight} ${Math.max(1, Math.round(px * 10) / 10)}px ${FONT}`;
+export const font = (px: number, weight = 400, style = '') => `${style ? style + ' ' : ''}${weight} ${Math.max(1, Math.round(px * 10) / 10)}px ${FONT}`;
 
 const wrapCache = new Map<string, string[]>();
 /** Bumped when web fonts finish loading: text measured with a fallback font is stale. */
@@ -131,14 +131,14 @@ function wrapUncached(ctx: Ctx, text: string, maxW: number, maxLines: number): s
   return lines.map((l) => (ctx.measureText(l).width > maxW ? ellipsize(ctx, l, maxW) : l));
 }
 
-function ellipsize(ctx: Ctx, text: string, maxW: number): string {
+export function ellipsize(ctx: Ctx, text: string, maxW: number): string {
   if (ctx.measureText(text).width <= maxW) return text;
   let s = text;
   while (s.length > 1 && ctx.measureText(`${s}…`).width > maxW) s = s.slice(0, -1);
   return `${s.trimEnd()}…`;
 }
 
-function withAlpha(hex: string, a: number): string {
+export function withAlpha(hex: string, a: number): string {
   const n = parseInt(hex.slice(1), 16);
   return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${a})`;
 }
