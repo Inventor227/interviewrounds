@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { captionTail } from './captions';
+import { captionLines } from './captions';
 import { layoutDesk } from './layout';
 import { clock } from './style';
 import { summaryFromReport } from './summaryCard';
@@ -11,12 +11,12 @@ describe('round ui helpers', () => {
     expect(clock(761.9)).toBe('12:41');
   });
 
-  it('caption_tail_keeps_the_latest_words', () => {
+  it('captions_roll_older_rows_off_the_top', () => {
     const long = Array.from({ length: 60 }, (_, i) => `w${i}`).join(' ');
-    const t = captionTail(long, 40);
-    expect(t.length).toBeLessThanOrEqual(41);
-    expect(t.endsWith('w59')).toBe(true);
-    expect(t.startsWith('…')).toBe(true);
+    const rows = captionLines(long);
+    expect(rows).toHaveLength(2);
+    expect(rows[1]!.endsWith('w59')).toBe(true);
+    expect(rows.join(' ')).not.toContain('w0 ');
   });
 
   it('summary_from_report_takes_top_four_by_weight', () => {
@@ -43,6 +43,6 @@ describe('round ui helpers', () => {
     expect(p.roundBar.pos.z).toBeGreaterThan(-0.4); // nearer the user than the sheet's near edge
     expect(p.roundBar.tilt).toBeCloseTo((-55 * Math.PI) / 180, 6); // 35° up from the desk
     expect(p.brief.pos.x).toBeLessThan(0);
-    expect(p.summary.pos.y).toBeGreaterThan(0.74 + 0.3);
+    expect(p.summary.pos.y).toBeGreaterThan(0.74 + 0.1);
   });
 });

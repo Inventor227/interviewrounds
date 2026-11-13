@@ -25,11 +25,12 @@ export function layoutDesk(desk: DeskFrame): Record<PanelName, PanelPose> {
   const f = forwardOf(desk.yaw);
   const r = rightOf(desk.yaw);
   const o = v3(desk.origin.x, desk.deskY, desk.origin.z);
-  // Cards that stand before the eyes measure from the real head when placement saw it.
-  const user = desk.head ? v3(desk.head.x, desk.deskY, desk.head.z) : userPoint(desk);
-  const standing = (ahead: number, up: number, tiltDeg: number): PanelPose => {
-    const p = addScaled(user, f, ahead);
-    return { pos: v3(p.x, desk.deskY + up, p.z), yaw: desk.yaw, tilt: -tiltDeg * DEG };
+  // Cards measure from the real head when placement saw it, else from a seated eye 0.45 m above the desk.
+  const eye = desk.head ? v3(desk.head.x, desk.head.y, desk.head.z) : v3(userPoint(desk).x, desk.deskY + 0.45, userPoint(desk).z);
+  /** A card `ahead` metres in front of the eyes (horizontally) and `below` metres under them, tilted to face them. */
+  const facingEyes = (ahead: number, below: number): PanelPose => {
+    const p = addScaled(eye, f, ahead);
+    return { pos: v3(p.x, eye.y - below, p.z), yaw: desk.yaw, tilt: -Math.atan2(below, ahead) };
   };
   const bar = addScaled(addScaled(o, r, 0.17), f, -0.08);
   return {
@@ -39,10 +40,12 @@ export function layoutDesk(desk: DeskFrame): Record<PanelName, PanelPose> {
       yaw: desk.yaw,
       tilt: -(90 * DEG - SHEET_TILT),
     },
-    // Close enough that 1.5 cm type reads like 1.1 cm caps at arm's length; just under the eye line.
-    status: standing(0.56, 0.36, 10),
-    summary: standing(0.56, 0.34, 10),
-    captions: { ...standing(0.66, 0.1, 25) },
+    // Cards with buttons sit in direct touch reach (about 0.44 m, below the eyes), never in the 0.5 to 0.8 m zone
+    // where poke and ray get confused (Meta hands UI guidance).
+    status: facingEyes(0.36, 0.25),
+    summary: facingEyes(0.36, 0.25),
+    // Captions about 1 m away, just below the lead interviewer's chin (Meta caption guidance).
+    captions: facingEyes(0.96, 0.2),
   };
 }
 
@@ -51,6 +54,12 @@ export function layoutHeadStatus(head: HeadPose): PanelPose {
   // Low in view, where the eyes go when told to touch the desk; tilted to face the eyes.
   const p = addScaled(head.pos, forwardOf(head.yaw), 0.6);
   return { pos: v3(p.x, head.pos.y - 0.26, p.z), yaw: head.yaw, tilt: -24 * DEG };
+}
+
+/** A hint line: 0.6 m ahead, a little under the eye line. */
+export function layoutHint(head: HeadPose): PanelPose {
+  const p = addScaled(head.pos, forwardOf(head.yaw), 0.6);
+  return { pos: v3(p.x, head.pos.y - 0.1, p.z), yaw: head.yaw, tilt: -9 * DEG };
 }
 
 /** Camera-local poses for the preview HUD, for a camera with this aspect and vertical field of view. */

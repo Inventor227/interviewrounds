@@ -8,6 +8,9 @@ import type { RoundAction, RoundUIState } from './types';
 
 const PAD = 1.2;
 const GAP = 1.2;
+/** Gap between adjacent buttons (Meta: at least 12 mm) and the smallest text on the bar. */
+export const ROUND_BAR_GAP_CM = GAP;
+export const ROUND_BAR_MIN_FONT_CM = TEXT_SECONDARY;
 const W = { timer: 10, mute: 8.5, pause: 8.5, cc: 6, end: 7.5 };
 export const ROUND_BAR_WIDTH_CM = W.timer + W.mute + W.pause + W.cc + W.end + GAP * 4 + PAD * 2;
 export const END_HOLD_MS = 1000;

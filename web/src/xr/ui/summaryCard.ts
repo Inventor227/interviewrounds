@@ -20,13 +20,16 @@ import {
   set,
   show,
   text,
-  TEXT_BODY,
-  TEXT_SECONDARY,
   type Button,
 } from './style';
 import type { RoundAction, SummaryView } from './types';
 
-export const SUMMARY_WIDTH_CM = 50;
+// Sized for direct touch at about 0.44 m: 1 cm type is 1.3°, buttons 5 cm tall with 1.5 cm between them.
+export const SUMMARY_WIDTH_CM = 40;
+const BODY_CM = 1.25;
+const SMALL_CM = 1.0;
+export const SUMMARY_MIN_FONT_CM = SMALL_CM;
+export const SUMMARY_BUTTON_GAP_CM = 1.5;
 const BARS = 4;
 
 const VERDICT_TEXT: Record<VerdictLabel, string> = {
@@ -70,21 +73,21 @@ export class SummaryCard {
 
   constructor(emit: (a: RoundAction) => void) {
     this.group.name = 'summary-card';
-    const root = panel({ width: SUMMARY_WIDTH_CM, padding: 2.2, gap: 1.4, backgroundColor: GLASS_SOLID });
+    const root = panel({ width: SUMMARY_WIDTH_CM, padding: 1.8, gap: 1.1, backgroundColor: GLASS_SOLID });
     const head = row({ gap: 1.2 });
     this.chip = row({ paddingX: 1.4, paddingY: 0.7, borderRadius: 1.4, backgroundColor: ACCENT });
-    this.chipText = text('', { fontSize: 1.8, fontWeight: 'semi-bold' });
+    this.chipText = text('', { fontSize: 1.5, fontWeight: 'semi-bold' });
     this.chip.add(this.chipText);
-    this.chipNote = text('', { fontSize: TEXT_SECONDARY, color: INK_MUTED });
+    this.chipNote = text('', { fontSize: SMALL_CM, color: INK_MUTED });
     head.add(this.chip, this.chipNote);
     root.add(head);
 
     const bars = col({ gap: 0.9, width: '100%' });
     for (let i = 0; i < BARS; i++) {
       const r = row({ gap: 1.2, width: '100%' });
-      const name = text('', { fontSize: TEXT_BODY, width: 20, wordBreak: 'keep-all' });
-      const b = bar(17);
-      const score = text('', { fontSize: TEXT_SECONDARY, color: INK_MUTED, width: 4 });
+      const name = text('', { fontSize: BODY_CM, width: 15, wordBreak: 'keep-all' });
+      const b = bar(15);
+      const score = text('', { fontSize: SMALL_CM, color: INK_MUTED, width: 3.5 });
       r.add(name, b.root, score);
       bars.add(r);
       this.rows.push({ root: r, name, bar: b, score });
@@ -93,8 +96,8 @@ export class SummaryCard {
 
     const point = (label: string) => {
       const box = col({ gap: 0.3, width: '100%' });
-      const l = text(label, { fontSize: TEXT_SECONDARY, color: INK_MUTED, fontWeight: 'medium' });
-      const t = text('', { fontSize: TEXT_BODY, color: INK, lineHeight: '125%' });
+      const l = text(label, { fontSize: SMALL_CM, color: INK_MUTED, fontWeight: 'medium' });
+      const t = text('', { fontSize: BODY_CM, color: INK, lineHeight: '125%' });
       box.add(l, t);
       root.add(box);
       return { box, t };
@@ -106,9 +109,9 @@ export class SummaryCard {
     this.fix = f.t;
     this.fixBox = f.box;
 
-    const actions = row({ gap: 1.5, marginTop: 0.6 });
-    this.retry = button('Retry this answer', { width: 21, height: 5, primary: true, onClick: () => emit('retry') });
-    const report = button('See full report', { width: 21, height: 5, onClick: () => emit('report') });
+    const actions = row({ gap: SUMMARY_BUTTON_GAP_CM, marginTop: 0.4 });
+    this.retry = button('Retry this answer', { width: 17.4, height: 5, fontSize: 1.3, primary: true, onClick: () => emit('retry') });
+    const report = button('See full report', { width: 17.4, height: 5, fontSize: 1.3, onClick: () => emit('report') });
     actions.add(this.retry.root, report.root);
     root.add(actions);
 

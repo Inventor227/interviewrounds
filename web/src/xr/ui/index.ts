@@ -9,7 +9,8 @@ import type { DeskFrame } from '../seats';
 import type { Sounds } from '../sound';
 import { BriefCard } from './briefCard';
 import { Captions } from './captions';
-import { layoutDesk, layoutHeadStatus, layoutHud, type PanelName, type PanelPose } from './layout';
+import { Hint } from './hint';
+import { layoutDesk, layoutHeadStatus, layoutHint, layoutHud, type PanelName, type PanelPose } from './layout';
 import { RoundBar } from './roundBar';
 import { StatusCard } from './statusCard';
 import { SummaryCard, summaryFromReport } from './summaryCard';
@@ -27,7 +28,8 @@ function apply(o: Object3D, p: PanelPose): void {
 export class RoundUI {
   readonly roundBar: RoundBar;
   readonly brief = new BriefCard();
-  readonly status = new StatusCard();
+  readonly status: StatusCard;
+  readonly hint = new Hint();
   readonly summary: SummaryCard;
   readonly captions = new Captions();
   private readonly listeners = new Set<(a: RoundAction) => void>();
@@ -38,6 +40,7 @@ export class RoundUI {
   constructor(private readonly sounds?: Sounds) {
     const emit = (a: RoundAction) => this.emit(a);
     this.roundBar = new RoundBar(emit);
+    this.status = new StatusCard(emit);
     this.summary = new SummaryCard(emit);
     this.setChromeVisible(false);
   }
@@ -137,13 +140,28 @@ export class RoundUI {
     for (const [k, p] of Object.entries(poses) as [PanelName, PanelPose][]) apply(g[k], p);
   }
 
+  /** A one-line hint for a few seconds, placed just below the eye line (layoutHint first). */
+  showHint(line: string, nowMs: number, forMs = 6000): void {
+    this.hint.show(line, nowMs, forMs);
+  }
+
+  layoutHint(head: HeadPose): void {
+    apply(this.hint.group, layoutHint(head));
+  }
+
   /** dt seconds. */
   update(dt: number, nowMs: number): void {
     this.roundBar.tick(dt, nowMs);
+    this.hint.tick(nowMs);
   }
 
-  private emit(a: RoundAction): void {
-    this.sounds?.click();
+  /** The system took focus (menu, headset off, session ended): pause a live round so the Resume card shows. */
+  systemPause(): void {
+    if (this.state?.status === 'live') this.emit('pause', false);
+  }
+
+  private emit(a: RoundAction, sound = true): void {
+    if (sound) this.sounds?.click();
     if (a === 'captions') {
       const on = !this.captions.isEnabled;
       this.captions.setEnabled(on);
