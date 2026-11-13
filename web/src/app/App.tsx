@@ -1,6 +1,6 @@
 import type { ComponentChildren } from 'preact';
 import { useEffect, useRef, useState } from 'preact/hooks';
-import { LocationProvider, Route, Router, useLocation } from 'preact-iso';
+import { lazy, LocationProvider, Route, Router, useLocation } from 'preact-iso';
 import type { ImmersiveHandle } from '../xr/entry';
 
 // App shell: routes and a themed placeholder per page. Real pages replace the
@@ -17,6 +17,9 @@ export const ROUTES = {
   settings: '/settings',
   pricing: '/pricing',
 } as const;
+
+// Dev only: the board with a mouse (web/src/board), for development and screenshots.
+const DevBoard = lazy(() => import('../board/DevBoard'));
 
 const ROLE_NAMES: Record<string, string> = { sde: 'Software Engineer', pm: 'Product Manager' };
 
@@ -210,6 +213,7 @@ export function App() {
             <Route path={ROUTES.history} component={History} />
             <Route path={ROUTES.settings} component={SettingsPage} />
             <Route path={ROUTES.pricing} component={Pricing} />
+            {import.meta.env.DEV ? [<Route key="dev-board" path="/dev/board" component={DevBoard} />] : []}
             <Route default component={NotFound} />
           </Router>
         </main>
