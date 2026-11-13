@@ -4,8 +4,9 @@
 //
 // It ties together the session socket, the panel of voice transports, the XR app, the avatars,
 // the head sampler and the board, and owns the browser's side of the conversation rules:
-// - Start (inside the user's Start click): mic → AudioContext.resume() → create session →
-//   enter XR → desk placement → voices up → `[event: start]`.
+// - Two taps: prepare() in the mic tap (mic → AudioContext.resume() → create, retry or resume the
+//   session → preload the room), then enter() in the Enter tap (enter XR as the first await →
+//   desk placement → voices up → `[event: start]`). start() runs both, for tests and the preview.
 // - `[event: silence_check]` once per silence: nobody speaking and no board activity for the
 //   round's silence_wait_seconds.
 // - `[event: long_answer]` once per candidate turn (segments with gaps under 1.2 s merge into
@@ -29,6 +30,7 @@ import {
   type EndReason,
   type Panelist,
   type RoundStatePayload,
+  type VoiceChoice,
   type VoiceMode,
 } from '../shared/types';
 import { PanelController } from '../voice/panel';
@@ -81,6 +83,10 @@ const PHASE_TIME_SLACK_S = 5;
 
 export type SessionErrorCode =
   | 'xr_enter_failed'
+  /** The room (XR world) could not be loaded during prepare(). */
+  | 'room_load_failed'
+  /** enter() was called before prepare() finished. */
+  | 'not_prepared'
   | 'placement_failed'
   | 'already_started'
   /** The room socket could not connect, or has been reconnecting for a while. */
@@ -101,6 +107,24 @@ export class SessionError extends Error {
 }
 
 export type RoundError = VoiceError | ApiError | SessionError;
+
+/** What prepare() sets up: a new session, a retry of a report's weakest answer, or a resume. */
+export type PrepareInput =
+  | { kind: 'new'; req: CreateSessionReq }
+  | { kind: 'retry'; parentSessionId: string; voice: VoiceChoice }
+  | { kind: 'resume'; sessionId: string; voice: VoiceChoice };
+
+/** The request a retried or resumed session stands for (mode drives the long answer rule). */
+function reqFor(res: CreateSessionRes, voice: VoiceChoice): CreateSessionReq {
+  return {
+    mode: res.round.round_type === 'meeting' ? 'meeting' : 'interview',
+    round_id: res.round.id,
+    length: res.round.length,
+    level: 'mid',
+    style: 'neutral',
+    voice,
+  };
+}
 
 export interface TranscriptLine {
   panelistId: string;
@@ -158,6 +182,9 @@ export class RoundController {
   private socket: SocketPort | null = null;
   private panel: PanelController | null = null;
   private preMic: MediaStream | null = null;
+  private preparing = false;
+  /** A session a failed prepare() already got; the next prepare() reuses it. */
+  private preparedRes: CreateSessionRes | null = null;
 
   // voices
   private transportSeq = 0;
@@ -231,44 +258,90 @@ export class RoundController {
   }
 
   /**
-   * Starts a round. Call it from the Start click: the mic prompt and entering XR both need the
-   * user's gesture, and Quest Browser cannot ask for the mic once immersive.
+   * Starts a round in one go: prepare() then enter(). Tests and the 2D preview use it. On a
+   * headset, call prepare() from the mic tap and enter() from the Enter tap instead, so the
+   * network and the room loading never use up the activation that entering XR needs.
    */
   async start(req: CreateSessionReq): Promise<void> {
-    if (this.st !== 'idle' || this.req) throw new SessionError('already_started', 'This round has already started');
-    this.req = req;
-    const { media, api } = this.deps;
-
-    try {
-      this.preMic = await media.getMic();
-    } catch (err) {
-      const e = micError(err);
-      if (req.voice === 'fish') {
-        this.req = null;
-        this.emitError(e);
-        throw e;
-      }
-      // Typed turns work without a mic.
-    }
-    if (this.disposed) return this.releaseMic();
-    // Not awaited: resume() can stay pending until the page has activation, and must not hold up
-    // the start. The voices retry playback on the next tap (unlockAudio).
-    void media.resumeAudio().catch(() => undefined);
-
-    let res: CreateSessionRes;
-    try {
-      res = await api.createSession(req);
-    } catch (err) {
-      this.releaseMic();
-      this.req = null;
-      this.emitError(err as ApiError);
-      throw err;
-    }
-    if (this.disposed) return this.releaseMic();
-    this.res = res;
-    this.openSocket(res);
-    this.watchPage();
+    await this.prepare({ kind: 'new', req });
+    if (this.disposed || !this.res) return;
     await this.enter();
+  }
+
+  /**
+   * Phase A, from the mic tap: the mic (or the stream the page already holds), audio unlock, the
+   * session (create, retry or resume) and the room preload. Leaves the controller idle and
+   * prepared. When it fails, it can be called again: a session it already got is reused.
+   */
+  async prepare(input: PrepareInput, opts: { mic?: MediaStream | null } = {}): Promise<void> {
+    if (this.st !== 'idle' || this.req || this.preparing) {
+      throw new SessionError('already_started', 'This round has already started');
+    }
+    this.preparing = true;
+    const { media, api, xr } = this.deps;
+    const voice = input.kind === 'new' ? input.req.voice : input.voice;
+    try {
+      if (opts.mic) {
+        this.preMic = opts.mic;
+      } else {
+        try {
+          this.preMic = await media.getMic();
+        } catch (err) {
+          const e = micError(err);
+          if (voice === 'fish') {
+            this.emitError(e);
+            throw e;
+          }
+          // Typed turns work without a mic.
+        }
+      }
+      if (this.disposed) return this.releaseMic();
+      // Not awaited: resume() can stay pending until the page has activation, and must not hold up
+      // the start. The voices retry playback on the next tap (unlockAudio).
+      void media.resumeAudio().catch(() => undefined);
+
+      let res = this.preparedRes;
+      if (!res) {
+        try {
+          res =
+            input.kind === 'new'
+              ? await api.createSession(input.req)
+              : input.kind === 'retry'
+                ? await api.retry(input.parentSessionId)
+                : await api.resumeSession(input.sessionId);
+        } catch (err) {
+          this.releaseMic();
+          this.emitError(err as ApiError);
+          throw err;
+        }
+        this.preparedRes = res;
+      }
+      if (this.disposed) return this.releaseMic();
+
+      if (xr.preload) {
+        try {
+          await xr.preload();
+        } catch (err) {
+          this.releaseMic();
+          const e = new SessionError('room_load_failed', 'Could not load the room', err);
+          this.emitError(e);
+          throw e;
+        }
+        if (this.disposed) return this.releaseMic();
+      }
+
+      this.req = input.kind === 'new' ? input.req : reqFor(res, voice);
+      this.res = res;
+      this.openSocket(res);
+      this.watchPage();
+    } finally {
+      this.preparing = false;
+    }
+  }
+
+  /** True once prepare() has finished and enter() can run. */
+  get prepared(): boolean {
+    return !!this.res && this.st === 'idle';
   }
 
   /**
@@ -276,11 +349,13 @@ export class RoundController {
    * from a new tap when entering or placement failed: it resumes at the step that failed.
    */
   async enter(): Promise<void> {
+    if (this.disposed) return;
     const res = this.res;
-    if (!res || this.disposed) return;
+    if (!res) throw new SessionError('not_prepared', 'Call prepare() first');
     const { xr, api } = this.deps;
 
     if (this.st === 'idle') {
+      // Phase B: the room request is the first await, so it runs inside the user's tap.
       try {
         await xr.enter();
       } catch (err) {

@@ -38,7 +38,12 @@ export interface SeatPoseLike {
 
 /** The XR app (room, placement, round UI). */
 export interface XRPort {
-  /** Enters the immersive session. Needs the user activation of the Start click. */
+  /**
+   * Loads the room (code, world, renderer) without requesting an XR session, so enter() has
+   * nothing left to load. Called by prepare(), in the mic tap.
+   */
+  preload?(): Promise<void>;
+  /** Enters the immersive session. Needs the user activation of the Enter tap: call requestSession first. */
   enter(): Promise<void>;
   /** Resolves once the desk is placed (dwell or fallback). */
   place(): Promise<void>;
@@ -100,4 +105,4 @@ export interface VisibilityPort {
   removeEventListener(type: 'visibilitychange', cb: () => void): void;
 }
 
-export type ApiPort = Pick<Api, 'createSession' | 'joinPanelist' | 'endSession' | 'report'>;
+export type ApiPort = Pick<Api, 'createSession' | 'retry' | 'resumeSession' | 'joinPanelist' | 'endSession' | 'report'>;
