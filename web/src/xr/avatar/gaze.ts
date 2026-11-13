@@ -32,6 +32,8 @@ const SWAY_YAW = 1.2 * DEG;
 const SWAY_PITCH = 0.7 * DEG;
 /** The thinking look: up and to the avatar's left, for 0.6 s. */
 export const THINK_LOOK = { yaw: 18 * DEG, pitch: 16 * DEG, seconds: 0.6 };
+/** Targets further round than this count as behind: hold the side they went round on (no flipping at ±180°). */
+const BEHIND = 100 * DEG;
 /** Jumps of the eye target above this count as big shifts (the avatar may blink with them). */
 const BIG_SHIFT = 8 * DEG;
 
@@ -119,6 +121,8 @@ export class GazeController {
   private glanceWait = 0;
   private lastEyeYaw = 0;
   private lastEyePitch = 0;
+  /** Side of the last target in front (+1 toward +X, -1 toward -X). */
+  private side = 1;
 
   constructor(private readonly rng: Rng) {
     this.sacWait = nextSaccadeMs(rng) / 1000;
@@ -147,16 +151,18 @@ export class GazeController {
    */
   update(dt: number, target: Angles, head: Angles = target): void {
     this.schedule(dt);
+    const ty = this.holdSide(target.yaw);
+    const hy0 = head === target ? ty : this.holdSide(head.yaw);
     const gy = this.glanceLeft > 0 ? this.glanceYaw : 0;
     const gp = this.glanceLeft > 0 ? this.glancePitch : 0;
     const gh = this.glanceLeft > 0 ? this.glanceHead : 0;
 
-    const hy = clamp(head.yaw + gy * gh, -HEAD_YAW_MAX, HEAD_YAW_MAX);
+    const hy = clamp(hy0 + gy * gh, -HEAD_YAW_MAX, HEAD_YAW_MAX);
     const hp = clamp(head.pitch + gp * gh, -HEAD_PITCH_MAX, HEAD_PITCH_MAX);
     this.headYaw = smoothDamp(this.headYaw, hy, this.vel, 0, HEAD_SMOOTH_S, dt);
     this.headPitch = smoothDamp(this.headPitch, hp, this.vel, 1, HEAD_SMOOTH_S, dt);
 
-    let eyeY = target.yaw + gy + this.sacYaw;
+    let eyeY = ty + gy + this.sacYaw;
     let eyeP = target.pitch + gp + this.sacPitch;
     this.bigShift = Math.hypot(eyeY - this.lastEyeYaw, eyeP - this.lastEyePitch) > BIG_SHIFT;
     this.lastEyeYaw = eyeY;
@@ -167,6 +173,15 @@ export class GazeController {
     const k = approach(dt, EYE_TAU_S);
     this.eyeYaw += (eyeY - this.eyeYaw) * k;
     this.eyePitch += (eyeP - this.eyePitch) * k;
+  }
+
+  /** Folds a yaw from behind onto the side it was last seen on. */
+  private holdSide(yaw: number): number {
+    if (Math.abs(yaw) <= BEHIND) {
+      if (Math.abs(yaw) > 1 * DEG) this.side = yaw > 0 ? 1 : -1;
+      return yaw;
+    }
+    return this.side * BEHIND;
   }
 
   private nextGlanceWait(): number {

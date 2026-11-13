@@ -105,4 +105,24 @@ describe('gaze', () => {
     // 1.5 s in: back on the user (within micro-saccade range).
     expect(Math.hypot(g.eyeYaw, g.eyePitch)).toBeLessThan(2.5 * DEG);
   });
+
+  it('gaze_target_behind_holds_one_side', () => {
+    const g = new GazeController(seededRng(8));
+    g.saccadesEnabled = false;
+    // Come round from the left, then jitter across the back (atan2 flips between +179 and -179 degrees).
+    for (let i = 0; i < 120; i++) g.update(1 / 60, { yaw: 95 * DEG, pitch: 0 });
+    let flips = 0;
+    let shifts = 0;
+    let last = g.headYaw;
+    for (let i = 0; i < 240; i++) {
+      const yaw = (i % 2 ? 179 : -179) * DEG;
+      g.update(1 / 60, { yaw, pitch: 0 });
+      if (Math.sign(g.headYaw) !== Math.sign(last)) flips++;
+      if (g.bigShift) shifts++;
+      last = g.headYaw;
+    }
+    expect(flips).toBe(0);
+    expect(shifts).toBe(0);
+    expect(g.headYaw).toBeCloseTo(HEAD_YAW_MAX, 3);
+  });
 });
