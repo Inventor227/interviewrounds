@@ -215,7 +215,7 @@ export function App() {
             <Route path={ROUTES.history} component={History} />
             <Route path={ROUTES.settings} component={SettingsPage} />
             <Route path={ROUTES.pricing} component={Pricing} />
-            {AvatarDev && <Route path={ROUTES.devAvatar} component={AvatarDev} />}
+            {AvatarDev ? [<Route key="dev-avatar" path={ROUTES.devAvatar} component={AvatarDev} />] : []}
             <Route default component={NotFound} />
           </Router>
         </main>
