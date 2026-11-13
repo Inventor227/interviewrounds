@@ -163,18 +163,22 @@ export function createRoundRuntime({ preview }: RuntimeOptions): RoundController
         const c = itemCentre(store?.board.items.find((i) => i.id === d.item_id));
         if (c && sheetToWorld) people?.pointAt(d.panelist_id, sheetToWorld(c.x, c.y, POINT_ABOVE_CM));
       }),
-      // The round is over: the sheet goes to the server as a picture for the report, while the
-      // scorecard is written. Nothing waits for it.
-      so.on('round.ended', () => {
-        const canvas = board?.sheet.texture.image as HTMLCanvasElement | undefined;
-        const id = sessionId;
-        if (imageSent || !canvas || !id || typeof canvas.toBlob !== 'function') return;
-        imageSent = true;
-        void uploadBoard(canvas, (png) => api.uploadBoardImage(id, png)).then((ok) => {
-          if (import.meta.env.DEV) console.info(`[round] board image ${ok ? 'sent' : 'not sent'}`);
-        });
-      }),
+      so.on('round.ended', () => sendBoardImage()),
     );
+  };
+
+  /**
+   * The sheet goes to the server as a picture for the report, once, when the round starts to end
+   * (the server takes it while the round is live, paused or being scored). Nothing waits for it.
+   */
+  const sendBoardImage = () => {
+    const canvas = board?.sheet.texture.image as HTMLCanvasElement | undefined;
+    const id = sessionId;
+    if (imageSent || !canvas || !id || typeof canvas.toBlob !== 'function') return;
+    imageSent = true;
+    void uploadBoard(canvas, (png) => api.uploadBoardImage(id, png)).then((ok) => {
+      if (import.meta.env.DEV) console.info(`[round] board image ${ok ? 'sent' : 'not sent'}`);
+    });
   };
 
   /** Frees everything preload built (also a half built room after a failed load), so it can be built again. */
@@ -522,6 +526,7 @@ export function createRoundRuntime({ preview }: RuntimeOptions): RoundController
         activityCbs.add(cb);
         return () => activityCbs.delete(cb);
       },
+      roundEnding: () => sendBoardImage(),
     },
     head,
     timings,

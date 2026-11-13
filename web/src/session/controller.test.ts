@@ -203,7 +203,7 @@ function harness(
     },
     xr,
     avatars: avatarFor,
-    board: { onActivity: (cb) => (boardCbs.add(cb), () => boardCbs.delete(cb)) },
+    board: { onActivity: (cb) => (boardCbs.add(cb), () => boardCbs.delete(cb)), roundEnding: () => void log.push('board.roundEnding') },
     head,
     media,
     visibility,
@@ -533,6 +533,8 @@ describe('RoundController', () => {
     h.ui('end');
     expect(h.ctl.state).toBe('ending');
     expect(h.socket.of('ui.event')).toEqual([{ kind: 'end' }]);
+    // The board is told while the round is still live on the server: its picture goes out now.
+    expect(count(h.log, 'board.roundEnding')).toBe(1);
     expect(t.sentEvents).toEqual(['[event: ending]']);
 
     t.mode('speaking');

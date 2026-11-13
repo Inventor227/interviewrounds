@@ -1262,6 +1262,7 @@ export class RoundController {
     this.clearTimers();
     this.clearWatchdog();
     this.endLongAnswerMute();
+    this.deps.board?.roundEnding?.();
     this.setState('ending');
     if (!this.voicesUp) {
       void this.finishEnding(); // nobody to say goodbye yet

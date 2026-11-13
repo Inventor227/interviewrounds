@@ -93,6 +93,12 @@ export interface AvatarPort {
 /** The board: the controller only needs to know the user is working on it. */
 export interface BoardPort {
   onActivity(cb: () => void): () => void;
+  /**
+   * The round is ending (the user's End, the interviewer's own close, or the server's): the last
+   * moment the sheet is what the round saw. The board sends its picture for the report now, while
+   * the server still takes it.
+   */
+  roundEnding?(): void;
 }
 
 /** 5 Hz head samples, batched; the controller forwards them to the socket. */
