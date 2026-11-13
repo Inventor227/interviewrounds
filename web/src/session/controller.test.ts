@@ -1993,6 +1993,27 @@ describe('RoundController pause and headset removal', () => {
     expect(h.ctl.session!.client_token).toBe('tok2');
   });
 
+  it('replies_of_the_new_voices_are_reported_as_played_even_when_their_segment_ids_start_again', async () => {
+    const h = harness({ voice: 'fish' });
+    const lines: string[] = [];
+    h.ctl.on('transcript', (l) => l.role === 'agent' && lines.push(l.segmentId));
+    const t1 = await live(h); // its greeting was segment a0
+    t1.mode('speaking');
+    t1.agent('a1', 'Tell me about a time you disagreed with a peer.');
+    t1.mode('listening');
+    h.ui('pause');
+    t1.events.emit('ended', { reason: 'server' });
+    h.ui('resume');
+    await vi.advanceTimersByTimeAsync(0);
+    const t2 = h.transports[1]!;
+    const so = h.sockets[1]!;
+    t2.mode('speaking');
+    t2.agent('a1', 'Welcome back. We were on the disagreement with your peer.'); // the same id as before
+    t2.mode('listening');
+    expect(so.of('voice.spoken')).toEqual([{ panelist_id: 'p1', text_prefix: 'Welcome back. We were on the disagreement with your peer.' }]);
+    expect(new Set(lines).size).toBe(lines.length); // every reply is its own line for the page
+  });
+
   it('a_resume_that_cannot_get_new_voices_offers_resume_and_end', async () => {
     const h = harness({ voice: 'fish' });
     const t1 = await live(h);

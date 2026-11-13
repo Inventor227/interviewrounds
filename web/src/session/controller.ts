@@ -287,6 +287,8 @@ export class RoundController {
   private holdOver = false;
   /** The mic stays closed while the start chime plays, whatever is pressed meanwhile. */
   private micHeld = false;
+  /** Counts the voice sets of this round: 0 for the first, one more after every reconnect. */
+  private voiceEpoch = 0;
   private degraded = false;
   /** The user came back into view during this pause: the card says "Welcome back". */
   private cameBack = false;
@@ -876,6 +878,12 @@ export class RoundController {
     if (this.disposed || this.st !== 'paused') return;
     await old?.stopAll();
     this.modes.clear();
+    // The new voices number their replies from the start again: nothing of the old ones may be
+    // mistaken for them (a reply is reported as played once per voice and segment).
+    this.voiceEpoch++;
+    this.spokenSent.clear();
+    this.spokenPending = null;
+    this.lastAgentSegment = null;
     this.res = res;
     this.preparedRes = res;
     this.applyTiming(res);
@@ -1429,7 +1437,7 @@ export class RoundController {
     this.events.emit('transcript', {
       panelistId: t.panelistId,
       role: 'agent',
-      segmentId: `${t.panelistId}.${e.segmentId}`,
+      segmentId: this.agentKey(t.panelistId, e.segmentId),
       text: e.text,
       final: false,
     });
@@ -1449,11 +1457,16 @@ export class RoundController {
    * enough has played, so the server's actions for the reply land while it is being said.
    */
   private noteSpoken(panelistId: string, e: AgentText): void {
-    const key = `${panelistId}.${e.segmentId}`;
+    const key = this.agentKey(panelistId, e.segmentId);
     if (this.spokenSent.has(key)) return;
     if (this.spokenPending && this.spokenPending.key !== key) this.flushSpoken();
     this.spokenPending = { key, panelistId, text: e.text };
     if (e.text.trim().length >= SPOKEN_MIN_CHARS) this.flushSpoken();
+  }
+
+  /** One reply of one voice: panelist, the voice set it belongs to (new after a reconnect), segment. */
+  private agentKey(panelistId: string, segmentId: string): string {
+    return this.voiceEpoch ? `${panelistId}.r${this.voiceEpoch}.${segmentId}` : `${panelistId}.${segmentId}`;
   }
 
   private flushSpoken(): void {
