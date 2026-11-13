@@ -18,6 +18,7 @@ const micFails = (name) => `await frame.evaluate((n) => {
   navigator.mediaDevices.getUserMedia = () => Promise.reject(new DOMException('blocked', n));
 }, ${JSON.stringify(name)});`;
 const tap = (test) => `await frame.click('[data-test="${test}"]'); await page.waitForTimeout(700);`;
+const launch = (status) => `await frame.waitForSelector('[data-launch="${status}"]', { timeout: 15000 });`;
 
 const SHOTS = [
   { name: 'home', path: '/' },
@@ -27,7 +28,21 @@ const SHOTS = [
   { name: 'pick-role', path: '/start' },
   { name: 'pick-round', path: '/start/sde' },
   { name: 'start', path: '/round/sde.system_design.short' },
-  { name: 'start-mic-on', path: '/round/sde.system_design.short', act: micOn + tap('mic-allow') },
+  { name: 'start-ready', path: '/round/sde.system_design.short', act: micOn + tap('mic-allow') + launch('ready') },
+  {
+    name: 'start-prepare-failed',
+    path: '/round/sde.system_design.short',
+    act:
+      micOn +
+      `await frame.evaluate(() => {
+        const real = window.fetch;
+        window.__realFetch = real;
+        window.fetch = (u, i) => (String(u).endsWith('/api/sessions') ? Promise.resolve(new Response('', { status: 503 })) : real(u, i));
+      });` +
+      tap('mic-allow') +
+      launch('failed'),
+  },
+  { name: 'resume', path: '/resume/s_resume', fake: 'resume' },
   { name: 'start-mic-denied', path: '/round/sde.system_design.short', act: micFails('NotAllowedError') + tap('mic-allow') },
   { name: 'start-no-mic', path: '/round/sde.system_design.short', act: micFails('NotFoundError') + tap('mic-allow') },
   { name: 'start-adjust', path: '/round/sde.system_design.short', act: `await frame.click('[data-test="adjust"] summary'); await page.waitForTimeout(400);` },
@@ -38,11 +53,19 @@ const SHOTS = [
   { name: 'meeting-edit', path: '/meeting/new', act: `await frame.click('[data-test="edit-people"] summary'); await page.waitForTimeout(400);` },
   { name: 'meeting-errors', path: '/meeting/new', act: tap('template-custom') + tap('prepare') },
   { name: 'meeting-prepared', path: '/meeting/new', act: tap('prepare') + `await frame.waitForSelector('[data-test="prepared"]');` },
+  {
+    name: 'meeting-ready',
+    path: '/meeting/new',
+    act: tap('prepare') + `await frame.waitForSelector('[data-test="prepared"]');` + micOn + tap('mic-allow') + launch('ready'),
+  },
   { name: 'report', path: '/report/demo' },
   { name: 'report-explainer', path: '/report/demo', act: tap('verdict-explain-toggle') },
   { name: 'report-share-on', path: '/report/demo', act: tap('share-toggle') },
   { name: 'report-meeting', path: '/report/meeting' },
   { name: 'report-not-enough-signal', path: '/report/nosignal' },
+  { name: 'report-meeting-no-decision', path: '/report/meeting-bare' },
+  { name: 'report-broken', path: '/report/broken' },
+  { name: 'report-share-transcript', path: '/report/demo', act: tap('share-toggle') + tap('share-transcript') },
   { name: 'report-scoring', path: '/report/scoring', wait: 3000, noIdle: true },
   { name: 'report-failed', path: '/report/failed' },
   { name: 'history', path: '/history' },
@@ -94,6 +117,13 @@ async function batch(view, shots) {
   const shot = async (s, act) => {
     try {
       await page.setViewportSize({ width: VIEW.width, height: VIEW.height });
+      // Undo a fetch patch an earlier shot made (client side moves keep the page's globals).
+      await frame.evaluate(() => {
+        if (window.__realFetch) {
+          window.fetch = window.__realFetch;
+          delete window.__realFetch;
+        }
+      });
       await frame.evaluate((d) => {
         if (d === 'quest') document.documentElement.dataset.device = 'quest';
         else delete document.documentElement.dataset.device;

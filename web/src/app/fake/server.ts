@@ -4,8 +4,9 @@
 // Scenarios for GET /api/me: `1` returning guest with a streak, `first` first visit (onboarding),
 // `resume` a dropped round to resume, `capped` guest daily limit reached, `user` signed in on Pro,
 // `empty` no history yet.
-// Report ids: any id gives the system design example; `meeting`, `nosignal`, `scoring` (ready
-// after a few polls), `failed` and `abandoned` give those states.
+// Report ids: any id gives the system design example; `meeting`, `meeting-bare` (no decision),
+// `nosignal`, `scoring` (ready after a few polls), `failed`, `abandoned` and `broken` (malformed)
+// give those states.
 
 import meFixture from '../../../../content/fixtures/me.example.json';
 import planFixture from '../../../../content/fixtures/meeting-plan.example.json';
@@ -152,6 +153,16 @@ export function fakeReport(id: string): Report {
     r.round_details = undefined;
   }
   if (id === 'meeting') return meetingReport(r);
+  // A meeting that ended before any decision: no meeting details at all.
+  if (id === 'meeting-bare') {
+    const m = meetingReport(r);
+    m.session.duration_sec = 95;
+    m.headline = { summary: 'You opened well, then the meeting ended before anyone decided.', verdict: null, overall_score: null };
+    m.round_details = undefined;
+    return m;
+  }
+  // A malformed report, to show the page's error boundary.
+  if (id === 'broken') return { ...r, competencies: null } as unknown as Report;
   return r;
 }
 
