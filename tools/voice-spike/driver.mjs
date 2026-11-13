@@ -17,6 +17,8 @@ const HARD_STOP_MS = MODE === "joined" ? 75_000 : 116_000; // from mic start; Fi
 const out = `/w/${LABEL}.json`;
 const consoleLines = [];
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+if (!DEV_KEY) throw new Error("DEV_KEY is required");
+const redact = (text) => String(text).split(encodeURIComponent(DEV_KEY)).join("<dev key>").split(DEV_KEY).join("<dev key>");
 
 const browser = await chromium.launch({
   args: [
@@ -33,7 +35,7 @@ const save = async () => {
     result.log = await page.evaluate(() => window.spikeLog);
     result.levels = await page.evaluate(() => window.spikeLevels);
   } catch (e) { result.save_error = String(e); }
-  result.console = consoleLines.map((l) => l.split(DEV_KEY).join("<dev key>"));
+  result.console = consoleLines.map(redact);
   writeFileSync(out, JSON.stringify(result));
 };
 const watchdog = setTimeout(async () => {
@@ -95,7 +97,7 @@ try {
   await sleep(1500);
 } catch (e) {
   // Errors can quote the page address; the key never leaves this process.
-  result.error = String(e && e.stack || e).split(DEV_KEY).join("<dev key>").split(encodeURIComponent(DEV_KEY)).join("<dev key>");
+  result.error = redact((e && e.stack) || e);
   try { await page.evaluate(() => window.spike.end()); } catch {}
 } finally {
   clearTimeout(watchdog);

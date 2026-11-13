@@ -1,8 +1,12 @@
 // Voice spike driver page. Exposes window.spike for a headless browser; everything is logged with a
 // millisecond clock (since page load) into window.spikeLog, and audio levels into window.spikeLevels.
-import { AgentSession } from "https://esm.sh/@fishaudio/agent-client@1.0.0";
-
+//
+// The dev key is read once and removed from the address before any third-party code loads, so the voice SDK
+// (imported afterwards from esm.sh) never sees it; it is only sent in the x-dev-key header.
 const key = new URLSearchParams(location.search).get("key") || "";
+history.replaceState(null, "", location.pathname);
+const { AgentSession } = await import("https://esm.sh/@fishaudio/agent-client@1.0.0");
+
 const t0 = performance.now();
 const now = () => Math.round(performance.now() - t0);
 const out = document.getElementById("out");
