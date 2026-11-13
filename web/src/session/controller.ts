@@ -81,8 +81,18 @@ export interface RoundTiming {
 }
 export const DEFAULT_TIMING: RoundTiming = { silenceWaitSeconds: 20, interruptAfterSeconds: 120 };
 
-/** Segments closer than this belong to the same candidate turn. */
-export const TURN_GAP_MS = 1200;
+/**
+ * Segments closer than this belong to the same candidate turn. The voice service ends a transcript segment at every
+ * short pause and its next interim comes about 1.2 s after the speech resumes, so the gap between two segments of
+ * one answer is often 1.2 to 2 s.
+ */
+export const TURN_GAP_MS = 3000;
+/**
+ * The interviewer really took the turn only after speaking this long. The voice service starts a reply at short
+ * pauses and the candidate's next words cut it off within a fraction of a second; such a start does not end the
+ * candidate's turn.
+ */
+export const AGENT_REPLY_MS = 2000;
 /** Longest wait for the goodbye line before the round is closed anyway. */
 export const ENDING_GRACE_MS = 15_000;
 /** Longest wait for the outgoing panelist to finish its sentence before a hand-over. */
@@ -220,6 +230,8 @@ interface CandidateTurn {
   lastFinal: number;
   inSegment: boolean;
   sent: boolean;
+  /** How long the interviewer spoke since this turn began (starts the next words cut off add little). */
+  agentMs: number;
 }
 
 type VoiceStateMsg = ClientMsgMap['voice.state'] & { latency?: LatencySplit };
@@ -322,6 +334,8 @@ export class RoundController {
   private userSpeaking = false;
   private staleTimer: ReturnType<typeof setTimeout> | null = null;
   private cand: CandidateTurn | null = null;
+  /** When the floor began speaking, while it speaks (for how long a reply lasted before the candidate went on). */
+  private agentSpeakingSince: number | null = null;
   private candTimer: ReturnType<typeof setTimeout> | null = null;
 
   // silence
@@ -1395,9 +1409,15 @@ export class RoundController {
     }
     // The reply is over: report a short one that never reached the usual length.
     if (m !== 'speaking' && this.spokenPending?.panelistId === t.panelistId) this.flushSpoken();
+    if (m !== 'speaking' && this.agentSpeakingSince !== null) {
+      if (this.cand) this.cand.agentMs += now - this.agentSpeakingSince;
+      this.agentSpeakingSince = null;
+    }
     if (m === 'speaking') {
       this.deps.timings?.mark('first_audio');
-      this.cand = null; // the agent answered: the candidate's turn is over
+      // Whether the agent answered (and the candidate's turn is over) shows when the candidate speaks next: a start
+      // that their words cut off at once does not count (trackTurn).
+      this.agentSpeakingSince ??= now;
       this.silenceFired = false;
       if (this.st !== 'paused') this.greeted = true;
       this.clearWatchdog();
@@ -1583,8 +1603,11 @@ export class RoundController {
 
   private trackTurn(now: number, final: boolean): void {
     let c = this.cand;
-    if (!c || (!c.inSegment && now - c.lastFinal >= TURN_GAP_MS)) {
-      c = { start: now, lastFinal: now, inSegment: false, sent: false };
+    const agentMs = (c?.agentMs ?? 0) + (this.agentSpeakingSince !== null ? now - this.agentSpeakingSince : 0);
+    if (!c || (!c.inSegment && (now - c.lastFinal >= TURN_GAP_MS || agentMs >= AGENT_REPLY_MS))) {
+      c = { start: now, lastFinal: now, inSegment: false, sent: false, agentMs: 0 };
+      // A reply still playing as the candidate starts again counts toward this turn only from here.
+      if (this.agentSpeakingSince !== null) this.agentSpeakingSince = now;
       this.cand = c;
       if (this.candTimer) clearTimeout(this.candTimer);
       const turn = c;

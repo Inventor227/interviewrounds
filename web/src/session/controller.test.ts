@@ -472,13 +472,13 @@ describe('RoundController', () => {
   });
 
   it('long_answer_splits_turns_on_gaps_and_skips_meetings_and_agent_speech', async () => {
-    // A 2 s gap starts a new turn: two 6 s turns never trigger.
+    // A 4 s gap starts a new turn: two 6 s turns never trigger.
     const h = harness();
     const t = await live(h);
     t.user('s1', 'a', false);
     vi.advanceTimersByTime(6_000);
     t.user('s1', 'a b', true);
-    vi.advanceTimersByTime(2_000);
+    vi.advanceTimersByTime(4_000);
     t.user('s2', 'c', false);
     vi.advanceTimersByTime(6_000);
     t.user('s2', 'c d', true);
@@ -502,6 +502,40 @@ describe('RoundController', () => {
       mt.user('s1', `a ${i}`, false);
     }
     expect(mt.sentEvents).not.toContain('[event: long_answer]');
+  });
+
+  it('long_answer_survives_the_voice_services_pauses_and_cut_off_starts', async () => {
+    // As a real voice service does it: a final at every short pause, the next interim about 1.5 s after the speech
+    // resumes, and a reply started at each pause that the candidate's next words cut off at once.
+    const h = harness();
+    const t = await live(h);
+    const LA = '[event: long_answer]';
+    for (let i = 0; i < 4; i++) {
+      t.user(`s${i}`, 'part', false);
+      vi.advanceTimersByTime(1_000);
+      t.user(`s${i}`, 'part of it', true);
+      vi.advanceTimersByTime(400);
+      t.mode('thinking');
+      t.mode('speaking');
+      vi.advanceTimersByTime(150);
+      t.mode('listening');
+      vi.advanceTimersByTime(1_100);
+    }
+    // 10.6 s into one answer (the harness asks after 10 s): the marker goes out once the mic is closed.
+    t.user('s9', 'and so', false);
+    await vi.advanceTimersByTimeAsync(800);
+    expect(count(t.sentEvents, LA)).toBe(1);
+
+    // A real reply (2 s or more) ends the turn: the next answer starts its own clock.
+    t.mode('speaking');
+    vi.advanceTimersByTime(2_500);
+    t.mode('listening');
+    vi.advanceTimersByTime(1_000);
+    t.user('n1', 'next', false);
+    vi.advanceTimersByTime(5_000);
+    t.user('n1', 'next answer', true);
+    await vi.advanceTimersByTimeAsync(800);
+    expect(count(t.sentEvents, LA)).toBe(1);
   });
 
   it('latency_split_rides_on_voice_state', async () => {
