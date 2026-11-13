@@ -52,17 +52,32 @@ await look(S, -12, 10);
 await sleep(800);
 await shot('05-after-answers');
 
-// Ask the other attendee directly: the server hands the floor over.
-const ask = other ? `${other.name}, you have been quiet. What is your biggest concern with this round?` : 'What is your biggest concern with this round?';
-const reply = await answer(ask, 120000);
-let floor1 = (await roundState()).floor;
-for (let i = 0; i < 12 && floor1 === floor0; i++) {
-  await sleep(2500);
-  floor1 = (await roundState()).floor;
+// Settle the open questions, then ask the other attendee directly until the server hands the floor over.
+const name = other?.name ?? 'the other person';
+const ASKS = [
+  `To be exact: we are raising one point five million, revenue is sixteen thousand a month and growth is fifteen percent. That is my full answer. ${name}, you have been quiet. What is your biggest concern with this round?`,
+  `${name}, I would really like to hear from you now. What would stop you from investing?`,
+  `I have answered that, so I will pause here and ask ${name} to speak. ${name}, please go ahead.`,
+];
+let floor1 = floor0;
+let reply = null;
+let asks = 0;
+for (const ask of ASKS) {
+  asks++;
+  reply = await answer(ask, 120000);
+  for (let i = 0; i < 6 && floor1 === floor0; i++) {
+    await sleep(2500);
+    floor1 = (await roundState()).floor;
+  }
+  if (floor1 !== floor0) break;
 }
-stage('hand-over', { asked: other?.name, from: floor0, to: floor1, handedOver: floor1 !== floor0, reply });
+stage('hand-over', { asked: name, asks, from: floor0, to: floor1, handedOver: floor1 !== floor0, reply });
 if (floor1 === floor0) console.error('WARNING: the floor did not move');
-else stage('answer 4', await answer('That is fair. Our pipeline covers the next two quarters, and I can share the signed letters of intent.'));
+else {
+  await sleep(6000); // the new attendee's opening line
+  stage('after hand-over', { lines: await page(() => globalThis.__rec.lines.slice(-3)) });
+  stage('answer to the new floor', await answer('That is fair. Our pipeline covers the next two quarters, and I can share the signed letters of intent.'));
+}
 await look(S, -12, 10);
 await sleep(800);
 await shot('06-after-hand-over');
