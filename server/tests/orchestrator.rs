@@ -1550,6 +1550,58 @@ async fn directors_show_question_and_hand_over_reach_the_browser_and_the_next_vo
     assert_eq!(st.floor, "p2");
 }
 
+#[tokio::test]
+async fn a_hand_over_line_said_after_a_newer_hand_over_leaves_the_floor_with_the_newer_one() {
+    // p1 hands over to p2, then p1's second director hands over to p3 before p2 has said its line. The browser lets
+    // p2 say its line first and then moves on to p3: p2's line must not take the floor back from p3.
+    let llm = ScriptedLlm::new(vec![]);
+    let (app, state) = test_app(llm.clone());
+    let mut st = new_state("s1", "sde.system_design.full", VoiceKind::Fish);
+    let mut p3 = st.panel[1].clone();
+    p3.panelist_id = "p3".into();
+    p3.seat = 2;
+    st.panel.push(p3);
+    state.registry.insert(st);
+    let hand = |from: &str, to: &str, line: &str| ir_server::orchestrator::tools::ToolCall {
+        id: format!("toolu_{to}"),
+        name: "hand_over".into(),
+        input: json!({"to": to, "line": line}),
+        panelist_id: from.into(),
+    };
+    {
+        let st = state.registry.get("s1").unwrap();
+        let mut st = st.lock().await;
+        st.apply_tool_calls(&[hand("p1", "p2", "Hi, I'm Ana.")]);
+        st.apply_tool_calls(&[hand("p1", "p3", "And I'm Tom.")]);
+        assert_eq!(st.floor, "p3");
+    }
+    let marker = |who: &str| {
+        chat_body(
+            "s1",
+            who,
+            json!([{"role": "user", "content": "[event: handover]"}]),
+        )
+    };
+    assert_eq!(
+        post_chat(&app, SECRET, marker("p2")).await.text(),
+        "Hi, I'm Ana."
+    );
+    {
+        let st = state.registry.get("s1").unwrap();
+        let st = st.lock().await;
+        assert_eq!(st.floor, "p3", "the newer hand-over keeps the floor");
+        assert!(!st.pending_handover.contains_key("p2"));
+    }
+    assert_eq!(
+        post_chat(&app, SECRET, marker("p3")).await.text(),
+        "And I'm Tom."
+    );
+    let st = state.registry.get("s1").unwrap();
+    let st = st.lock().await;
+    assert_eq!(st.floor, "p3");
+    assert_eq!(llm.calls(), 0, "both lines were prepared: no model call");
+}
+
 // ---------- dev voice spike page ----------
 
 #[tokio::test]
