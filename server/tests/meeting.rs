@@ -2671,8 +2671,12 @@ fn attendees_never_correct_how_a_name_was_said() {
     for who in [&tom, &rhea] {
         let n = note_for(who, misheard);
         assert!(
-            n.contains("\"Ria\" is Rhea") && n.contains(live::MISHEARD_NAME_RULE),
+            n.contains("misspelled Rhea's name") && n.contains(live::MISHEARD_NAME_RULE),
             "{n}"
+        );
+        assert!(
+            !n.contains("Ria"),
+            "the note never repeats the misspelling: {n}"
         );
     }
     // The name heard right, or a near name in a mention: no such note.
@@ -2683,6 +2687,122 @@ fn attendees_never_correct_how_a_name_was_said() {
         let n = note_for(&tom, said);
         assert!(!n.contains("misspelled"), "{said}: {n}");
     }
+}
+
+/// A word that only sounds like an attendee's name, where a name addresses someone, reads as that name in what the
+/// model sees; mentions, exact names and everything else stay as recognised.
+#[test]
+fn misheard_names_read_as_meant_and_nothing_else_changes() {
+    let catalog = catalog();
+    let (s, plan) = pitch_plan(&catalog);
+    let m = MeetingState::from_parts(&s, &plan);
+    for (said, meant) in [
+        (
+            "Ria back to you for a moment. What would you need to see?",
+            "Rhea back to you for a moment. What would you need to see?",
+        ),
+        (
+            "Ria, what's your view on the burn rate?",
+            "Rhea, what's your view on the burn rate?",
+        ),
+        (
+            "What would you need to see, Ria?",
+            "What would you need to see, Rhea?",
+        ),
+        // A trailing "'s" stays.
+        ("Ria's back to you.", "Rhea's back to you."),
+    ] {
+        assert_eq!(live::names_as_meant(&m, said), meant, "{said}");
+    }
+    for same in [
+        // Mentions, not addresses.
+        "Do you agree with Ria?",
+        "I spoke to Ria. She agreed.",
+        "Ria mentioned the market size.",
+        // Exact names.
+        "Rhea, back to you for a moment.",
+        "I would like to hear from both of you. Tom. You have been quiet so far.",
+        // Lower case, and common words that share a sound.
+        "ria, what would you need to see?",
+        "Ten. We work with ten clinics.",
+        "",
+    ] {
+        assert_eq!(live::names_as_meant(&m, same), same, "{same}");
+    }
+}
+
+/// The misheard name never reaches the model, in that turn or three turns later (live and director calls), while
+/// the stored transcript and history keep the words as recognised.
+#[tokio::test]
+async fn a_misheard_name_is_gone_from_what_the_model_reads_three_turns_later() {
+    let (router, app, llm, rhea, _tom, _rx) = meeting_with_events("m-heard");
+    let said = [
+        "Ria, what's your view on the burn rate?",
+        "We burn about eighty thousand a month.",
+        "Our runway is eighteen months.",
+        "We want a partner meeting next week.",
+    ];
+    for (i, text) in said.iter().enumerate() {
+        llm.reply(&format!("Reply number {i}."));
+        llm.directors
+            .lock()
+            .unwrap()
+            .push_back(response(String::new()));
+        say(
+            &router,
+            "m-heard",
+            &rhea,
+            json!([
+                {"role": "assistant", "content": format!("Earlier reply {i}.")},
+                {"role": "user", "content": text}
+            ]),
+        )
+        .await;
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    let ria = |t: &str| t.split(|c: char| !c.is_alphanumeric()).any(|w| w == "Ria");
+    let streamed = llm.streamed();
+    assert_eq!(streamed.len(), 4);
+    // The first turn and the fourth: the words as meant, never the misspelling.
+    for req in [&streamed[0], &streamed[3]] {
+        let all: String = req
+            .messages
+            .iter()
+            .map(Message::text)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(!ria(&all), "the model saw the misspelling: {all}");
+        assert!(
+            all.contains("Rhea, what's your view on the burn rate?"),
+            "{all}"
+        );
+    }
+    let directors: Vec<MessagesRequest> = llm
+        .created()
+        .into_iter()
+        .filter(|r| !r.tools.is_empty())
+        .collect();
+    assert!(!directors.is_empty());
+    for req in &directors {
+        let all: String = req
+            .messages
+            .iter()
+            .map(Message::text)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(!ria(&all), "the director saw the misspelling: {all}");
+    }
+    // What was recorded keeps the words as recognised.
+    let session = app.registry.get("m-heard").unwrap();
+    let st = session.lock().await;
+    assert!(
+        st.turns.iter().any(
+            |t| t.speaker == "candidate" && t.text == "Ria, what's your view on the burn rate?"
+        ),
+        "{:?}",
+        st.turns
+    );
+    assert!(st.history.iter().any(|m| ria(&m.text())));
 }
 
 fn meeting_with_events(

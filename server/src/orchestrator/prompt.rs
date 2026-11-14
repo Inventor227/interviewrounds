@@ -81,6 +81,7 @@ pub fn request_for_draft(
     let mut messages = state.history.clone();
     messages.extend(draft.messages.clone());
     let mut messages = perspective(state, panelist_id, messages);
+    names_as_meant(state, &mut messages);
     strip_empty_text(&mut messages);
     // Second cache breakpoint on the newest user turn (in the history when it was recorded at turn start), so the
     // growing history is read from cache next turn. It exists only in the request; the stored history carries none.
@@ -602,6 +603,29 @@ fn tidy_blank_runs(text: &str) -> String {
         out.push('\n');
     }
     out.trim().to_string()
+}
+
+/// Meetings: the conversation as a model reads it has the candidate's misheard names written right ("Ria back to
+/// you" reads "Rhea back to you", see `meeting::live::names_as_meant`), in every earlier message too, so no reply
+/// can pick up the misspelling. Only the request changes: the stored history and the transcript keep the words as
+/// recognised.
+pub fn names_as_meant(state: &SessionState, messages: &mut [Message]) {
+    let Some(m) = state.meeting.as_ref() else {
+        return;
+    };
+    for msg in messages
+        .iter_mut()
+        .filter(|msg| msg.role != Role::Assistant)
+    {
+        for block in msg.content.iter_mut() {
+            if let ContentBlock::Text { text, .. } = block {
+                let meant = crate::meeting::live::names_as_meant(m, text);
+                if meant != *text {
+                    *text = meant;
+                }
+            }
+        }
+    }
 }
 
 /// Removes text blocks with no text (the API refuses them), then messages left with no content, together with the

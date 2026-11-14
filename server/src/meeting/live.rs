@@ -244,8 +244,8 @@ fn quoted_list(items: &[String]) -> String {
 
 /// One word of what the candidate said, with the nearest non-space characters around it.
 struct Word {
-    /// As written, without a trailing "'s".
-    text: String,
+    /// Where the word sits in the text, in chars, without a trailing "'s".
+    at: (usize, usize),
     /// Lower case, without a trailing "'s".
     lower: String,
     capital: bool,
@@ -267,13 +267,15 @@ fn words_of(text: &str) -> Vec<Word> {
         while i < chars.len() && is_word(chars[i]) {
             i += 1;
         }
-        let raw: String = chars[start..i].iter().collect();
-        let raw = raw.trim_matches('\'');
+        let token: String = chars[start..i].iter().collect();
+        let raw = token.trim_matches('\'');
         if raw.is_empty() {
             continue;
         }
+        let lead = token.chars().take_while(|c| *c == '\'').count();
+        let name_len = raw.trim_end_matches("'s").chars().count();
         out.push(Word {
-            text: raw.trim_end_matches("'s").to_string(),
+            at: (start + lead, start + lead + name_len),
             lower: raw.to_lowercase().trim_end_matches("'s").to_string(),
             capital: raw.chars().next().is_some_and(char::is_uppercase),
             before: chars[..start]
@@ -451,12 +453,18 @@ fn asked(w: &[Word], i: usize) -> bool {
     i >= 2 && w[i - 1].lower == "ask" && matches!(w[i - 2].lower.as_str(), "me" | "to" | "i" | "us")
 }
 
-/// Every attendee the candidate's words address by name, by the forms in [`is_address`], in order and once each,
-/// with the word as written when it only sounds like their name ("Ria" for Rhea).
-fn addresses<'a>(
-    meeting: &'a MeetingState,
-    words: &str,
-) -> Vec<(&'a AttendeeState, Option<String>)> {
+/// One name used as a form of address in the candidate's words.
+struct Hit<'a> {
+    attendee: &'a AttendeeState,
+    /// The word only sounds like their name ("Ria" for Rhea).
+    heard: bool,
+    /// The word's place in the text, in chars.
+    at: (usize, usize),
+}
+
+/// Every place the candidate's words address an attendee by name, by the forms in [`is_address`], in order. A word
+/// that is no attendee's first name but sounds like exactly one of them ([`sounds_like`]) stands for that attendee.
+fn address_hits<'a>(meeting: &'a MeetingState, words: &str) -> Vec<Hit<'a>> {
     let w = words_of(words);
     let punctuated = words
         .chars()
@@ -470,7 +478,7 @@ fn addresses<'a>(
             Some((a, first))
         })
         .collect();
-    let mut found: Vec<(&AttendeeState, Option<String>)> = Vec::new();
+    let mut hits = Vec::new();
     for (i, word) in w.iter().enumerate() {
         let exact: Vec<&AttendeeState> = named
             .iter()
@@ -489,12 +497,55 @@ fn addresses<'a>(
         };
         if let [one] = who.as_slice()
             && is_address(&w, i, punctuated, heard)
-            && !found.iter().any(|(f, _)| std::ptr::eq(*f, *one))
         {
-            found.push((*one, heard.then(|| word.text.clone())));
+            hits.push(Hit {
+                attendee: one,
+                heard,
+                at: word.at,
+            });
+        }
+    }
+    hits
+}
+
+/// The attendees the candidate's words address by name, once each, in order.
+fn addresses<'a>(meeting: &'a MeetingState, words: &str) -> Vec<&'a AttendeeState> {
+    let mut found: Vec<&AttendeeState> = Vec::new();
+    for h in address_hits(meeting, words) {
+        if !found.iter().any(|f| std::ptr::eq(*f, h.attendee)) {
+            found.push(h.attendee);
         }
     }
     found
+}
+
+/// The candidate's words as the model reads them: a word that only sounds like an attendee's name and stands where
+/// a name is used to address someone ("Ria back to you" for Rhea) is written as that name, a trailing "'s" kept.
+/// Nothing else changes. The stored transcript keeps the words as recognised; this is for the model's history.
+pub fn names_as_meant(meeting: &MeetingState, words: &str) -> String {
+    let hits: Vec<Hit> = address_hits(meeting, words)
+        .into_iter()
+        .filter(|h| h.heard)
+        .collect();
+    if hits.is_empty() {
+        return words.to_string();
+    }
+    let chars: Vec<char> = words.chars().collect();
+    let mut out = String::with_capacity(words.len() + 8);
+    let mut last = 0;
+    for h in hits {
+        let name = h
+            .attendee
+            .name
+            .split_whitespace()
+            .next()
+            .unwrap_or_default();
+        out.extend(&chars[last..h.at.0]);
+        out.push_str(name);
+        last = h.at.1;
+    }
+    out.extend(&chars[last..]);
+    out
 }
 
 /// The AI attendee the candidate's words were addressed to by name, other than `panelist_id` (the attendee
@@ -508,22 +559,29 @@ pub fn addressed_attendee<'a>(
     words: &str,
 ) -> Option<&'a AttendeeState> {
     match addresses(meeting, words).as_slice() {
-        [(one, _)] if one.panelist_id != panelist_id => Some(*one),
+        [one] if one.panelist_id != panelist_id => Some(*one),
         _ => None,
     }
 }
 
-/// When the candidate addressed someone by a word that only sounds like their name (speech recognition wrote
-/// "Ria" for Rhea), the note that says so: nobody corrects, spells or comments on how a name was said.
+/// When the candidate addressed someone by a word that only sounds like their name, the note that says so: nobody
+/// corrects, spells or comments on how a name was said. It never repeats the misspelling (the model reads the words
+/// with the name written right, see [`names_as_meant`]).
 pub fn misheard_name_note(meeting: &MeetingState, words: &str) -> Option<String> {
-    let heard: Vec<String> = addresses(meeting, words)
-        .into_iter()
-        .filter_map(|(a, as_written)| Some(format!("\"{}\" is {}", as_written?, a.name)))
-        .collect();
-    (!heard.is_empty()).then(|| {
+    let mut names: Vec<&str> = Vec::new();
+    for h in address_hits(meeting, words).into_iter().filter(|h| h.heard) {
+        if !names.contains(&h.attendee.name.as_str()) {
+            names.push(&h.attendee.name);
+        }
+    }
+    (!names.is_empty()).then(|| {
         format!(
-            "Speech recognition misspelled a name in the candidate's words: {}. They said it right. {MISHEARD_NAME_RULE}",
-            heard.join(", ")
+            "Speech recognition misspelled {} in the candidate's words; the name is written right here. They said it right. {MISHEARD_NAME_RULE}",
+            names
+                .iter()
+                .map(|n| format!("{n}'s name"))
+                .collect::<Vec<_>>()
+                .join(" and ")
         )
     })
 }
@@ -909,10 +967,17 @@ pub fn next_job(st: &SessionState, seq: u64, now: Instant) -> Option<UpdateJob> 
         .rposition(|t| t.speaker != "candidate" && t.speaker != "app")
         .unwrap_or(first);
     let start = start.max((last + 1).saturating_sub(MAX_EXCHANGE_TURNS));
+    // The state model reads the candidate's words with misheard names written right, as the attendees do.
     let exchange: Vec<Turn> = st.turns[start..=last]
         .iter()
         .filter(|t| t.speaker != "app")
-        .cloned()
+        .map(|t| {
+            let mut t = t.clone();
+            if t.speaker == "candidate" {
+                t.text = names_as_meant(meeting, &t.text);
+            }
+            t
+        })
         .collect();
     let judged = (start..=last)
         .filter(|&i| st.turns[i].speaker == "candidate")
