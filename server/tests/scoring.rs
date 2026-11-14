@@ -1,6 +1,6 @@
 //! Scoring and the session report: delivery metrics, the verdict rule, the model call (scripted), the report
-//! checks and schema, storage and the report endpoints. Database tests need `DATABASE_URL` (remote.sh --pg);
-//! the live run needs the model API key (`--env-file .secrets/llm-anthropic.env`, `-- --ignored`).
+//! checks and schema, storage and the report endpoints. Database tests need `DATABASE_URL` (a scratch Postgres);
+//! the live run needs the model API key in the environment and `-- --ignored`.
 
 mod common;
 
@@ -2393,8 +2393,8 @@ fn board_image_is_scaled_to_1568_px() {
 // ---------- live ----------
 
 /// A realistic recorded fake-voice session (full system design, mid level), scored by the real model, with the
-/// headset card timed. `remote.sh <wt> rust --env-file .secrets/llm-anthropic.env -- cargo test --test scoring
-/// live_ -- --ignored --nocapture`
+/// headset card timed. With the model API key in the environment: `cargo test --test scoring live_ -- --ignored
+/// --nocapture`
 #[tokio::test]
 #[ignore = "calls the real API"]
 async fn live_scoring_run() {

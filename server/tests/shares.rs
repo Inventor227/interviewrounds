@@ -1,5 +1,5 @@
 //! Public scorecard links: `POST /api/shares`, `DELETE /api/shares/{slug}` and the page at `/s/{slug}`.
-//! Needs Postgres (remote.sh --pg).
+//! Needs Postgres (`DATABASE_URL`).
 
 mod common;
 

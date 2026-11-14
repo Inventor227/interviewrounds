@@ -910,7 +910,7 @@ async fn slow_first_token_retries_then_hold_line_when_all_fail() {
 
 /// Real API, real request shape (fixture content): two turns per model through the endpoint, checking that the
 /// tools, the system note and the cache breakpoints are accepted and that the turn produces speech.
-/// `remote.sh ... --env-file .secrets/llm-anthropic.env -- cargo test --test orchestrator live_ -- --ignored --nocapture`
+/// With the model API key in the environment: `cargo test --test orchestrator live_ -- --ignored --nocapture`
 #[tokio::test]
 #[ignore = "calls the real API"]
 async fn live_turns_through_the_endpoint() {

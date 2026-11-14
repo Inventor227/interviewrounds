@@ -1,5 +1,5 @@
 //! The session socket: hello and close codes, acks and dedupe per client token, replay by server seq, the round
-//! clock and time checks, and ending a round whose browser is gone. Needs Postgres (remote.sh --pg).
+//! clock and time checks, and ending a round whose browser is gone. Needs Postgres (`DATABASE_URL`).
 
 mod common;
 

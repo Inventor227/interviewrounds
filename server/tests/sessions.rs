@@ -1,5 +1,5 @@
 //! Sessions API: guest identity, create (caps, fake and Fish voices), resume, swap hand-over, end.
-//! Needs Postgres (remote.sh --pg); Fish is a mock server and the model a fake.
+//! Needs Postgres (`DATABASE_URL`); Fish is a mock server and the model a fake.
 
 mod common;
 

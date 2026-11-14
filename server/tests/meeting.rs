@@ -2066,7 +2066,7 @@ async fn non_ascii_text_around_tags_never_breaks_a_prompt() {
 
 // ---------- live model (run by hand) ----------
 
-/// `remote.sh ... --env-file .secrets/llm-anthropic.env -- cargo test --test meeting -- --ignored --nocapture`
+/// With the model API key in the environment: `cargo test --test meeting -- --ignored --nocapture`
 #[tokio::test]
 #[ignore]
 async fn live_prepare_investor_pitch() {

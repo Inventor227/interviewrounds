@@ -1,7 +1,7 @@
 //! The hooks between the session socket, the live interviewer, the board engine, the Scribe and scoring:
 //! playback confirms parked replies and only then runs their director call, board ops are applied and reach the
 //! interviewer's note, the Scribe suggests ghosts after a confirmed answer, hints and socket drops are logged for
-//! the report, and report progress goes out on the socket. Needs Postgres (remote.sh --pg).
+//! the report, and report progress goes out on the socket. Needs Postgres (`DATABASE_URL`).
 
 mod common;
 

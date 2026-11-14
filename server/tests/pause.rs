@@ -1,6 +1,6 @@
 //! Pause and the headset coming off: a paused round whose socket drops is held until its pause budget runs out
 //! (a live one still ends after the offline window), the janitor follows the same rule, a long pause releases the
-//! voices, and a resume from a pause makes new ones without using up a resume. Needs Postgres (remote.sh --pg).
+//! voices, and a resume from a pause makes new ones without using up a resume. Needs Postgres (`DATABASE_URL`).
 
 mod common;
 
