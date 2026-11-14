@@ -16,6 +16,7 @@ const S = L.SETUPS[process.env.EMU_ROOM ?? 'home_office'] ?? L.SETUPS.home_offic
 const rounds = [];
 
 async function oneRound(n) {
+  if (n > 1) await shot(`${n}-0-home`); // a capture before each headset session
   const tap1 = Date.now();
   await click('try-quick');
   await until('the round ready for Enter', () => !!document.querySelector('[data-test="start-round"]:not([disabled])') && !!globalThis.__xrApp, null, 150000);
