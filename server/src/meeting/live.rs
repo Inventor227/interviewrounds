@@ -242,36 +242,135 @@ fn quoted_list(items: &[String]) -> String {
         .join("; ")
 }
 
+/// One word of what the candidate said, with the nearest non-space characters around it.
+struct Word {
+    /// Lower case, without a trailing "'s".
+    lower: String,
+    capital: bool,
+    before: Option<char>,
+    after: Option<char>,
+}
+
+fn words_of(text: &str) -> Vec<Word> {
+    let chars: Vec<char> = text.chars().collect();
+    let is_word = |c: char| c.is_alphanumeric() || c == '\'';
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < chars.len() {
+        if !is_word(chars[i]) {
+            i += 1;
+            continue;
+        }
+        let start = i;
+        while i < chars.len() && is_word(chars[i]) {
+            i += 1;
+        }
+        let raw: String = chars[start..i].iter().collect();
+        let raw = raw.trim_matches('\'');
+        if raw.is_empty() {
+            continue;
+        }
+        out.push(Word {
+            lower: raw.to_lowercase().trim_end_matches("'s").to_string(),
+            capital: raw.chars().next().is_some_and(char::is_uppercase),
+            before: chars[..start]
+                .iter()
+                .rev()
+                .find(|c| !c.is_whitespace())
+                .copied(),
+            after: chars[i..].iter().find(|c| !c.is_whitespace()).copied(),
+        });
+    }
+    out
+}
+
+/// First names that are also ordinary words: only a clearly marked address counts for them ("Grace, ..." or
+/// "..., Will?", written with a capital), never a bare first or last word ("Grace period is thirty days").
+const ORDINARY_NAMES: &[&str] = &[
+    "will", "grace", "may", "mark", "rose", "joy", "hope", "faith", "bill", "jack", "frank",
+    "grant", "chase", "dean", "drew", "rich", "pat", "sue", "art", "max", "june", "april",
+    "summer", "dawn", "eve", "ruby", "amber", "iris", "lily", "ivy", "sky", "reed", "wade",
+    "cliff", "glen", "brook", "ray", "guy", "gene", "earl", "norm", "sunny", "bob", "rob", "sandy",
+    "page", "paige", "harper", "hunter", "parker", "taylor",
+];
+
+/// Words that may open an address before the name ("So Tom, ...", "Okay Tom, ...").
+const OPENERS: &[&str] = &["so", "and", "okay", "ok", "well", "now", "but", "hi", "hey"];
+/// Words after which a name is a thank-you or an agreement, not an address ("Thanks, Tom", "Yes, Tom").
+const NOT_OPENERS: &[&str] = &[
+    "thanks", "thank", "yes", "yeah", "yep", "great", "sure", "right", "no", "cheers", "agreed",
+    "exactly",
+];
+
+/// Whether the word at `i` is the name used as a form of address, by the transcript's punctuation:
+/// - first in a sentence, followed by a comma or a question mark ("Tom, what ...?", "Tom?", "Tom, you have been
+///   quiet. What ...?"), or the same after an opener ("So Tom, ...");
+/// - a closing tag: the last word, with a comma before it ("..., what do you think, Tom?");
+/// - the last words "a question for Tom", "over to Tom", "back to Tom", or a request to ask them ("let me ask Tom",
+///   "I'd like to ask Tom").
+///
+/// Without any punctuation at all, only the name as the very first word and a request to ask them count. A name
+/// that is also an ordinary word counts only in the first two forms, written with a capital.
+fn is_address(w: &[Word], i: usize, punctuated: bool) -> bool {
+    let me = &w[i];
+    let ordinary = ORDINARY_NAMES.contains(&me.lower.as_str());
+    if ordinary && !me.capital {
+        return false;
+    }
+    let vocative = matches!(me.after, Some(',' | '?'));
+    let sentence_start = |j: usize| j == 0 || matches!(w[j].before, Some('.' | '?' | '!'));
+    // "So Tom, ...", or a run of names or a word set off by a comma ("Tom, Rhea, ...", "Okay, Tom, ..."), but not
+    // after thanks or a yes ("Thanks, Tom, ...").
+    let opener = i > 0
+        && sentence_start(i - 1)
+        && (OPENERS.contains(&w[i - 1].lower.as_str())
+            || (w[i - 1].after == Some(',')
+                && w[i - 1].capital
+                && !NOT_OPENERS.contains(&w[i - 1].lower.as_str())));
+    let last = i + 1 == w.len();
+    if !punctuated {
+        return !ordinary && (i == 0 || asked(w, i));
+    }
+    if (sentence_start(i) || opener) && vocative {
+        return true;
+    }
+    if last && me.before == Some(',') {
+        return true;
+    }
+    if ordinary {
+        return false;
+    }
+    let end_phrase = last
+        && i >= 2
+        && matches!(
+            (w[i - 2].lower.as_str(), w[i - 1].lower.as_str()),
+            ("question" | "questions" | "one", "for") | ("over" | "back", "to")
+        );
+    end_phrase || asked(w, i)
+}
+
+/// "let me ask Tom", "I'd like to ask Tom", "can I ask Tom": a request to ask them, not a report ("did you ask Tom").
+fn asked(w: &[Word], i: usize) -> bool {
+    i >= 2 && w[i - 1].lower == "ask" && matches!(w[i - 2].lower.as_str(), "me" | "to" | "i" | "us")
+}
+
 /// The AI attendee the candidate's words were addressed to by name, other than `panelist_id` (the attendee
-/// replying): the first name as the first word, or the second after an opener ("Tom, what do you see?", "So Tom,
-/// ..."), as the last word ("... what do you think, Tom?") or after "for", "ask", "asking" or "to" ("a question for
-/// Tom"). A name inside a sentence ("as Tom said") is a mention, not an address; two different names are not one
-/// address.
+/// replying), by the forms in [`is_address`]. A name in an ordinary sentence ("Do you agree with Tom?", "Tom mentioned
+/// churn", "I'll send the deck to Tom") is a mention, not an address. When the attendee replying is addressed too, or
+/// two others are, nobody is.
 pub fn addressed_attendee<'a>(
     meeting: &'a MeetingState,
     panelist_id: &str,
     words: &str,
 ) -> Option<&'a AttendeeState> {
-    let tokens: Vec<String> = words
-        .split(|c: char| !(c.is_alphanumeric() || c == '\''))
-        .filter(|t| !t.is_empty())
-        .map(|t| t.trim_end_matches("'s").to_lowercase())
-        .collect();
-    // Words that may come before a name that opens an address ("So Tom, ...", "Okay Tom, ...").
-    const OPENERS: &[&str] = &[
-        "so", "and", "hi", "hey", "okay", "ok", "well", "now", "but", "right", "thanks", "yes",
-        "yeah", "sure", "great",
-    ];
-    let addressed = |name: &str| {
-        tokens.iter().enumerate().any(|(i, t)| {
-            t == name
-                && (i == 0
-                    || (i == 1 && OPENERS.contains(&tokens[0].as_str()))
-                    || i + 1 == tokens.len()
-                    || matches!(tokens[i - 1].as_str(), "for" | "ask" | "asking" | "to"))
-        })
-    };
-    let mut found = meeting.attendees.iter().filter(|a| {
+    let w = words_of(words);
+    if w.is_empty() {
+        return None;
+    }
+    let punctuated = words
+        .chars()
+        .any(|c| matches!(c, ',' | '.' | '?' | '!' | ';' | ':'));
+    let mut addressed = meeting.attendees.iter().filter(|a| {
         let first = a
             .name
             .split_whitespace()
@@ -279,16 +378,18 @@ pub fn addressed_attendee<'a>(
             .unwrap_or_default()
             .to_lowercase();
         !a.panelist_id.is_empty()
-            && a.panelist_id != panelist_id
             && !first.is_empty()
-            && addressed(&first)
+            && (0..w.len()).any(|i| w[i].lower == first && is_address(&w, i, punctuated))
     });
-    let one = found.next()?;
-    found.next().is_none().then_some(one)
+    let one = addressed.next()?;
+    if addressed.next().is_some() || one.panelist_id == panelist_id {
+        return None;
+    }
+    Some(one)
 }
 
 /// The note for the attendee replying when the candidate's words were for another attendee: give that attendee the
-/// floor at once, with their answer. It goes before anything else about who speaks next.
+/// floor at once, with their answer. The meeting's own "who speaks next" note is left out of such a turn.
 pub fn addressed_note(meeting: &MeetingState, panelist_id: &str, words: &str) -> Option<String> {
     let to = addressed_attendee(meeting, panelist_id, words)?;
     Some(format!(

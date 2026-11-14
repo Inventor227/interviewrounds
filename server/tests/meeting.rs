@@ -2513,42 +2513,77 @@ async fn meeting_live_prompts_never_describe_tools_and_the_director_keeps_them()
 fn an_attendee_named_first_or_last_is_addressed_and_a_mention_is_not() {
     let catalog = catalog();
     let (s, plan) = pitch_plan(&catalog);
-    let m = MeetingState::from_parts(&s, &plan);
+    let mut m = MeetingState::from_parts(&s, &plan);
     let rhea = m.attendee("Rhea").unwrap().panelist_id.clone();
     let tom = m.attendee("Tom").unwrap().panelist_id.clone();
-    let to = |words: &str| live::addressed_attendee(&m, &rhea, words).map(|a| a.name.clone());
-    assert_eq!(
-        to("Tom, what churn do you see in your portfolio?").as_deref(),
-        Some("Tom")
-    );
-    assert_eq!(
-        to("So Tom, how would you size this?").as_deref(),
-        Some("Tom")
-    );
-    assert_eq!(
-        to("What do you think of the churn, Tom?").as_deref(),
-        Some("Tom")
-    );
-    assert_eq!(
-        to("I have a question for Tom about the data room.").as_deref(),
-        Some("Tom")
-    );
-    assert_eq!(
-        to("As Tom said earlier, churn matters to us.").as_deref(),
-        None,
-        "a mention"
-    );
-    assert_eq!(
-        to("Rhea, what do you need to decide?").as_deref(),
-        None,
-        "the one replying"
-    );
-    assert_eq!(to("We grew fifteen percent a month.").as_deref(), None);
+    {
+        let to = |words: &str| live::addressed_attendee(&m, &rhea, words).map(|a| a.name.clone());
+        // Clear forms of address: the name first with a comma or a question mark (also after an opener or at the
+        // start of the last sentence), a closing tag, the last words "a question for Tom", a request to ask them.
+        for said in [
+            "Tom, what churn do you see in your portfolio?",
+            "So Tom, how would you size this?",
+            "Okay Tom, your turn.",
+            "Okay, Tom, your turn.",
+            "Tom?",
+            "Great point. Tom, what would stop you from investing?",
+            "I would like to hear from both of you. Tom, you have been quiet so far. What is your biggest concern?",
+            "What do you think of the churn, Tom?",
+            "I'd like to hear from you on churn, Tom.",
+            "I have a question for Tom.",
+            "Let me ask Tom about the data room.",
+            "tom what churn do you see",
+        ] {
+            assert_eq!(to(said).as_deref(), Some("Tom"), "{said}");
+        }
+        // Mentions in ordinary sentences: no hand-over (Rhea answers them).
+        for said in [
+            "Do you agree with Tom?",
+            "Tom mentioned churn; how do you see it?",
+            "Thanks Tom. Rhea, what about pricing?",
+            "Thanks Tom.",
+            "I'll send the deck to Tom.",
+            "That works for Tom's team too.",
+            "As Tom said earlier, churn matters to us.",
+            "I have a question for Tom about the data room.",
+            "Did you ask Tom about it?",
+            "Rhea, what do you need to decide?",
+            "Tom, Rhea, what do you both need?",
+            "Thanks, Tom, that helps.",
+            "Yes, Tom, exactly.",
+            "We grew fifteen percent a month.",
+        ] {
+            assert_eq!(to(said).as_deref(), None, "{said}");
+        }
+    }
     // From Tom's side, Rhea named first is an address to Rhea.
     assert_eq!(
         live::addressed_attendee(&m, &tom, "Rhea, is that enough?").map(|a| a.name.as_str()),
         Some("Rhea")
     );
+    // Names that are also ordinary words count only as a marked address, written with a capital.
+    m.attendees
+        .iter_mut()
+        .find(|a| a.panelist_id == tom)
+        .unwrap()
+        .name = "Grace".into();
+    let to = |words: &str| live::addressed_attendee(&m, &rhea, words).map(|a| a.name.clone());
+    assert_eq!(to("Grace period is thirty days.").as_deref(), None);
+    assert_eq!(to("grace period is thirty days").as_deref(), None);
+    assert_eq!(to("We could ask for more grace, maybe?").as_deref(), None);
+    assert_eq!(
+        to("Grace, what period do you need?").as_deref(),
+        Some("Grace")
+    );
+    m.attendees
+        .iter_mut()
+        .find(|a| a.panelist_id == tom)
+        .unwrap()
+        .name = "Will".into();
+    let to = |words: &str| live::addressed_attendee(&m, &rhea, words).map(|a| a.name.clone());
+    assert_eq!(to("So will this scale?").as_deref(), None);
+    assert_eq!(to("Will this scale, will it?").as_deref(), None);
+    assert_eq!(to("What do you think, Will?").as_deref(), Some("Will"));
 }
 
 fn meeting_with_events(
