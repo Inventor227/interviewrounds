@@ -188,6 +188,20 @@ describe('session page', () => {
     }
   });
 
+  it('a_hand_over_that_did_not_happen_keeps_the_round_view_up', async () => {
+    // A swap whose new voice did not join: the old voice carries on and the server asks again.
+    const { root, controller } = await mount('live');
+    controller.emit('error', { code: 'handover_failed' } as never);
+    await settle();
+    expect($(root, 'session-error')).toBeNull();
+    expect($(root, 'session-not-started')).toBeNull();
+    expect($(root, 'session-state')!.dataset.state).toBe('live');
+    // A real loss of the round still shows.
+    controller.emit('error', { code: 'socket_terminal' } as never);
+    await settle();
+    expect($(root, 'session-error')).not.toBeNull();
+  });
+
   it('a_held_round_is_not_shown_as_lost_when_a_voice_reported_an_error', async () => {
     const { root, controller } = await mount('live');
     controller.go('paused');

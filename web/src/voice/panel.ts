@@ -202,7 +202,7 @@ export class PanelController {
     if (off() || !next || slot.ended) {
       this.dropIncoming(epoch, next);
       if (off() || !next) return;
-      throw new VoiceError('connect_failed', `the voice of ${to} ended before it took the floor`);
+      throw new VoiceError('handover_failed', `the voice of ${to} ended before it took the floor`);
     }
     // The outgoing voice is quiet: the new one opens with its prepared line, then hears the user.
     this.incoming = null;

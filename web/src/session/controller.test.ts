@@ -990,7 +990,8 @@ describe('RoundController hand-overs', () => {
     expect(h.ctl.floor).toBe('p1');
     expect(t1.muted).toBe(false);
     expect(t1.stopped).toBe(false);
-    expect(errors.map((e) => e.code)).toEqual(['connect_failed']);
+    // Not the end of the round: a hand-over that did not happen.
+    expect(errors.map((e) => e.code)).toEqual(['handover_failed']);
     t1.mode('listening');
     // A start that fails is the same: the new voice is stopped before it ever spoke.
     const h2 = harness({ slow: ['p2'] });
@@ -1015,6 +1016,40 @@ describe('RoundController hand-overs', () => {
     h.socket.serverSend('panel.hand_over', { from: 'p1', to: 'p2', opening_line: 'Hi' });
     await vi.advanceTimersByTimeAsync(0);
     expect(h.api.joinPanelist).toHaveBeenCalledTimes(2);
+  });
+
+  it('a_held_swap_that_fails_after_a_short_resume_leaves_the_floor_welcoming_the_user_back', async () => {
+    const h = harness({ slow: ['p2'] });
+    const t1 = await live(h);
+    const errors = errorsOf(h);
+    t1.mode('speaking');
+    h.socket.serverSend('panel.hand_over', { from: 'p1', to: 'p2', opening_line: 'Hi' });
+    await vi.waitFor(() => expect(h.transports[1]?.started).toBe(true)); // p2 is joining
+    const p2 = h.transports[1] as SlowTransport;
+    h.ui('pause');
+    t1.mode('listening');
+    h.ui('resume'); // a short pause: the swap is to be the welcome back
+    await vi.advanceTimersByTimeAsync(0);
+    expect(t1.sentEvents).toEqual([]);
+    p2.fail(new Error('the voice did not join'));
+    await vi.advanceTimersByTimeAsync(0);
+    // The old voice keeps the floor and welcomes the user back: never a silent room.
+    expect(h.ctl.floor).toBe('p1');
+    expect(t1.sentEvents).toEqual(['[event: resume]']);
+    expect(t1.muted).toBe(false);
+    expect(errors.map((e) => e.code)).toEqual(['handover_failed']);
+    expect(h.ctl.state).toBe('live');
+  });
+
+  it('an_error_from_a_voice_off_the_floor_is_a_failed_hand_over_not_a_lost_round', async () => {
+    const h = harness({ slow: ['p2'] });
+    const t1 = await live(h);
+    const errors = errorsOf(h);
+    h.socket.serverSend('panel.hand_over', { from: 'p1', to: 'p2', opening_line: 'Hi' });
+    await vi.waitFor(() => expect(h.transports[1]?.started).toBe(true));
+    h.transports[1]!.events.emit('error', new VoiceError('connect_failed', 'agent did not join'));
+    t1.events.emit('error', new VoiceError('mic_toggle_failed', 'the floor is still the floor'));
+    expect(errors.map((e) => e.code)).toEqual(['handover_failed', 'mic_toggle_failed']);
   });
 
   it('an_end_mid_swap_keeps_the_outgoing_voice_for_the_goodbye', async () => {

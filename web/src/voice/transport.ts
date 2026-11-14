@@ -35,6 +35,11 @@ export type VoiceErrorCode =
   | 'mic_toggle_failed'
   | 'audio_blocked'
   | 'connect_failed'
+  /**
+   * A hand-over did not get the next panelist on the floor (its voice did not join, start or stay), or a voice that
+   * does not hold the floor failed. Not the end of the round: the floor's voice carries on and the server asks again.
+   */
+  | 'handover_failed'
   | 'session_expired'
   | 'no_credit'
   | 'llm_failed'
