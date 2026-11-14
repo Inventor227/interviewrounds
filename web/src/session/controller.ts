@@ -288,11 +288,12 @@ export class RoundController {
   private sawAgent = false;
   private userMuted = false;
   private handingOver = 0;
-  private pendingHandOver: { to: string; openingLine: string } | null = null;
+  /** A hand-over heard while the round could not take it (paused, greeting): Resume or going live runs it. */
+  private pendingHandOver: { to: string } | null = null;
   /** Hand-overs under way, oldest first (the panel runs them one at a time). */
-  private readonly flight: { to: string; openingLine: string }[] = [];
-  /** A hand-over that was caught by a pause before the new voice joined: it waits for Resume. */
-  private gatedHandOver: { to: string; openingLine: string } | null = null;
+  private readonly flight: { to: string }[] = [];
+  /** A hand-over that was caught by a pause before the new voice took the floor: it waits for Resume. */
+  private gatedHandOver: { to: string } | null = null;
   private pauseWaiters: (() => void)[] = [];
 
   // pause
@@ -702,11 +703,9 @@ export class RoundController {
   private makePanel(res: CreateSessionRes): PanelController {
     return new PanelController(res, (p, o) => this.wire(this.deps.makeTransport(p, o, this.res ?? res)), {
       api: this.deps.api,
-      // A hand-over caught by a pause waits for Resume: nobody new joins or speaks while the user is away.
-      waitQuiet: async (t) => {
-        await this.waitQuiet(t);
-        await this.unpaused();
-      },
+      waitQuiet: (t) => this.waitQuiet(t),
+      // A hand-over caught by a pause waits for Resume: nobody new speaks while the user is away.
+      ready: () => this.unpaused(),
     });
   }
 
@@ -838,6 +837,9 @@ export class RoundController {
     this.setState('paused');
     this.away = reason !== 'user' && reason !== 'voice_lost';
     this.cameBack = false;
+    // A swap under way is held by this pause wherever it is (joining, or waiting for the outgoing voice): its new
+    // voice says nothing until Resume, and its line is then the welcome back.
+    if (this.panel?.isSwapping) this.gatedHandOver ??= this.flight[0] ?? null;
     void this.panel?.muteAll(true);
     for (const t of this.panel?.all() ?? []) t.interrupt?.();
     this.socket?.send('ui.event', { kind: 'pause', reason });
@@ -984,12 +986,12 @@ export class RoundController {
       this.sendStart();
     } else if (handOver) {
       // The new panelist's opening line is the welcome back.
-      this.handOver(handOver.to, handOver.openingLine);
+      this.handOver(handOver.to);
     } else if (gated && !reconnected) {
       // The hand-over that waited goes on by itself: its opening line is the welcome back.
     } else if (gated && gated.to !== floor) {
       // The voices were made again meanwhile: the hand-over runs on the new panel.
-      this.handOver(gated.to, gated.openingLine);
+      this.handOver(gated.to);
     } else if (unsaid && this.voicesUp) {
       // The new voices are already the new panelist's: it says its line now.
       this.floorT()?.sendEvent(VOICE_MARKERS.handover);
@@ -1114,7 +1116,8 @@ export class RoundController {
     this.socketTerminal = false;
     this.socketUnsubs.push(
       s.on('round.state', (d) => this.onRoundState(d)),
-      s.on('panel.hand_over', (d) => this.handOver(d.to, d.opening_line)),
+      // The opening line is the server's to say (on `[event: handover]`): the page only moves the floor.
+      s.on('panel.hand_over', (d) => this.handOver(d.to)),
       // The interviewer said its closing line and ended the round itself: no second goodbye.
       s.on('round.ending', () => this.beginEnding(null, false)),
       s.on('round.ended', () => this.onRoundEnded()),
@@ -1299,25 +1302,31 @@ export class RoundController {
     this.armWatchdog();
   }
 
-  private handOver(to: string, openingLine: string): void {
+  /**
+   * The server moved the floor. Swap mode joins the new voice at once (it connects muted and silent
+   * while the outgoing panelist finishes its sentence) and switches when that voice is quiet. A swap
+   * that fails leaves the old voice on the floor; the server's next hand-over to the same panelist
+   * tries again.
+   */
+  private handOver(to: string): void {
     // Already on the floor while the round runs: nothing to do. (During a pause it is kept: Resume decides.)
     if (this.st !== 'paused' && this.panel && !this.panel.isStopped && this.voicesUp && to === this.panel.floor && !this.handingOver) return;
     if (this.st === 'paused' || this.st === 'greeting') {
-      // Nobody new speaks while the user is away, and nobody takes over before the greeting is
+      // Nobody new joins while the user is away, and nobody takes over before the greeting is
       // done (a swap during the greeting would greet twice). Replayed on Resume or once live.
-      this.pendingHandOver = { to, openingLine };
+      this.pendingHandOver = { to };
       return;
     }
     if (this.st !== 'live') return;
     const panel = this.panel;
     if (!panel || panel.isStopped) return;
     this.handingOver++;
-    const flying = { to, openingLine };
+    const flying = { to };
     this.flight.push(flying);
     this.clearTimers();
     this.resetUserSpeech();
     panel
-      .handOver(to, openingLine)
+      .handOver(to)
       .then(() => {
         const live = new Set(panel.all());
         for (const t of [...this.modes.keys()]) if (!live.has(t)) this.modes.delete(t);
@@ -1329,7 +1338,14 @@ export class RoundController {
       .catch((err) => {
         // A voice set that was replaced meanwhile (new voices after a pause) is not a failure.
         if (panel !== this.panel || panel.isStopped) return;
-        this.emitError(err instanceof VoiceError ? err : new VoiceError('connect_failed', String(err), err));
+        // Failed during a pause (the voices may be released meanwhile): Resume tries it again, or the
+        // voices made for the server's floor say its line.
+        if (this.st === 'paused') {
+          this.pendingHandOver ??= { to };
+          return;
+        }
+        // The old voice keeps the floor and hears the user again; the server asks again on its next hand-over.
+        if (this.st === 'live') this.emitError(err instanceof VoiceError ? err : new VoiceError('connect_failed', String(err), err));
       })
       .finally(() => {
         const i = this.flight.indexOf(flying);
@@ -1521,7 +1537,7 @@ export class RoundController {
     const h = this.pendingHandOver;
     if (!h || this.st !== 'live') return;
     this.pendingHandOver = null;
-    this.handOver(h.to, h.openingLine);
+    this.handOver(h.to);
   }
 
   /**
@@ -1776,6 +1792,8 @@ export class RoundController {
     this.endingSawSpeech = false;
     this.pendingHandOver = null;
     this.gatedHandOver = null;
+    // A swap under way is called off: the outgoing panelist keeps the floor and says the goodbye.
+    this.panel?.cancelHandOvers();
     this.clearTimers();
     this.clearWatchdog();
     this.endLongAnswerMute();

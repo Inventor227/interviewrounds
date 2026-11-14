@@ -1,14 +1,18 @@
 // The panel: one voice transport per AI person, and the floor (who may hear the user).
 //
-// - swap (default): only the floor panelist is connected. A hand-over asks the server for the
-//   new panelist's voice with the opening line, starts the new transport, then stops the old one,
-//   so there is never a moment with nobody in the room.
+// - swap (default): only the floor panelist is connected. A hand-over joins the new panelist's
+//   voice at once, while the outgoing one still says its hand-off sentence: the server mints it
+//   silent (no first message, nothing recorded) and it connects muted. From that moment nobody
+//   hears the user. Once the outgoing voice is quiet (and the round is not paused), the new one
+//   gets `[event: handover]` (the server answers with the prepared line, no model call), its mic
+//   opens and the old one stops. So the gap between the two is only the new voice's own speech
+//   start, and there is never a moment with two voices or with nobody in the room.
 // - joined: everyone is connected from the start; only the floor has the mic. A hand-over moves
 //   the mic and sends the new floor `[event: handover]` so it speaks its prepared line.
 
 import { api as defaultApi, type Api } from '../net/api';
 import { VOICE_MARKERS, type CreateSessionRes, type Panelist } from '../shared/types';
-import type { TransportOptions, VoiceTransport } from './transport';
+import { VoiceError, type TransportOptions, type VoiceTransport } from './transport';
 
 export type MakeTransport = (p: Panelist, opts?: TransportOptions) => VoiceTransport;
 
@@ -19,6 +23,8 @@ export interface PanelOptions {
    * never cuts the outgoing panelist mid-sentence or overlaps two voices.
    */
   waitQuiet?: (t: VoiceTransport) => Promise<void>;
+  /** Resolves when a hand-over may take the floor now: at once while the round runs, on Resume while it is paused. */
+  ready?: () => Promise<void>;
 }
 
 export class PanelController {
@@ -26,8 +32,15 @@ export class PanelController {
   private readonly panel: Map<string, Panelist>;
   private readonly api: Pick<Api, 'joinPanelist'>;
   private readonly waitQuiet: (t: VoiceTransport) => Promise<void>;
+  private readonly ready: () => Promise<void>;
   private floorId: string;
   private muted = false;
+  /** A swap is under way: the outgoing floor no longer hears the user. */
+  private swapping = false;
+  /** The voice joining in a swap, connected and muted, before it takes the floor. */
+  private incoming: VoiceTransport | null = null;
+  /** Bumped when hand-overs are called off: the one under way drops its new voice, queued ones never run. */
+  private epoch = 0;
   /** Set by stopAll(): anything still connecting is stopped as soon as it is up. */
   private stopped = false;
   /** Hand-overs run one at a time, in arrival order. */
@@ -42,6 +55,7 @@ export class PanelController {
     this.floorId = res.floor;
     this.api = opts.api ?? defaultApi;
     this.waitQuiet = opts.waitQuiet ?? (async () => undefined);
+    this.ready = opts.ready ?? (async () => undefined);
   }
 
   get floor(): string {
@@ -50,6 +64,11 @@ export class PanelController {
 
   get mode(): CreateSessionRes['panel_mode'] {
     return this.res.panel_mode;
+  }
+
+  /** True while a swap is under way (the new voice joins; nobody hears the user). */
+  get isSwapping(): boolean {
+    return this.swapping;
   }
 
   /** The floor panelist's transport. */
@@ -82,13 +101,29 @@ export class PanelController {
     if (!this.stopped) void this.applyGating();
   }
 
-  handOver(to: string, openingLine: string): Promise<void> {
-    const run = this.queue.then(() => this.doHandOver(to, openingLine));
+  /** The prepared line is the server's: the browser only says who takes the floor. */
+  handOver(to: string): Promise<void> {
+    const epoch = this.epoch;
+    const run = this.queue.then(() => (epoch === this.epoch ? this.doHandOver(to, epoch) : undefined));
     this.queue = run.catch(() => undefined);
     return run;
   }
 
-  /** true: nobody hears the user (pause, mute). false: the floor hears again. */
+  /**
+   * Calls off the hand-overs under way and queued (the round is ending): the outgoing panelist
+   * keeps the floor and hears the user again, a joining voice is stopped before it ever speaks.
+   */
+  cancelHandOvers(): void {
+    this.epoch++;
+    if (!this.swapping) return;
+    this.swapping = false;
+    const t = this.incoming;
+    this.incoming = null;
+    if (t) void t.stop().catch(() => undefined);
+    if (!this.stopped) void this.applyGating();
+  }
+
+  /** true: nobody hears the user (pause, mute). false: the floor hears again, unless a swap is under way. */
   muteAll(muted: boolean): Promise<void> {
     this.muted = muted;
     return this.applyGating();
@@ -101,21 +136,25 @@ export class PanelController {
   async stopAll(): Promise<void> {
     this.stopped = true;
     const ts = this.all();
+    if (this.incoming) ts.push(this.incoming);
+    this.incoming = null;
     this.transports.clear();
     await Promise.allSettled(ts.map((t) => t.stop()));
   }
 
   // ---------- internals ----------
 
-  private async doHandOver(to: string, openingLine: string): Promise<void> {
+  private async doHandOver(to: string, epoch: number): Promise<void> {
     if (this.stopped || to === this.floorId || !this.panel.has(to)) return;
     const oldId = this.floorId;
     const old = this.transports.get(oldId);
-    // Let the outgoing panelist finish its hand-off sentence first.
-    if (old) await this.waitQuiet(old);
-    if (this.stopped) return;
+    const off = () => this.stopped || epoch !== this.epoch;
 
     if (this.res.panel_mode === 'joined') {
+      // Let the outgoing panelist finish its hand-off sentence first.
+      if (old) await this.waitQuiet(old);
+      await this.ready();
+      if (off()) return;
       const next = this.transports.get(to);
       if (!next) throw new Error(`panelist ${to} is not connected`);
       this.floorId = to;
@@ -124,36 +163,64 @@ export class PanelController {
       return;
     }
 
-    // Swap: the old floor stops hearing the user before the new session connects, and the new one
-    // starts muted, so two sessions never transcribe the same speech.
-    old?.setMicMuted(true);
-    let next: VoiceTransport;
-    try {
-      const { voice } = await this.api.joinPanelist(this.res.session_id, to, { opening_line: openingLine });
-      if (this.stopped) return;
+    // Swap. From here on the outgoing panelist only finishes its sentence: it never hears the user again.
+    this.swapping = true;
+    void this.applyGating();
+    const slot: { t: VoiceTransport | null; ended: boolean } = { t: null, ended: false };
+    const joining = async () => {
+      const { voice } = await this.api.joinPanelist(this.res.session_id, to, { deferred: true, from: oldId });
+      if (off()) return;
       const p = { ...this.panel.get(to)!, voice };
       this.panel.set(to, p);
-      next = this.make(p, { openingLine });
-      next.setMicMuted(true);
-      try {
-        await next.start();
-      } catch (err) {
-        void next.stop().catch(() => undefined);
-        throw err;
-      }
+      const t = this.make(p);
+      slot.t = t;
+      this.incoming = t;
+      t.setMicMuted(true);
+      t.on('ended', () => void (slot.ended = true));
+      await t.start();
+    };
+    // Whether the outgoing voice was quiet before the new one was up: it may have begun its sentence since.
+    let joined = false;
+    let quietFirst = false;
+    try {
+      // The new voice joins and connects while the outgoing one says its last sentence.
+      await Promise.all([
+        joining().then(() => void (joined = true)),
+        old ? this.waitQuiet(old).then(() => void (quietFirst = !joined)) : undefined,
+      ]);
+      // A pause holds the swap until Resume; the new voice waits there, muted and silent.
+      if (!off()) await this.ready();
+      // A sentence the outgoing voice only started after its first wait is let to finish too (once, bounded).
+      if (!off() && old && quietFirst) await this.waitQuiet(old);
     } catch (err) {
-      if (!this.stopped) void this.applyGating(); // the old floor hears again
+      this.dropIncoming(epoch, slot.t);
+      if (off()) return;
       throw err;
     }
-    if (this.stopped) {
-      await next.stop();
-      return;
+    const next = slot.t;
+    if (off() || !next || slot.ended) {
+      this.dropIncoming(epoch, next);
+      if (off() || !next) return;
+      throw new VoiceError('connect_failed', `the voice of ${to} ended before it took the floor`);
     }
-    if (old) this.transports.delete(oldId);
+    // The outgoing voice is quiet: the new one opens with its prepared line, then hears the user.
+    this.incoming = null;
+    this.transports.delete(oldId);
     this.transports.set(to, next);
     this.floorId = to;
-    void this.applyGating(); // unmutes the new floor
+    this.swapping = false;
+    next.sendEvent(VOICE_MARKERS.handover);
+    void this.applyGating();
     if (old) await old.stop();
+  }
+
+  /** A swap that did not happen: its new voice stops, and the floor it left hears the user again. */
+  private dropIncoming(epoch: number, t: VoiceTransport | null): void {
+    if (t) void t.stop().catch(() => undefined);
+    if (this.incoming === t) this.incoming = null;
+    if (epoch !== this.epoch) return; // called off: cancelHandOvers() already put the floor back
+    this.swapping = false;
+    if (!this.stopped) void this.applyGating();
   }
 
   /** Joined mode connects everyone, so a panelist whose voice is still pending joins now. */
@@ -170,7 +237,7 @@ export class PanelController {
   /** Resolves once every transport has applied its gate. */
   private applyGating(): Promise<void> {
     const done: (void | Promise<void>)[] = [];
-    for (const [id, t] of this.transports) done.push(t.setMicMuted(this.muted || id !== this.floorId));
+    for (const [id, t] of this.transports) done.push(t.setMicMuted(this.muted || this.swapping || id !== this.floorId));
     return Promise.all(done).then(() => undefined);
   }
 }

@@ -174,20 +174,18 @@ describe('FakeTransport', () => {
     }
   });
 
-  it('speaks_the_opening_line_on_start', async () => {
-    const speaker = new InstantSpeaker();
-    const t = new FakeTransport(panelist('p2', 1), {
-      sessionId: 's',
-      clientToken: 'k',
-      fetch: vi.fn() as unknown as typeof fetch,
-      speaker,
-      openingLine: 'Hi, I am Priya.',
-    });
-    const texts: AgentText[] = [];
-    t.on('agentText', (a) => texts.push(a));
-    await t.start();
-    await vi.waitFor(() => expect(speaker.spoken.map((x) => x.text)).toEqual(['Hi, I am Priya.']));
-    expect(texts.at(-1)?.text).toBe('Hi, I am Priya.');
+  it('joins_silent_and_says_its_line_on_the_handover_marker', async () => {
+    // A swap's new voice: nothing on start; the server answers its hand-over marker with the prepared line.
+    const s = setup([sse([chunk('Hi, I am Priya. '), chunk('', 'stop'), 'data: [DONE]\n\n'])]);
+    await s.t.start();
+    await Promise.resolve();
+    expect(s.speaker.spoken).toEqual([]);
+    expect(s.fetchFn).not.toHaveBeenCalled();
+    s.t.sendEvent('[event: handover]');
+    await vi.waitFor(() => expect(s.speaker.spoken.map((x) => x.text)).toEqual(['Hi, I am Priya.']));
+    const body = JSON.parse(s.fetchFn.mock.calls[0]![1]!.body as string);
+    expect(body.messages).toEqual([{ role: 'user', content: '[event: handover]' }]);
+    expect(s.users).toEqual([]); // a marker is not the user's speech
   });
 
   it('stop_cancels_speech_and_emits_ended', async () => {

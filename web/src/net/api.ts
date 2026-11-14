@@ -125,7 +125,8 @@ export const api = {
     const key = req.voice === 'fake' ? devKey() : null;
     return request<CreateSessionRes>('POST', '/api/sessions', { json: req }, key ? { 'x-dev-key': key } : undefined);
   },
-  joinPanelist: (sessionId: string, panelistId: string, body: { opening_line?: string } = {}) =>
+  /** `deferred`: a swap hand-over joined while `from` still speaks; the new voice joins silent (docs/protocol.md). */
+  joinPanelist: (sessionId: string, panelistId: string, body: { opening_line?: string; deferred?: boolean; from?: string } = {}) =>
     roundPost<JoinPanelistRes>(`/api/sessions/${enc(sessionId)}/panelists/${enc(panelistId)}/join`, body),
   // Only on 503 (the server's own "no new voices, not counted"): after a 502 or 504 the resume may already have
   // happened, and a second one would count and make voices again.

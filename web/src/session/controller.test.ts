@@ -9,11 +9,13 @@ import type {
   Report,
   ServerMsgMap,
   ServerMsgType,
+  VoiceMode,
 } from '../shared/types';
 import type { SocketStatus } from '../net/ws';
+import { FakeTransport, type Speaker } from '../voice/fake';
 import { panelist, ScriptedTransport, sessionRes } from '../voice/testkit';
 import { VoiceError, type TransportOptions } from '../voice/transport';
-import { RoundController, SessionError, type RoundControllerDeps, type RoundError } from './controller';
+import { LONG_ANSWER_CUT_IN_MS, RoundController, SessionError, type RoundControllerDeps, type RoundError } from './controller';
 import type { NoticeKind } from './notices';
 import type { AvatarPort, HeadSamplerPort, SocketPort, UiAction, VisibilityPort, XRPort, XRVisibilityLike } from './ports';
 import { StageTimings } from './timings';
@@ -300,6 +302,16 @@ async function live(h: ReturnType<typeof harness>) {
 
 const count = (xs: string[], x: string) => xs.filter((v) => v === x).length;
 
+/** Talks for 10 s without a break (the harness interrupts after 10 s). */
+async function talkTooLong(t: ScriptedTransport) {
+  t.user('s1', 'So', false);
+  for (let i = 0; i < 10; i++) {
+    await vi.advanceTimersByTimeAsync(1_000);
+    t.user('s1', `So ${i}`, false);
+  }
+  await vi.advanceTimersByTimeAsync(100);
+}
+
 describe('RoundController', () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -568,7 +580,9 @@ describe('RoundController', () => {
     await vi.waitFor(() => expect(h.transports[0]!.stopped).toBe(true));
     const p2 = h.transports[1]!;
     expect(p2.panelistId).toBe('p2');
-    expect(p2.opts.openingLine).toBe('Hi, I am Priya.');
+    // It joined silent; the server says its prepared line on the hand-over marker.
+    expect(h.api.joinPanelist).toHaveBeenCalledWith('sess1', 'p2', { deferred: true, from: 'p1' });
+    expect(p2.sentEvents).toEqual(['[event: handover]']);
     expect(h.head.setFloor).toHaveBeenLastCalledWith('p2');
     // The new panelist's events now drive marks.
     p2.user('s1', 'Hello', true);
@@ -865,25 +879,187 @@ describe('RoundController hand-overs', () => {
     expect(h.api.joinPanelist).toHaveBeenCalledTimes(1);
   });
 
-  it('hand_over_lets_the_outgoing_panelist_finish', async () => {
+  it('swap_prejoins_while_the_outgoing_voice_speaks', async () => {
     const h = harness();
     const t = await live(h);
-    t.mode('speaking');
+    t.mode('speaking'); // p1 is saying its hand-off sentence
     h.socket.serverSend('panel.hand_over', { from: 'p1', to: 'p2', opening_line: 'Hi' });
+    await vi.advanceTimersByTimeAsync(0);
+    // The join and the connect start at once, in parallel with the sentence; the new voice waits muted and silent.
+    expect(h.api.joinPanelist).toHaveBeenCalledWith('sess1', 'p2', { deferred: true, from: 'p1' });
+    const p2 = h.transports[1]!;
+    expect(p2.started).toBe(true);
+    expect(p2.muted).toBe(true);
     await vi.advanceTimersByTimeAsync(1000);
-    expect(h.api.joinPanelist).not.toHaveBeenCalled();
-    t.mode('listening');
-    await vi.waitFor(() => expect(h.api.joinPanelist).toHaveBeenCalled());
+    expect(p2.sentEvents).toEqual([]);
+    expect(t.stopped).toBe(false);
+    expect(h.ctl.floor).toBe('p1');
+    t.mode('listening'); // the sentence is over
+    await vi.advanceTimersByTimeAsync(0);
+    expect(p2.sentEvents).toEqual(['[event: handover]']);
+    expect(p2.muted).toBe(false);
+    expect(t.stopped).toBe(true);
+    expect(h.ctl.floor).toBe('p2');
 
-    // The wait is capped.
+    // The wait for the sentence is capped.
     const h2 = harness();
     const t2 = await live(h2);
     t2.mode('speaking');
     h2.socket.serverSend('panel.hand_over', { from: 'p1', to: 'p2', opening_line: 'Hi' });
     await vi.advanceTimersByTimeAsync(4900);
-    expect(h2.api.joinPanelist).not.toHaveBeenCalled();
+    expect(h2.transports[1]!.sentEvents).toEqual([]);
     await vi.advanceTimersByTimeAsync(200);
-    expect(h2.api.joinPanelist).toHaveBeenCalled();
+    expect(h2.transports[1]!.sentEvents).toEqual(['[event: handover]']);
+    expect(t2.stopped).toBe(true);
+  });
+
+  it('a_hand_over_that_lands_before_the_sentence_starts_still_lets_it_finish', async () => {
+    // The reply to an app event counts at once: the hand-over can arrive while p1 is still thinking.
+    let join!: () => void;
+    const h = harness();
+    h.api.joinPanelist.mockImplementationOnce(() => new Promise((r) => (join = () => r({ voice: { transport: 'fake' as const } }))));
+    const t = await live(h);
+    t.mode('thinking');
+    h.socket.serverSend('panel.hand_over', { from: 'p1', to: 'p2', opening_line: 'Hi' });
+    await vi.advanceTimersByTimeAsync(0);
+    t.mode('speaking'); // its sentence starts while p2 joins
+    join();
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(h.transports[1]!.sentEvents).toEqual([]);
+    expect(t.stopped).toBe(false);
+    t.mode('listening');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.transports[1]!.sentEvents).toEqual(['[event: handover]']);
+    expect(t.stopped).toBe(true);
+  });
+
+  it('old_voice_never_hears_user_after_swap_starts', async () => {
+    const h = harness();
+    const t1 = await live(h);
+    t1.mode('speaking');
+    expect(t1.muted).toBe(false);
+    h.socket.serverSend('panel.hand_over', { from: 'p1', to: 'p2', opening_line: 'Hi' });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(t1.muted).toBe(true); // from the swap's first moment
+    const p2 = h.transports[1]!;
+    // Whatever opens the mic meanwhile (the user's own toggle, a pause and Resume) leaves both closed.
+    h.ui('mute');
+    h.ui('unmute');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(t1.muted).toBe(true);
+    expect(p2.muted).toBe(true);
+    h.ui('pause');
+    h.ui('resume');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(t1.muted).toBe(true);
+    expect(p2.muted).toBe(true);
+    t1.mode('listening');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(t1.stopped).toBe(true);
+    expect(t1.muted).toBe(true);
+    expect(p2.muted).toBe(false);
+  });
+
+  it('a_long_answer_hold_ending_mid_swap_never_reopens_the_outgoing_voice', async () => {
+    const h = harness();
+    const t1 = await live(h);
+    await talkTooLong(t1);
+    await vi.advanceTimersByTimeAsync(700);
+    expect(count(t1.sentEvents, '[event: long_answer]')).toBe(1);
+    // The cut-in hands over (the hold is still on), and the hold runs out while the new voice joins.
+    t1.mode('thinking');
+    t1.mode('speaking');
+    h.socket.serverSend('panel.hand_over', { from: 'p1', to: 'p2', opening_line: 'Hi' });
+    await vi.advanceTimersByTimeAsync(LONG_ANSWER_CUT_IN_MS + 10);
+    expect(t1.muted).toBe(true);
+    expect(h.transports[1]!.muted).toBe(true);
+    t1.mode('listening');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.transports[1]!.muted).toBe(false);
+  });
+
+  it('swap_failure_keeps_old_voice_and_server_can_retry', async () => {
+    const h = harness();
+    const t1 = await live(h);
+    const errors = errorsOf(h);
+    t1.mode('speaking');
+    h.api.joinPanelist.mockRejectedValueOnce(new Error('no voice'));
+    h.socket.serverSend('panel.hand_over', { from: 'p1', to: 'p2', opening_line: 'Hi' });
+    await vi.advanceTimersByTimeAsync(0);
+    // The old voice keeps the floor and hears the user again; the page says what went wrong.
+    expect(h.ctl.floor).toBe('p1');
+    expect(t1.muted).toBe(false);
+    expect(t1.stopped).toBe(false);
+    expect(errors.map((e) => e.code)).toEqual(['connect_failed']);
+    t1.mode('listening');
+    // A start that fails is the same: the new voice is stopped before it ever spoke.
+    const h2 = harness({ slow: ['p2'] });
+    const u1 = await live(h2);
+    h2.socket.serverSend('panel.hand_over', { from: 'p1', to: 'p2', opening_line: 'Hi' });
+    await vi.waitFor(() => expect(h2.transports[1]?.started).toBe(true));
+    (h2.transports[1] as SlowTransport).fail(new Error('room full'));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h2.transports[1]!.stopped).toBe(true);
+    expect(h2.transports[1]!.sentEvents).toEqual([]);
+    expect(u1.muted).toBe(false);
+    expect(h2.ctl.floor).toBe('p1');
+
+    // The server sends the hand-over again (its floor already says p2): the page tries once more, and it works.
+    h.socket.serverSend('panel.hand_over', { from: 'p1', to: 'p2', opening_line: 'Hi' });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.api.joinPanelist).toHaveBeenCalledTimes(2);
+    expect(h.ctl.floor).toBe('p2');
+    expect(t1.stopped).toBe(true);
+    expect(h.transports.at(-1)!.sentEvents).toEqual(['[event: handover]']);
+    // And once there, a repeat is ignored.
+    h.socket.serverSend('panel.hand_over', { from: 'p1', to: 'p2', opening_line: 'Hi' });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.api.joinPanelist).toHaveBeenCalledTimes(2);
+  });
+
+  it('an_end_mid_swap_keeps_the_outgoing_voice_for_the_goodbye', async () => {
+    const h = harness();
+    const t1 = await live(h);
+    t1.mode('speaking');
+    h.socket.serverSend('panel.hand_over', { from: 'p1', to: 'p2', opening_line: 'Hi' });
+    await vi.advanceTimersByTimeAsync(0);
+    const p2 = h.transports[1]!;
+    h.ui('end');
+    // The joining voice is dropped before it ever speaks; p1 says the goodbye.
+    expect(p2.stopped).toBe(true);
+    expect(t1.sentEvents).toEqual(['[event: ending]']);
+    t1.mode('listening');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(p2.sentEvents).toEqual([]);
+    expect(t1.stopped).toBe(false);
+    t1.mode('speaking');
+    t1.mode('listening');
+    await vi.waitFor(() => expect(h.ctl.state).toBe('scoring'));
+    expect(h.markers()).not.toContain('[event: handover]');
+  });
+
+  it('a_second_hand_over_mid_swap_runs_after_it', async () => {
+    const h = harness({ res: { panel: [panelist('p1', 0), panelist('p2', 1), panelist('p3', 2)] } });
+    const t1 = await live(h);
+    t1.mode('speaking');
+    h.socket.serverSend('panel.hand_over', { from: 'p1', to: 'p2', opening_line: 'Hi' });
+    await vi.advanceTimersByTimeAsync(0);
+    h.socket.serverSend('panel.hand_over', { from: 'p2', to: 'p3', opening_line: 'Me next' });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.transports.map((t) => t.panelistId)).toEqual(['p1', 'p2']); // one at a time
+    t1.mode('listening');
+    await vi.advanceTimersByTimeAsync(0);
+    const [, p2, p3] = h.transports;
+    expect(p2!.sentEvents).toEqual(['[event: handover]']);
+    expect(p3!.panelistId).toBe('p3');
+    expect(h.api.joinPanelist).toHaveBeenLastCalledWith('sess1', 'p3', { deferred: true, from: 'p2' });
+    // p3 waits for p2's opening line to be over.
+    p2!.mode('speaking');
+    p2!.mode('listening');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(p3!.sentEvents).toEqual(['[event: handover]']);
+    expect(h.ctl.floor).toBe('p3');
+    expect(h.transports.filter((t) => !t.stopped).map((t) => t.panelistId)).toEqual(['p3']);
   });
 
   it('no_markers_or_voice_lost_during_a_hand_over', async () => {
@@ -899,7 +1075,7 @@ describe('RoundController hand-overs', () => {
     (h.transports[1] as SlowTransport).release();
     await vi.waitFor(() => expect(t.stopped).toBe(true));
     await vi.advanceTimersByTimeAsync(20_000);
-    expect(h.transports[1]!.sentEvents).toEqual(['[event: silence_check]']);
+    expect(h.transports[1]!.sentEvents).toEqual(['[event: handover]', '[event: silence_check]']);
   });
 
   it('transcripts_from_a_non_floor_session_are_ignored', async () => {
@@ -1389,7 +1565,7 @@ describe('RoundController in the room', () => {
     t.mode('listening'); // greeting done
     await vi.waitFor(() => expect(h.api.joinPanelist).toHaveBeenCalledTimes(1));
     await vi.waitFor(() => expect(t.stopped).toBe(true));
-    expect(h.markers()).toEqual(['[event: start]']); // one greeting only
+    expect(h.markers()).toEqual(['[event: start]', '[event: handover]']); // one greeting only
   });
 
   it('tap_to_hear_resends_the_start_to_a_real_voice_only_on_the_second_tap', async () => {
@@ -1448,16 +1624,6 @@ describe('RoundController in the room', () => {
     expect(h.socket.of('voice.spoken').at(-1)).toEqual({ panelist_id: 'p1', text_prefix: 'Go on.' });
     expect(h.socket.of('voice.spoken')).toHaveLength(2);
   });
-
-  /** Talks for 10 s without a break (the harness interrupts after 10 s). */
-  async function talkTooLong(t: ScriptedTransport) {
-    t.user('s1', 'So', false);
-    for (let i = 0; i < 10; i++) {
-      await vi.advanceTimersByTimeAsync(1_000);
-      t.user('s1', `So ${i}`, false);
-    }
-    await vi.advanceTimersByTimeAsync(100);
-  }
 
   it('long_answer_marker_goes_out_only_after_the_mute_took_effect', async () => {
     const h = harness({ slowMute: ['p1'] });
@@ -1940,22 +2106,24 @@ describe('RoundController pause and headset removal', () => {
     t1.mode('speaking'); // p1 is still saying its hand-off line
     h.socket.serverSend('panel.hand_over', { from: 'p1', to: 'p2', opening_line: 'Hi, I am Priya.' });
     await vi.advanceTimersByTimeAsync(0);
+    const t2 = h.transports[1]!; // joined at once, muted and silent
 
     h.xrVisibility('hidden'); // the headset comes off mid hand-over
     expect(h.ctl.state).toBe('paused');
     t1.mode('listening'); // interrupted
     await vi.advanceTimersByTimeAsync(10_000);
-    // Nobody new joins or speaks while the user is away.
-    expect(h.api.joinPanelist).not.toHaveBeenCalled();
-    expect(h.transports).toHaveLength(1);
+    // Nobody new speaks while the user is away.
+    expect(h.api.joinPanelist).toHaveBeenCalledTimes(1);
+    expect(t2.sentEvents).toEqual([]);
+    expect(t2.muted).toBe(true);
+    expect(t1.stopped).toBe(false);
 
     h.xrVisibility('visible');
     h.ui('resume');
     await vi.advanceTimersByTimeAsync(0);
-    expect(h.api.joinPanelist).toHaveBeenCalledWith('sess1', 'p2', { opening_line: 'Hi, I am Priya.' });
-    const t2 = h.transports[1]!;
+    expect(h.api.joinPanelist).toHaveBeenCalledTimes(1);
     expect(t2.panelistId).toBe('p2');
-    expect(t2.opts.openingLine).toBe('Hi, I am Priya.');
+    expect(t2.sentEvents).toEqual(['[event: handover]']);
     expect(t2.muted).toBe(false);
     expect(t1.stopped).toBe(true);
     expect(h.ctl.floor).toBe('p2');
@@ -1964,20 +2132,68 @@ describe('RoundController pause and headset removal', () => {
     expect(h.ctl.state).toBe('live');
   });
 
-  it('a_pause_that_lands_after_the_new_voice_joined_keeps_it_quiet_until_resume', async () => {
+  it('pause_mid_swap_keeps_new_voice_quiet_until_resume', async () => {
     const h = harness({ slow: ['p2'] });
-    await live(h);
+    const t1 = await live(h);
+    t1.mode('speaking');
     h.socket.serverSend('panel.hand_over', { from: 'p1', to: 'p2', opening_line: 'Hi, I am Priya.' });
     await vi.waitFor(() => expect(h.transports[1]?.started).toBe(true)); // p2 is joining
     h.ui('pause');
+    t1.mode('listening'); // cut off by the pause
     (h.transports[1] as SlowTransport).release();
-    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(30_000);
     const t2 = h.transports[1]!;
-    expect(t2.interrupts).toBe(1); // its opening line does not play into the pause
+    // Connected, but silent and deaf through the pause; p1 keeps the floor until Resume.
+    expect(t2.sentEvents).toEqual([]);
     expect(t2.muted).toBe(true);
+    expect(t1.stopped).toBe(false);
+    expect(h.ctl.floor).toBe('p1');
     h.ui('resume');
+    await vi.advanceTimersByTimeAsync(0);
+    // Its opening line is the welcome back: no second line is asked for.
+    expect(t2.sentEvents).toEqual(['[event: handover]']);
+    expect(h.markers()).not.toContain('[event: resume]');
     expect(t2.muted).toBe(false);
-    expect(t2.sentEvents).toEqual(['[event: resume]']);
+    expect(t1.stopped).toBe(true);
+    expect(h.ctl.floor).toBe('p2');
+  });
+
+  it('a_swap_joining_through_a_short_pause_still_welcomes_back_with_its_line', async () => {
+    // Paused and resumed while the join is still on its way: the line is the welcome back, never a second one.
+    let join!: () => void;
+    const h = harness();
+    h.api.joinPanelist.mockImplementationOnce(() => new Promise((r) => (join = () => r({ voice: { transport: 'fake' as const } }))));
+    const t1 = await live(h);
+    h.socket.serverSend('panel.hand_over', { from: 'p1', to: 'p2', opening_line: 'Hi' });
+    await vi.advanceTimersByTimeAsync(0);
+    h.ui('pause');
+    h.ui('resume');
+    join();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(t1.sentEvents).toEqual([]);
+    expect(h.transports[1]!.sentEvents).toEqual(['[event: handover]']);
+    expect(h.ctl.floor).toBe('p2');
+  });
+
+  it('a_swap_that_fails_during_a_pause_is_tried_again_on_resume', async () => {
+    const h = harness();
+    const t1 = await live(h);
+    let fail!: (e: Error) => void;
+    h.api.joinPanelist.mockImplementationOnce(() => new Promise((_r, rej) => (fail = rej)));
+    const errors = errorsOf(h);
+    h.socket.serverSend('panel.hand_over', { from: 'p1', to: 'p2', opening_line: 'Hi' });
+    await vi.advanceTimersByTimeAsync(0);
+    h.ui('pause');
+    fail(new Error('paused, voices released'));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(errors).toEqual([]);
+    expect(t1.muted).toBe(true);
+    h.ui('resume');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.api.joinPanelist).toHaveBeenCalledTimes(2);
+    expect(h.transports.at(-1)!.sentEvents).toEqual(['[event: handover]']);
+    expect(t1.sentEvents).not.toContain('[event: resume]');
+    expect(h.ctl.floor).toBe('p2');
   });
 
   it('visible_again_shows_welcome_back_without_resuming', async () => {
@@ -2148,9 +2364,12 @@ describe('RoundController pause and headset removal', () => {
     expect(h.ctl.state).toBe('live');
     const t2 = h.transports.at(-1)!;
     expect(t2.panelistId).toBe('p2');
-    // Its line was never said: it says it now (once), and nobody joins twice.
+    // Its line was never said: the new voices say it now (once), and nobody joins twice.
     expect(t2.sentEvents).toEqual(['[event: handover]']);
-    expect(h.api.joinPanelist).not.toHaveBeenCalled();
+    expect(h.api.joinPanelist).toHaveBeenCalledTimes(1); // the join ahead of the pause
+    const early = h.transports[1]!;
+    expect(early.stopped).toBe(true);
+    expect(early.sentEvents).toEqual([]);
     expect(t2.muted).toBe(false);
   });
 
@@ -2551,5 +2770,160 @@ describe('RoundController start, carried over', () => {
     expect(h.ctl.state).toBe('failed');
     expect(h.socket.connects).toBe(0);
     expect(errors.map((e) => (e as SessionError).code)).toEqual(['cancelled']);
+  });
+});
+
+/**
+ * The swap with the typed-turn voice end to end (FakeTransport against a stand-in for the server's endpoint):
+ * timings are those of a slow network, a slow join and a voice that takes a moment to start speaking.
+ */
+describe('RoundController swap with the fake voice', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-11-13T10:00:00Z'));
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const FETCH_MS = 300; // our endpoint's answer to a marker with a prepared line
+  const JOIN_MS = 400; // the join (the server mints the voice)
+  const TTS_MS = 150; // from text to the first sound
+  const LINE = 'Hi, I am Priya. Let me ask about failures.';
+
+  /** Answers like the server: the prepared line once on p2's hand-over marker, a model reply otherwise. */
+  function endpoint() {
+    let prepared: string | null = LINE;
+    const asked: { panelist: string; content: string }[] = [];
+    const fetchFn = vi.fn(async (_url: string, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body));
+      const panelist = body.fishaudio_extra_body.panelist_id as string;
+      const content = body.messages.at(-1).content as string;
+      asked.push({ panelist, content });
+      await new Promise((r) => setTimeout(r, FETCH_MS));
+      let text = 'Okay.';
+      if (content === '[event: start]') text = 'Hi, thanks for coming in.';
+      else if (content === 'I would shard the seats.') text = 'Good, that covers the write path. Priya will take the failure questions from here.';
+      else if (content === '[event: handover]' && panelist === 'p2' && prepared) {
+        text = prepared;
+        prepared = null;
+      }
+      const data = `data: ${JSON.stringify({ choices: [{ index: 0, delta: { content: text } }] })}\n\ndata: [DONE]\n\n`;
+      return new Response(new TextEncoder().encode(data), { status: 200, headers: { 'content-type': 'text/event-stream' } });
+    });
+    return { fetchFn, asked };
+  }
+
+  /** A voice that starts sounding TTS_MS after it is given a sentence and talks 40 ms a character. */
+  class TimedSpeaker implements Speaker {
+    spoken: string[] = [];
+    private timers = new Set<ReturnType<typeof setTimeout>>();
+    private ends = new Set<() => void>();
+    speak(text: string, _rate: number, onStart: () => void): Promise<void> {
+      return new Promise<void>((resolve) => {
+        const end = () => {
+          this.ends.delete(end);
+          resolve();
+        };
+        this.ends.add(end);
+        const a = setTimeout(() => {
+          this.timers.delete(a);
+          this.spoken.push(text);
+          onStart();
+          const b = setTimeout(() => {
+            this.timers.delete(b);
+            end();
+          }, text.length * 40);
+          this.timers.add(b);
+        }, TTS_MS);
+        this.timers.add(a);
+      });
+    }
+    cancel(): void {
+      for (const t of this.timers) clearTimeout(t);
+      this.timers.clear();
+      for (const e of [...this.ends]) e();
+    }
+  }
+
+  /** When p1's hand-off sentence began and ended, when p2 was up and first sounded. */
+  function swapTimes(timeline: { at: number; panelist: string; mode: VoiceMode }[]) {
+    const p1 = timeline.filter((e) => e.panelist === 'p1');
+    const last = p1.map((e) => e.mode).lastIndexOf('speaking');
+    const after = p1.slice(last + 1);
+    const p2 = timeline.filter((e) => e.panelist === 'p2');
+    return {
+      handOffStart: p1[last]!.at,
+      quietAt: after[0]!.at,
+      // Stopped while still speaking (its last event is the stop, not the end of its reply).
+      p1Cut: after.length === 1,
+      joinedAt: p2[0]!.at,
+      firstSound: p2.find((e) => e.mode === 'speaking')!.at,
+    };
+  }
+
+  async function fakeVoiceRound() {
+    const h = harness();
+    const server = endpoint();
+    const speakers = new Map<string, TimedSpeaker[]>();
+    const timeline: { at: number; panelist: string; mode: VoiceMode }[] = [];
+    h.deps.makeTransport = (p) => {
+      const speaker = new TimedSpeaker();
+      speakers.set(p.panelist_id, [...(speakers.get(p.panelist_id) ?? []), speaker]);
+      const t = new FakeTransport(p, { sessionId: 'sess1', clientToken: 'tok1', fetch: server.fetchFn as unknown as typeof fetch, speaker });
+      t.on('mode', (m) => timeline.push({ at: Date.now(), panelist: p.panelist_id, mode: m }));
+      // A voice that is stopped falls silent without a last mode.
+      t.on('ended', () => timeline.push({ at: Date.now(), panelist: p.panelist_id, mode: 'listening' }));
+      return t;
+    };
+    h.api.joinPanelist.mockImplementation(async () => {
+      await new Promise((r) => setTimeout(r, JOIN_MS));
+      return { voice: { transport: 'fake' as const } };
+    });
+    // Answering the question gets p1's hand-off sentence; the server sends the hand-over once its first words play.
+    h.socket.send = ((t: string, d: Record<string, unknown>) => {
+      h.socket.sent.push({ t, d });
+      if (t === 'voice.spoken' && String(d.text_prefix).startsWith('Good, that covers')) {
+        setTimeout(() => h.socket.serverSend('panel.hand_over', { from: 'p1', to: 'p2', opening_line: LINE }), 0);
+      }
+    }) as typeof h.socket.send;
+    await h.ctl.start(h.req);
+    await vi.advanceTimersByTimeAsync(5_000); // the greeting plays
+    expect(h.ctl.state).toBe('live');
+    return { h, server, speakers, timeline };
+  }
+
+  it('swap_opening_line_spoken_once_via_handover_marker', async () => {
+    const { h, server, speakers, timeline } = await fakeVoiceRound();
+    h.ctl.sendTypedTurn('I would shard the seats.');
+    await vi.advanceTimersByTimeAsync(1_000);
+    // A second hand-over to the same panelist arrives mid-swap (the server sends it again): still one swap.
+    h.socket.serverSend('panel.hand_over', { from: 'p1', to: 'p2', opening_line: LINE });
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    expect(h.ctl.floor).toBe('p2');
+    expect(h.api.joinPanelist).toHaveBeenCalledTimes(1);
+    expect(h.api.joinPanelist).toHaveBeenCalledWith('sess1', 'p2', { deferred: true, from: 'p1' });
+    // The line came from the server, asked for with the marker once, and was spoken once.
+    expect(server.asked.filter((a) => a.panelist === 'p2')).toEqual([{ panelist: 'p2', content: '[event: handover]' }]);
+    const p2Speech = (speakers.get('p2') ?? []).flatMap((s) => s.spoken);
+    expect(p2Speech).toEqual(['Hi, I am Priya.', 'Let me ask about failures.']);
+    // Never two voices at once: p2 first sounds after p1's hand-off sentence is over (not cut by the wait's cap).
+    const { quietAt, firstSound, p1Cut } = swapTimes(timeline);
+    expect(p1Cut).toBe(false);
+    expect(firstSound).toBeGreaterThan(quietAt);
+  });
+
+  it('swap_new_voice_sounds_within_1_5_s_of_the_old_going_quiet', async () => {
+    const { h, timeline } = await fakeVoiceRound();
+    h.ctl.sendTypedTurn('I would shard the seats.');
+    await vi.advanceTimersByTimeAsync(15_000);
+    const { quietAt, firstSound, p1Cut, joinedAt, handOffStart } = swapTimes(timeline);
+    expect(p1Cut).toBe(false);
+    // The join and the connect happened during p1's sentence; what is left is the marker's answer and the voice start.
+    expect(joinedAt).toBeGreaterThan(handOffStart);
+    expect(joinedAt).toBeLessThan(quietAt);
+    expect(firstSound - quietAt).toBeLessThanOrEqual(1_500);
+    expect(firstSound - quietAt).toBeGreaterThan(0);
   });
 });

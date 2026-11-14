@@ -83,11 +83,11 @@ export interface VoiceTransport {
   startAudio?(): Promise<void>;
 }
 
-/** Options a transport factory gets besides the panelist. */
-export interface TransportOptions {
-  /** Swap-mode hand-over: the line the new panelist opens with. */
-  openingLine?: string;
-}
+/**
+ * Options a transport factory gets besides the panelist. None today: a swap's new voice joins
+ * silent and says its opening line on `[event: handover]`, like any other marker turn.
+ */
+export interface TransportOptions {}
 
 /** Small typed event emitter; a failing listener never breaks the others. */
 export class Emitter<E extends { [K in keyof E]: (...args: never[]) => void }> {

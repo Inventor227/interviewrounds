@@ -21,8 +21,6 @@ export interface FakeTransportOptions {
   clientToken: string;
   /** Speech rate (settings.voice_speed, 0.8 to 1.25). */
   rate?: number;
-  /** Swap-mode hand-over line, spoken on start. */
-  openingLine?: string;
   endpoint?: string;
   fetch?: typeof fetch;
   speaker?: Speaker;
@@ -163,12 +161,9 @@ export class FakeTransport implements VoiceTransport {
     return this.events.on(event, cb);
   }
 
+  /** Joins silent, like a Fish voice with no first message: it speaks when a turn or a marker asks. */
   async start(): Promise<void> {
     this.setMode('listening');
-    const line = this.opts.openingLine?.trim();
-    if (line) void this.reply((async function* () {
-      yield line;
-    })());
   }
 
   async stop(): Promise<void> {

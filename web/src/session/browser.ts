@@ -21,14 +21,13 @@ export const browserMedia: MediaPort = {
 
 /** Fish voices go through Fish Agents; everything else uses the typed-turn fake. */
 export function makeTransport(settings: { voice_speed?: number } = {}) {
-  return (p: Panelist, opts: TransportOptions | undefined, res: CreateSessionRes): VoiceTransport =>
+  return (p: Panelist, _opts: TransportOptions | undefined, res: CreateSessionRes): VoiceTransport =>
     p.voice.transport === 'fish'
       ? new FishTransport(p)
       : new FakeTransport(p, {
           sessionId: res.session_id,
           clientToken: res.client_token,
           rate: settings.voice_speed ?? 1,
-          openingLine: opts?.openingLine,
         });
 }
 
