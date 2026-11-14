@@ -11,7 +11,7 @@ The room's furniture is built in code, so this folder ships no third-party model
 | Sheet paper texture | drawn on a canvas in `web/src/xr/room.ts` |
 | Contact shadows | IWSDK `ContactShadow` (MIT) |
 | Image based lighting | IWSDK `IBLTexture` "room" environment (three.js RoomEnvironment, MIT) |
-| UI sounds | synthesized with Web Audio in `web/src/xr/sound.ts` |
+| UI sounds | samples in `web/public/sfx/`: six recordings by Kenney (CC0 1.0) and six round cues generated with ElevenLabs on our paid plan; sources, edits and terms in `web/public/sfx/CREDITS.md`. `web/src/xr/sound.ts` synthesizes a sound with Web Audio only when its sample has not loaded |
 | Panel font | Inter by Rasmus Andersson, SIL Open Font License 1.1, as MSDF atlases redistributed by `@pmndrs/msdfonts` (from Google Fonts) via UIKit |
 | Stand-in people (preview and screenshots) | Microsoft Rocketbox avatars and animations, MIT licence; see `web/public/avatars/LICENSE.md` |
 
