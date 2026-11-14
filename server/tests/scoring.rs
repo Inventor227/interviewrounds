@@ -1716,6 +1716,13 @@ fn scrub_takes_out_app_notes_and_board_ids_and_leaves_other_text_alone() {
         scrub_str("[event: handover] Hi, I am Priya."),
         "Hi, I am Priya."
     );
+    // A field that starts with cut ids or notes keeps no leading comma or semicolon.
+    assert_eq!(scrub_str("x2_1, x3_1 and the queue"), "and the queue");
+    assert_eq!(scrub_str("[App note, x]; then go"), "then go");
+    assert_eq!(
+        scrub_str("One line\nx2_1, and the next"),
+        "One line\nand the next"
+    );
     // Only the text around a cut is tidied: real brackets, colons and indentation elsewhere stay.
     assert_eq!(scrub_str("Call cache() on x2_1"), "Call cache() on");
     assert_eq!(
