@@ -322,4 +322,15 @@ describe('Report', () => {
     expect($(root, 'report-failed')).not.toBeNull();
     expect(($(root, 'report-retry') as HTMLButtonElement).disabled).toBe(false);
   });
+
+  it('report_lists_the_board_in_words_part_by_part', async () => {
+    useFakeServer();
+    const root = await renderApp('/report/demo');
+    const list = $(root, 'board-text')!;
+    expect(list.tagName).toBe('UL');
+    const items = [...list.querySelectorAll('li')];
+    expect(items.map((li) => li.querySelector('.board-part')?.textContent)).toEqual(['Components', 'Links']);
+    expect(items[1]!.textContent).toContain('Shortener → Redis (read-through)');
+    expect(list.textContent).not.toMatch(/\[Board update|do not read aloud/);
+  });
 });

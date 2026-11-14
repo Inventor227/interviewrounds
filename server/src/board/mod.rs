@@ -5,8 +5,10 @@
 //! - [`apply`]: the pure op apply (no undo, no log).
 //! - [`BoardSession`]: the board plus its op log; handles undo, ghosts and rejected ops the way the server answers them.
 //! - [`summary`]: the deterministic text the live interviewer gets about the board.
+//! - [`reader`]: the board in plain words for the report and the scorer (no header, no ids).
 
 pub mod apply;
+pub mod reader;
 mod session;
 pub mod summary;
 
@@ -15,6 +17,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 
 pub use apply::{BoardError, apply};
+pub use reader::reader_text;
 pub use session::{ApplyOutcome, BoardSession, FOCUS_TTL};
 pub use summary::summary;
 

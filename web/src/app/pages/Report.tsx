@@ -380,6 +380,31 @@ function Room(props: { m: MeetingDetails }) {
   );
 }
 
+/**
+ * The final board in words, one part per line ("Components: ...", "Links: ..."): a short list, the part's name
+ * set apart from what was on the board.
+ */
+function BoardText(props: { text: string }) {
+  const parts = props.text
+    .split('\n')
+    .map((l) => l.trim())
+    .filter(Boolean)
+    .map((l) => {
+      const m = /^([A-Z][A-Za-z ]{1,30}): (.+)$/.exec(l);
+      return m ? { name: m[1]!, text: m[2]! } : { name: null, text: l };
+    });
+  return (
+    <ul class="board-text" data-test="board-text">
+      {parts.map((p, i) => (
+        <li key={i}>
+          {p.name && <span class="board-part">{p.name}</span>}
+          <span>{p.text}</span>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
 function Transcript(props: { r: ReportData; catalog?: Catalog; player: Player | null }) {
   const lines = transcriptOf(props.r);
   const name = (s: string) => (s === 'user' ? 'You' : persona(props.catalog, s)?.display_name ?? s.replace(/^persona\./, ''));
@@ -660,9 +685,7 @@ function ReportBody(props: { r: ReportData }) {
               <img src={board.board_image_url} alt="Your board at the end of the round" loading="lazy" />
             </figure>
           ) : board?.board_as_text ? (
-            <p class="board-text" data-test="board-text">
-              {board.board_as_text}
-            </p>
+            <BoardText text={board.board_as_text} />
           ) : null}
         </Section>
 

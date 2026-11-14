@@ -240,7 +240,7 @@
   },
   "round_details": {
     "kind": "system_design",
-    "board_as_text": "HLD \"Design a URL shortener\". 5 components, 4 links.",
+    "board_as_text": "Components: Mobile app (client), LB (load balancer), Shortener (service: stateless; base62), Redis (cache), URL store (key value store).\nLinks: Mobile app → LB, LB → Shortener, Shortener → Redis (read-through), Shortener → URL store.",
     "requirements_captured": [
       "100M new URLs per day",
       "Reads are 100x writes"

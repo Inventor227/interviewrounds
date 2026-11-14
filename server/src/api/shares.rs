@@ -246,9 +246,10 @@ async fn page_inner(app: &AppState, slug: &str) -> anyhow::Result<Response> {
     .bind(session_id)
     .fetch_optional(&app.db)
     .await?;
-    let Some((report, round_id, mode, panel, started_at, created_at)) = row else {
+    let Some((mut report, round_id, mode, panel, started_at, created_at)) = row else {
         return Ok(missing());
     };
+    crate::scoring::readable_report(&app.db, session_id, &mut report).await?;
     let lines = if with_transcript {
         crate::retry::lines(&app.db, session_id).await?
     } else {
@@ -521,7 +522,7 @@ fn transcript_block(lines: &[Line], panel: &[PanelEntry], meeting: bool) -> Stri
             if l.speaker == "user" { "you" } else { "them" },
             esc(&stamp),
             esc(&who),
-            esc(l.text.trim())
+            esc(crate::scoring::report::scrub_str(l.text.trim()).as_str())
         ));
     }
     format!(

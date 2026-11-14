@@ -1166,14 +1166,13 @@ pub fn build_card(out: &Value, lines: &[Line]) -> (Option<Value>, Vec<Value>) {
     };
     let strength = pick("top_strength", "c1", "positive");
     let fix = pick("top_fix", "c2", "negative");
-    let one_line = clip_line(s(out, "one_line"), 140);
+    let one_line = clip_line(&scrub_str(s(out, "one_line")), 140);
     if one_line.is_empty() && strength.is_null() && fix.is_null() {
         return (None, Vec::new());
     }
-    (
-        Some(json!({ "one_line": one_line, "top_strength": strength, "top_fix": fix })),
-        items,
-    )
+    let mut card = json!({ "one_line": one_line, "top_strength": strength, "top_fix": fix });
+    scrub_app_text(&mut card);
+    (Some(card), items)
 }
 
 /// The meeting reactions schema (attendees, objections, next steps), quotes by segment id.
@@ -2184,4 +2183,154 @@ fn round1(x: f64) -> f64 {
 
 fn round2(x: f64) -> f64 {
     (x * 100.0).round() / 100.0
+}
+
+// ---------- app text kept out of what people read ----------
+
+/// Bracketed app markers that are for the interviewer only (`[Board update rN, ...]`, `[App note, ...]`,
+/// `[event: ...]`), lower case.
+const APP_MARKERS: &[&str] = &["board update", "app note", "event:"];
+/// The live summary's instruction to the interviewer, lower case.
+const NOT_ALOUD: &str = "do not read aloud";
+
+/// True for a board item id the Scribe makes (`x2_1`: `x`, digits, `_`, digits).
+fn is_scribe_id(t: &str) -> bool {
+    let Some(rest) = t.strip_prefix('x') else {
+        return false;
+    };
+    let Some((a, b)) = rest.split_once('_') else {
+        return false;
+    };
+    !a.is_empty()
+        && !b.is_empty()
+        && a.bytes().all(|c| c.is_ascii_digit())
+        && b.bytes().all(|c| c.is_ascii_digit())
+}
+
+/// One string without the app's markers, the "do not read aloud" note or Scribe item ids. Unchanged when it has
+/// none of them.
+pub fn scrub_str(s: &str) -> String {
+    let lower = s.to_lowercase();
+    // Lower-casing can change byte offsets (a few non-ASCII letters): then only exact-case matches are looked for.
+    let same_len = lower.len() == s.len();
+    let find_ci = |hay: &str, needle: &str| -> bool {
+        if same_len {
+            lower.contains(needle)
+        } else {
+            hay.contains(needle)
+        }
+    };
+    let has_marker = APP_MARKERS.iter().any(|m| find_ci(s, m));
+    let has_note = find_ci(s, NOT_ALOUD);
+    let has_id = s
+        .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+        .any(is_scribe_id);
+    if !has_marker && !has_note && !has_id {
+        return s.to_string();
+    }
+    let chars: Vec<char> = s.chars().collect();
+    let mut out = String::with_capacity(s.len());
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        if c == '[' {
+            let ahead: String = chars[i + 1..]
+                .iter()
+                .skip_while(|c| c.is_whitespace())
+                .take(16)
+                .flat_map(|c| c.to_lowercase())
+                .collect();
+            if APP_MARKERS.iter().any(|m| ahead.starts_with(m)) {
+                // Up to the closing bracket, or the end of the line when there is none.
+                let end = chars[i..]
+                    .iter()
+                    .position(|&c| c == ']' || c == '\n')
+                    .map(|p| i + p)
+                    .unwrap_or(chars.len());
+                i = if chars.get(end) == Some(&']') {
+                    end + 1
+                } else {
+                    end
+                };
+                continue;
+            }
+        }
+        if c == 'x' && (i == 0 || !(chars[i - 1].is_ascii_alphanumeric() || chars[i - 1] == '_')) {
+            let len = chars[i..]
+                .iter()
+                .take_while(|c| c.is_ascii_alphanumeric() || **c == '_')
+                .count();
+            let token: String = chars[i..i + len].iter().collect();
+            if is_scribe_id(&token) {
+                i += len;
+                continue;
+            }
+        }
+        let rest: String = chars[i..i + NOT_ALOUD.len().min(chars.len() - i)]
+            .iter()
+            .flat_map(|c| c.to_lowercase())
+            .collect();
+        if rest == NOT_ALOUD {
+            i += NOT_ALOUD.len();
+            continue;
+        }
+        out.push(c);
+        i += 1;
+    }
+    // What the cuts leave behind: doubled spaces, a space before punctuation, empty brackets.
+    let mut tidy = out
+        .split(' ')
+        .filter(|w| !w.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ");
+    for (from, to) in [
+        (" ,", ","),
+        (" .", "."),
+        (" ;", ";"),
+        (" :", ":"),
+        ("()", ""),
+        (",,", ","),
+    ] {
+        while tidy.contains(from) {
+            tidy = tidy.replace(from, to);
+        }
+    }
+    let tidy = tidy
+        .trim_matches(|c: char| c.is_whitespace() || c == ',' || c == ';')
+        .to_string();
+    tidy.lines()
+        .map(str::trim_start)
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Keys whose values are ids, links or times, never prose.
+fn is_id_key(k: &str) -> bool {
+    k == "id"
+        || k.ends_with("_id")
+        || k.ends_with("_ids")
+        || k.ends_with("slug")
+        || k.ends_with("_url")
+}
+
+/// Takes the app's own notes to the interviewer (markers, "do not read aloud", board item ids) out of every
+/// prose string of a report or a headset card, wherever the model may have copied them.
+pub fn scrub_app_text(v: &mut Value) {
+    match v {
+        Value::String(s) => {
+            let clean = scrub_str(s);
+            if clean != *s {
+                *s = clean;
+            }
+        }
+        Value::Array(a) => a.iter_mut().for_each(scrub_app_text),
+        Value::Object(o) => {
+            for (k, x) in o.iter_mut() {
+                if !is_id_key(k) {
+                    scrub_app_text(x);
+                }
+            }
+        }
+        _ => {}
+    }
 }

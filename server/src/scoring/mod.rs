@@ -77,6 +77,8 @@ pub struct ScoringInput {
     pub turns: Vec<TurnRec>,
     pub marks: Vec<MarkRec>,
     pub head: Vec<HeadSample>,
+    /// The final board in plain words (`board::reader_text`): what the scorer reads and the report shows. Never
+    /// the live interviewer's summary, whose header and item ids are not for people.
     pub board_text: Option<String>,
     pub board_ops: Vec<BoardOpRec>,
     /// The final board render, at most 1568 px on the long edge.
@@ -330,6 +332,56 @@ fn str_of(v: &Value, key: &str) -> Option<String> {
     v.get(key).and_then(Value::as_str).map(str::to_string)
 }
 
+/// A stored report as people get to read it (the report page and the public scorecard). Reports scored before
+/// the board text was written for people carry the interviewer's live board summary: it is rebuilt from the
+/// saved board (or dropped), and the app's notes to the interviewer are taken out of every field.
+pub async fn readable_report(
+    db: &PgPool,
+    session_id: Uuid,
+    report: &mut Value,
+) -> Result<(), sqlx::Error> {
+    let live_text = report
+        .pointer("/round_details/board_as_text")
+        .and_then(Value::as_str)
+        .is_some_and(|t| t.contains("[Board update"));
+    if live_text {
+        let board: Option<(Value, String)> =
+            sqlx::query_as("select doc, summary from boards where session_id = $1")
+                .bind(session_id)
+                .fetch_optional(db)
+                .await?;
+        let text = board.and_then(|(doc, summary)| board_reader_text(session_id, doc, summary));
+        if let Some(details) = report
+            .get_mut("round_details")
+            .and_then(Value::as_object_mut)
+        {
+            match text {
+                Some(t) => details.insert("board_as_text".into(), Value::String(t)),
+                None => details.remove("board_as_text"),
+            };
+        }
+    }
+    report::scrub_app_text(report);
+    Ok(())
+}
+
+/// The saved board in plain words. A stored document that does not read as a board falls back to the stored
+/// summary only when that is already plain text (no live header, so no item ids); otherwise there is no board
+/// text rather than one meant for the interviewer.
+fn board_reader_text(session_id: Uuid, doc: Value, summary: String) -> Option<String> {
+    match serde_json::from_value::<crate::board::Board>(doc) {
+        Ok(board) => Some(crate::board::reader_text(&board)),
+        Err(err) => {
+            if summary.trim().is_empty() || summary.contains("[Board update") {
+                tracing::warn!(session_id = %session_id, error = %err, "the saved board does not read as a board; no board text");
+                None
+            } else {
+                Some(summary)
+            }
+        }
+    }
+}
+
 /// Reads one session from the 0001 tables (and the columns later migrations add, when present: `question_id` and
 /// the `live_state` snapshot with the phase index, hints and elapsed time). None when the session does not exist.
 pub async fn load_scoring_input(
@@ -485,10 +537,12 @@ pub async fn load_scoring_input(
         .filter_map(|s| serde_json::from_value::<HeadSample>(s.clone()).ok())
         .collect();
 
-    input.board_text = sqlx::query_scalar("select summary from boards where session_id = $1")
-        .bind(session_id)
-        .fetch_optional(pool)
-        .await?;
+    let board: Option<(Value, String)> =
+        sqlx::query_as("select doc, summary from boards where session_id = $1")
+            .bind(session_id)
+            .fetch_optional(pool)
+            .await?;
+    input.board_text = board.and_then(|(doc, summary)| board_reader_text(session_id, doc, summary));
     let ops: Vec<OpRow> = sqlx::query_as(
         "select src, op, args, t_ms, accepted from board_ops where session_id = $1 \
          order by coalesce(t_ms, 0), id",
@@ -886,15 +940,19 @@ async fn score_session_inner(deps: &ScoringDeps, session_id: Uuid) -> anyhow::Re
         );
         record_usage(deps, session_id, attempt, &calls).await;
         let stored = match result {
-            Ok(scored) => store_report(
-                &deps.db,
-                session_id,
-                &scored.report,
-                scored.model_called.then_some(model.as_str()),
-            )
-            .await
-            .map(|_| scored)
-            .map_err(anyhow::Error::from),
+            Ok(mut scored) => {
+                // Whatever the model copied from the interviewer's notes stays out of what people read.
+                report::scrub_app_text(&mut scored.report);
+                store_report(
+                    &deps.db,
+                    session_id,
+                    &scored.report,
+                    scored.model_called.then_some(model.as_str()),
+                )
+                .await
+                .map(|_| scored)
+                .map_err(anyhow::Error::from)
+            }
             Err(err) => Err(err),
         };
         match stored {

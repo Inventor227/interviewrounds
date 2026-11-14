@@ -1682,6 +1682,193 @@ fn post(path: String, ct: &'static str, body: Vec<u8>) -> Request<Body> {
         .unwrap()
 }
 
+/// Fails when `text` carries anything the app writes for the interviewer only: its bracketed markers, the "do not
+/// read aloud" note, or a board item id (`x2_1` from the Scribe, or one of `ids`).
+fn assert_no_app_text(text: &str, ids: &[&str], what: &str) {
+    let lower = text.to_lowercase();
+    for marker in ["[board update", "[app note", "do not read aloud"] {
+        assert!(!lower.contains(marker), "{what} carries {marker:?}: {text}");
+    }
+    for token in text.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_')) {
+        let scribe_id = token
+            .strip_prefix('x')
+            .and_then(|r| r.split_once('_'))
+            .is_some_and(|(a, b)| {
+                !a.is_empty()
+                    && !b.is_empty()
+                    && a.bytes().all(|c| c.is_ascii_digit())
+                    && b.bytes().all(|c| c.is_ascii_digit())
+            });
+        assert!(!scribe_id, "{what} carries the board id {token}: {text}");
+        assert!(
+            !ids.contains(&token),
+            "{what} carries the board id {token}: {text}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_scored_report_and_its_public_page_carry_no_app_notes_or_board_ids() {
+    let _serial = db_lock().lock().await;
+    let db = pool().await;
+    let data = common::temp_dir("data");
+    let mut input = long_design_input();
+    input.turns.push(turn(
+        8,
+        "agent",
+        Some("p1"),
+        "Let's look at x3_1 first. What does it write?",
+        335_000,
+    ));
+    let mut note = turn(
+        9,
+        "system",
+        None,
+        "[App note, do not read aloud] The candidate went quiet.",
+        340_000,
+    );
+    note.kind = "event".into();
+    input.turns.push(note);
+    let id = insert_session(&db, &input).await;
+    // The saved board: Scribe ids and one hand-made id; the stored summary is the interviewer's.
+    let doc = json!({
+        "schema": "ir.board.v1",
+        "round": {"id": "s1", "type": "hld", "question_id": null, "language": null},
+        "rev": 3, "size": {"w": 64, "h": 40},
+        "brief": {"question": "Design a ticket drop", "lines": []},
+        "items": [
+            {"id": "x2_1", "kind": "component", "type": "service", "label": "Waiting room", "x": 2, "y": 2, "w": 8, "h": 5},
+            {"id": "x2_2", "kind": "component", "type": "cache", "label": "Seat map cache", "x": 14, "y": 2, "w": 8, "h": 5},
+            {"id": "x3_1", "kind": "component", "type": "service", "label": "Booking service", "x": 26, "y": 2, "w": 8, "h": 5},
+            {"id": "x3_2", "kind": "component", "type": "db", "label": "Seat table", "x": 38, "y": 2, "w": 8, "h": 5},
+            {"id": "hq7wkn12", "kind": "component", "type": "service", "label": "Rate limiter", "x": 50, "y": 2, "w": 8, "h": 5}
+        ],
+        "edges": [{"id": "hq7wke13", "from": "x3_1", "to": "x3_2", "dir": "->", "label": null, "rel": null}],
+        "code": null, "meeting": null, "focus": null, "ghosts": [], "op_ids": []
+    });
+    let board: ir_server::board::Board = serde_json::from_value(doc.clone()).unwrap();
+    let live = ir_server::board::summary(&board, None);
+    assert!(live.starts_with("[Board update r3, do not read aloud]") && live.contains("x3_1"));
+    sqlx::query("update boards set doc = $2, summary = $3 where session_id = $1")
+        .bind(id)
+        .bind(&doc)
+        .bind(&live)
+        .execute(&db)
+        .await
+        .unwrap();
+    let ids = ["hq7wkn12", "hq7wke13"];
+
+    // The model copies the interviewer's notes and the board ids into its prose.
+    let mut out = model_output();
+    out["headline"]["summary"] =
+        json!("You designed x3_1 around double selling (do not read aloud).");
+    out["weaknesses"][0]["detail"] =
+        json!("[App note, do not read aloud] More servers is not a bottleneck on x2_2.");
+    out["round_details"]["missing_components"] = json!([
+        "A rate limiter in front of x3_1",
+        "[Board update r3, do not read aloud] A hold sweeper"
+    ]);
+    let llm = ScriptedLlm::new(vec![Ok(out.to_string())]);
+    let d = deps(&db, llm.clone(), &data);
+    scoring::score_session(&d, id).await.unwrap();
+    // The scorer reads the board in plain words too.
+    let prompt = format!("{:?}", llm.main_request());
+    assert!(prompt.contains("Booking service → Seat table"), "{prompt}");
+    assert!(!prompt.contains("[Board update"), "{prompt}");
+
+    let who = owner(&db, id).await;
+    let res = common::get(
+        report_app(&db, &data, who.clone()),
+        &format!("/api/sessions/{id}/report"),
+    )
+    .await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let body = common::body_json(res).await;
+    assert!(schema().errors(&body).is_empty());
+    assert_eq!(
+        body["round_details"]["board_as_text"],
+        "Components: Waiting room (service), Seat map cache (cache), Booking service (service), Seat table (database), Rate limiter (service).\n\
+         Links: Booking service → Seat table."
+    );
+    assert_eq!(
+        body["round_details"]["missing_components"],
+        json!(["A rate limiter in front of", "A hold sweeper"])
+    );
+    assert_no_app_text(&body.to_string(), &ids, "the report");
+
+    // The public scorecard, with the transcript.
+    sqlx::query(
+        "insert into shares (slug, session_id, identity_id, include_transcript) values ('Ab3_x9-QzK', $1, $2, true)",
+    )
+    .bind(id)
+    .bind(who.id)
+    .execute(&db)
+    .await
+    .unwrap();
+    let pages = Router::new()
+        .route(
+            "/s/{slug}",
+            axum::routing::get(ir_server::api::shares::page),
+        )
+        .with_state(AppState::new(db.clone(), config(&data)));
+    let res = common::get(pages, "/s/Ab3_x9-QzK").await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let html = String::from_utf8(common::body_bytes(res).await).unwrap();
+    assert!(
+        html.contains("What does it write?"),
+        "the transcript is on the page"
+    );
+    assert_no_app_text(&html, &ids, "the public page");
+}
+
+/// A report stored before the board text was written for people still reads cleanly: its live summary is rebuilt
+/// from the saved board when it is served.
+#[tokio::test]
+async fn an_older_report_with_the_live_board_summary_is_served_readable() {
+    let _serial = db_lock().lock().await;
+    let db = pool().await;
+    let data = common::temp_dir("data");
+    let input = long_design_input();
+    let id = insert_session(&db, &input).await;
+    let doc = json!({
+        "schema": "ir.board.v1",
+        "round": {"id": "s1", "type": "hld", "question_id": null, "language": null},
+        "rev": 2, "size": {"w": 64, "h": 40},
+        "brief": {"question": "Design a ticket drop", "lines": []},
+        "items": [
+            {"id": "x2_1", "kind": "component", "type": "service", "label": "Waiting room", "x": 2, "y": 2, "w": 8, "h": 5}
+        ],
+        "edges": [], "code": null, "meeting": null, "focus": null, "ghosts": [], "op_ids": []
+    });
+    let board: ir_server::board::Board = serde_json::from_value(doc.clone()).unwrap();
+    let live = ir_server::board::summary(&board, None);
+    sqlx::query("update boards set doc = $2, summary = $3 where session_id = $1")
+        .bind(id)
+        .bind(&doc)
+        .bind(&live)
+        .execute(&db)
+        .await
+        .unwrap();
+    let mut old = common::scored::example_report(&id.to_string());
+    old.as_object_mut().unwrap().remove("share");
+    old["round_details"] = json!({"kind": "system_design", "board_as_text": live});
+    scoring::store_report(&db, id, &old, Some("claude-opus-5-5"))
+        .await
+        .unwrap();
+    let who = owner(&db, id).await;
+    let res = common::get(
+        report_app(&db, &data, who),
+        &format!("/api/sessions/{id}/report"),
+    )
+    .await;
+    let body = common::body_json(res).await;
+    assert_eq!(
+        body["round_details"]["board_as_text"],
+        "Components: Waiting room (service)."
+    );
+    assert_no_app_text(&body.to_string(), &[], "the older report");
+}
+
 #[tokio::test]
 async fn score_session_stores_report_and_serves_it() {
     let _serial = db_lock().lock().await;
