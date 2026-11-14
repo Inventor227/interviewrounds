@@ -159,12 +159,25 @@ for (const [i, turn] of turns.entries()) {
   if (BOARD && i === 1) await drawTwoBoxes();
   if (BOARD && !pinched && i >= 2) pinched = await pinchGhost(turn.drawing ? 12 : 4);
   if (MEETING && i === 2) {
-    const fl = await until('the floor to move', () => {
+    // round-lib's until ends the run on a timeout: a poll of its own, with one more ask if the floor stays.
+    const floorNow = () => page(() => {
       const c = globalThis.__round.controller;
       return c.floor !== globalThis.__round.session.floor ? c.floor : null;
-    }, null, 30000, 2000).catch(() => null);
+    }).catch(() => null);
+    let fl = null;
+    for (let k = 0; k < 15 && !fl; k++) {
+      await sleep(2000);
+      fl = await floorNow();
+    }
+    if (!fl && (await roundState())?.state === 'live') {
+      stage('ask Tom once more', await answer('Tom, I would really like to hear from you now. What would stop you from investing?', 120000));
+      for (let k = 0; k < 15 && !fl; k++) {
+        await sleep(2000);
+        fl = await floorNow();
+      }
+    }
     stage('hand-over', { floor: fl });
-    if (!fl) problem('no hand-over after asking Tom', null);
+    if (!fl) problem('no hand-over after asking Tom twice', null);
     await look(S, -12, 10);
     await sleep(800);
     await shot('06-hand-over');
