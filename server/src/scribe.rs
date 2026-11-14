@@ -342,7 +342,7 @@ impl Scribe {
                 args: op.args,
             });
         }
-        out
+        unstack(input.board, out)
     }
 }
 
@@ -886,16 +886,37 @@ fn quadrant_said(heard: &HashSet<String>) -> bool {
     heard.iter().any(|w| CUES.iter().any(|c| w.starts_with(c)))
 }
 
-/// Free board positions for a new card of this kit's usual size, best first (nearest the focus item when there
-/// is one, else top-left first), as whole centimetres.
-pub fn free_slots(board: &Board, focus: Option<&str>, n: usize) -> Vec<(i64, i64)> {
-    let (sw, sh) = match board.round.kit {
-        BoardKit::Hld | BoardKit::Coding => (8, 5),
-        BoardKit::Lld => (14, 10),
-        BoardKit::Pm => (10, 7),
-        BoardKit::Meeting => (7, 7),
-    };
-    let rects: Vec<(f64, f64, f64, f64)> = board.items.iter().map(Item::rect).collect();
+/// The board area a pending suggestion will take once accepted: a new item, or an item moved to a new place.
+fn ghost_rect(board: &Board, g: &GhostOp) -> Option<(f64, f64, f64, f64)> {
+    match g.op.as_str() {
+        "item.create" => serde_json::from_value::<Item>(g.args.clone())
+            .ok()
+            .filter(|i| !matches!(i, Item::Ink(_)))
+            .map(|i| i.rect()),
+        "item.move" => {
+            let id = g.args.get("id").and_then(Value::as_str)?;
+            let (x, y) = (g.args.get("x")?.as_f64()?, g.args.get("y")?.as_f64()?);
+            let (_, _, w, h) = board.items.iter().find(|i| i.id() == id)?.rect();
+            Some((x, y, w, h))
+        }
+        _ => None,
+    }
+}
+
+/// Everything that takes room on the board: its items, and the suggestions still pending (they land where they
+/// are shown when accepted, so a new one must not go under them).
+fn taken(board: &Board) -> Vec<(f64, f64, f64, f64)> {
+    board
+        .items
+        .iter()
+        .map(Item::rect)
+        .chain(board.ghosts.iter().filter_map(|g| ghost_rect(board, g)))
+        .collect()
+}
+
+/// Positions on a grid of `(sw, sh)` cards with 2 cm between them that clear every rect in `rects` by 1 cm,
+/// top-left first.
+fn grid_slots(board: &Board, rects: &[(f64, f64, f64, f64)], sw: i64, sh: i64) -> Vec<(i64, i64)> {
     let (w, h) = (board.size.w.floor() as i64, board.size.h.floor() as i64);
     let mut slots = Vec::new();
     let mut y = 2;
@@ -918,6 +939,52 @@ pub fn free_slots(board: &Board, focus: Option<&str>, n: usize) -> Vec<(i64, i64
         }
         y += sh + 2;
     }
+    slots
+}
+
+/// New suggested items that would sit on an item or on a suggestion still pending (the model did not use a free
+/// position, or the board changed while it thought) move to the first free position for their size, so two
+/// suggestions never stack and a pinch always takes the one that shows. Other ops are kept as they are.
+pub fn unstack(board: &Board, ghosts: Vec<GhostOp>) -> Vec<GhostOp> {
+    let mut rects = taken(board);
+    ghosts
+        .into_iter()
+        .map(|mut g| {
+            if g.op == "item.create"
+                && let Some((x, y, w, h)) = ghost_rect(board, &g)
+            {
+                let overlaps = rects.iter().any(|(rx, ry, rw, rh)| {
+                    x < rx + rw && *rx < x + w && y < ry + rh && *ry < y + h
+                });
+                if overlaps
+                    && let Some((nx, ny)) =
+                        grid_slots(board, &rects, w.ceil() as i64, h.ceil() as i64)
+                            .first()
+                            .copied()
+                    && let Some(args) = g.args.as_object_mut()
+                {
+                    args.insert("x".into(), json!(nx));
+                    args.insert("y".into(), json!(ny));
+                    rects.push((nx as f64, ny as f64, w, h));
+                } else {
+                    rects.push((x, y, w, h));
+                }
+            }
+            g
+        })
+        .collect()
+}
+
+/// Free board positions for a new card of this kit's usual size, best first (nearest the focus item when there
+/// is one, else top-left first), as whole centimetres. Pending suggestions count as taken.
+pub fn free_slots(board: &Board, focus: Option<&str>, n: usize) -> Vec<(i64, i64)> {
+    let (sw, sh) = match board.round.kit {
+        BoardKit::Hld | BoardKit::Coding => (8, 5),
+        BoardKit::Lld => (14, 10),
+        BoardKit::Pm => (10, 7),
+        BoardKit::Meeting => (7, 7),
+    };
+    let mut slots = grid_slots(board, &taken(board), sw, sh);
     let focus = focus
         .and_then(|f| board.items.iter().find(|i| i.id() == f))
         .map(Item::rect);

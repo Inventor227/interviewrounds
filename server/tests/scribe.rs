@@ -685,3 +685,108 @@ async fn scribe_retries_once_on_the_fallback_model_then_skips() {
     assert!(s.suggest(&llm, &input(&board, &said)).await.is_empty());
     assert_eq!(llm.seen.lock().unwrap().len(), 1);
 }
+
+fn pm_board() -> Board {
+    let mut b = hld();
+    b.round.kit = ir_server::board::BoardKit::Pm;
+    b.items.clear();
+    b.focus = None;
+    b
+}
+
+fn xy(g: &GhostOp) -> (f64, f64) {
+    (g.args["x"].as_f64().unwrap(), g.args["y"].as_f64().unwrap())
+}
+
+/// Two Scribe calls in a row while the first one's suggestion is still pending: the second never lands on it, not
+/// when the model takes the free positions it is given, and not when it ignores them.
+#[tokio::test]
+async fn a_second_scribe_call_never_stacks_its_suggestion_on_a_pending_one() {
+    let mut session = BoardSession::new(pm_board());
+    let said = |s: &str| vec![s.to_string()];
+    let sticky = |id: &str, text: &str| {
+        json!({"confidence": 0.9, "ops": [
+            {"op": "item.create", "args": {"id": id, "kind": "sticky", "lane": "pain", "text": text,
+                "votes": 0, "quad": null, "x": 2, "y": 2}}
+        ]})
+    };
+
+    // Call 1: a sticky at the first free position.
+    let call = session.next_scribe_call();
+    let llm = FakeLlm::new(vec![Reply::Json(sticky(
+        &format!("x{call}_1"),
+        "Deposits get lost",
+    ))]);
+    let u1 = said("a pain point: deposits get lost");
+    let board = session.board.clone();
+    let first = scribe()
+        .suggest(
+            &llm,
+            &ScribeInput {
+                round_type: "pm_product_sense",
+                board: &board,
+                focus: None,
+                utterances: &u1,
+                call_no: call,
+            },
+        )
+        .await;
+    assert_eq!(first.len(), 1);
+    assert_eq!(xy(&first[0]), (2.0, 2.0));
+    session.push_ghosts(first);
+
+    // Call 2 while it is pending: its free positions skip the pending sticky ...
+    let call = session.next_scribe_call();
+    let llm = FakeLlm::new(vec![Reply::Json(sticky(&format!("x{call}_1"), "Scams"))]);
+    let u2 = said("another pain point: scams");
+    let board = session.board.clone();
+    let second = scribe()
+        .suggest(
+            &llm,
+            &ScribeInput {
+                round_type: "pm_product_sense",
+                board: &board,
+                focus: None,
+                utterances: &u2,
+                call_no: call,
+            },
+        )
+        .await;
+    let prompt: String = llm.seen.lock().unwrap()[0]
+        .system
+        .iter()
+        .map(|b| b.text.as_str())
+        .collect();
+    assert!(!prompt.contains("Free positions: 2,2;"), "{prompt}");
+    // ... and its sticky, placed at (2,2) anyway, moves to the first free one.
+    assert_eq!(second.len(), 1);
+    let (x, y) = xy(&second[0]);
+    assert!(
+        x >= 2.0 + 7.0 || y >= 2.0 + 7.0,
+        "moved off the pending sticky: {x},{y}"
+    );
+    session.push_ghosts(second);
+    let at: Vec<(f64, f64)> = session.ghosts().iter().map(xy).collect();
+    assert_eq!(at.len(), 2);
+    assert_ne!(at[0], at[1]);
+
+    // The same when the board gains an item at that spot while the Scribe thinks: the live path re-places it.
+    let mut b = pm_board();
+    b.items.push(
+        serde_json::from_value(
+            json!({"id": "n1", "kind": "sticky", "lane": "user", "text": "Students", "votes": 0,
+            "quad": null, "x": 2, "y": 2}),
+        )
+        .unwrap(),
+    );
+    let late = ir_server::scribe::unstack(
+        &b,
+        vec![GhostOp {
+            op_id: "sc9.1".into(),
+            src: ir_server::board::Src::Scribe,
+            op: "item.create".into(),
+            args: json!({"id": "x9_1", "kind": "sticky", "lane": "pain", "text": "Scams", "votes": 0, "quad": null, "x": 2, "y": 2}),
+        }],
+    );
+    assert_ne!(xy(&late[0]), (2.0, 2.0));
+}

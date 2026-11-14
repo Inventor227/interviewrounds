@@ -415,6 +415,8 @@ async fn scribe_loop(app: AppState, hub: Arc<Hub>, handle: Arc<Mutex<SessionStat
             };
             lb.scribe_busy = false;
             let again = std::mem::take(&mut lb.scribe_again);
+            // The board may have changed while the Scribe thought: new items never land on one already there.
+            let ghosts = crate::scribe::unstack(&lb.session.board, ghosts);
             let frame = (!ghosts.is_empty()).then(|| ghosts_frame(lb.session.push_ghosts(ghosts)));
             (frame, again)
         };
