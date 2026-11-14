@@ -796,3 +796,32 @@ async fn a_second_scribe_call_never_stacks_its_suggestion_on_a_pending_one() {
     );
     assert_ne!(xy(&late[0]), (2.0, 2.0));
 }
+
+/// A full lane keeps a new sticky in its own column (fanned on the lowest row), never in another lane or on the
+/// ladder.
+#[test]
+fn a_full_pm_lane_keeps_its_new_sticky_in_its_column() {
+    let mut b = pm_board();
+    for (i, y) in [3, 11, 19, 27].into_iter().enumerate() {
+        b.items.push(
+            serde_json::from_value(
+                json!({"id": format!("n{i}"), "kind": "sticky", "lane": "idea",
+                "text": format!("Idea {i}"), "votes": 0, "quad": null, "x": 26.5, "y": y}),
+            )
+            .unwrap(),
+        );
+    }
+    let placed = ir_server::scribe::unstack(
+        &b,
+        vec![GhostOp {
+            op_id: "sc4.1".into(),
+            src: ir_server::board::Src::Scribe,
+            op: "item.create".into(),
+            args: json!({"id": "x4_1", "kind": "sticky", "lane": "idea", "text": "Verified listings", "votes": 0,
+                "quad": null, "x": 2, "y": 2}),
+        }],
+    );
+    let (x, y) = xy(&placed[0]);
+    assert_eq!(x, 26.5, "the idea column");
+    assert!(y > 27.0 && y + 7.0 <= b.size.h, "{y}");
+}

@@ -44,6 +44,18 @@ describe('suggestions never stack', () => {
     expect(shown.args).toMatchObject({ x: 14.5, y: 11 });
   });
 
+  it('a_full_lane_keeps_its_sticky_in_its_own_column', () => {
+    const store = new BoardStore(emptyBoard({ kit: 'pm' }));
+    // Four ideas fill the idea lane (x 24 to 36); a fifth comes on top of the first.
+    for (const [i, y] of [3, 11, 19, 27].entries()) {
+      store.apply({ op_id: `h${i}`, src: 'hand', op: 'item.create', args: { id: `n${i}`, kind: 'sticky', lane: 'idea', text: `Idea ${i}`, votes: 0, quad: null, x: 26.5, y } } as never);
+    }
+    store.setGhosts([sticky('sc2.1', 'x2_1', 'Verified listings', 26.5, 3, 'idea')]);
+    const g = store.board.ghosts[0]!;
+    expect((g.args as { x: number }).x).toBe(26.5); // still the idea column, never another lane or the ladder
+    expect((g.args as { y: number }).y).toBeGreaterThan(27);
+  });
+
   it('leaves_apart_suggestions_and_other_ops_alone', () => {
     const board = emptyBoard({ kit: 'pm' });
     const apart = [sticky('a', 'x1_1', 'One', 2, 2), sticky('b', 'x1_2', 'Two', 30, 20)];

@@ -25,15 +25,20 @@ const PM_LANES = ['user', 'pain', 'idea', 'metric'] as const;
 const LANE_W = 12;
 const STICKY = 7;
 
-/** The first free spot down a PM sticky's own lane, 1 cm apart. */
+/** The first free spot down a PM sticky's own lane, 1 cm apart; a full lane keeps it in its column, fanned on the lowest row. */
 function laneSpot(board: Board, taken: Rect[], lane: string): [number, number] | null {
   const i = PM_LANES.indexOf(lane as (typeof PM_LANES)[number]);
   if (i < 0) return null;
   const x = i * LANE_W + (LANE_W - STICKY) / 2;
+  let lowest: number | null = null;
   for (let y = 3; y + STICKY <= board.size.h; y += STICKY + 1) {
     if (!taken.some((t) => overlap({ x: x - 0.5, y: y - 0.5, w: STICKY + 1, h: STICKY + 1 }, t))) return [x, y];
+    lowest = y;
   }
-  return null;
+  if (lowest === null) return null;
+  const low = lowest;
+  const stacked = Math.min(4, taken.filter((t) => overlap({ x, y: low, w: STICKY, h: board.size.h - low }, t)).length);
+  return [x, Math.min(low + 1.2 * stacked, board.size.h - STICKY)];
 }
 
 /** The ghost list with every new item off the pending suggestions before it (and off the board's items when it moves). */

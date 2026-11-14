@@ -963,7 +963,9 @@ fn overlaps(rects: &[(f64, f64, f64, f64)], (x, y, w, h): (f64, f64, f64, f64)) 
         .any(|(rx, ry, rw, rh)| x < rx + rw && *rx < x + w && y < ry + rh && *ry < y + h)
 }
 
-/// The first free spot down a PM sticky's own lane (1 cm between stickies), if any.
+/// The first free spot down a PM sticky's own lane (1 cm between stickies). A full lane keeps it in its own column
+/// all the same: on its lowest row, fanned a little down past what already sits there, never in another lane or on
+/// the ladder.
 fn lane_spot(
     board: &Board,
     rects: &[(f64, f64, f64, f64)],
@@ -971,13 +973,21 @@ fn lane_spot(
 ) -> Option<(f64, f64)> {
     let x = pm_lane_index(lane) * PM_LANE_W + (PM_LANE_W - PM_STICKY) / 2.0;
     let mut y = PM_FIRST_ROW;
+    let mut lowest = None;
     while y + PM_STICKY <= board.size.h {
         if !overlaps(rects, (x - 0.5, y - 0.5, PM_STICKY + 1.0, PM_STICKY + 1.0)) {
             return Some((x, y));
         }
+        lowest = Some(y);
         y += PM_STICKY + 1.0;
     }
-    None
+    let lowest = lowest?;
+    let stacked = rects
+        .iter()
+        .filter(|r| overlaps(&[**r], (x, lowest, PM_STICKY, board.size.h - lowest)))
+        .count()
+        .min(4) as f64;
+    Some((x, (lowest + 1.2 * stacked).min(board.size.h - PM_STICKY)))
 }
 
 /// New suggested items that would sit on an item or on a suggestion still pending (the model did not use a free
