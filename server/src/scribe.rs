@@ -942,33 +942,88 @@ fn grid_slots(board: &Board, rects: &[(f64, f64, f64, f64)], sw: i64, sh: i64) -
     slots
 }
 
+/// PM sheet: four lanes of 12 cm from the left (users, pain points, ideas, metrics), a 7 cm sticky centred in its
+/// lane, the first row under the lane headers (as the page files a sticky dropped in a lane).
+const PM_LANE_W: f64 = 12.0;
+const PM_STICKY: f64 = 7.0;
+const PM_FIRST_ROW: f64 = 3.0;
+
+fn pm_lane_index(lane: board::Lane) -> f64 {
+    match lane {
+        board::Lane::User => 0.0,
+        board::Lane::Pain => 1.0,
+        board::Lane::Idea => 2.0,
+        board::Lane::Metric => 3.0,
+    }
+}
+
+fn overlaps(rects: &[(f64, f64, f64, f64)], (x, y, w, h): (f64, f64, f64, f64)) -> bool {
+    rects
+        .iter()
+        .any(|(rx, ry, rw, rh)| x < rx + rw && *rx < x + w && y < ry + rh && *ry < y + h)
+}
+
+/// The first free spot down a PM sticky's own lane (1 cm between stickies), if any.
+fn lane_spot(
+    board: &Board,
+    rects: &[(f64, f64, f64, f64)],
+    lane: board::Lane,
+) -> Option<(f64, f64)> {
+    let x = pm_lane_index(lane) * PM_LANE_W + (PM_LANE_W - PM_STICKY) / 2.0;
+    let mut y = PM_FIRST_ROW;
+    while y + PM_STICKY <= board.size.h {
+        if !overlaps(rects, (x - 0.5, y - 0.5, PM_STICKY + 1.0, PM_STICKY + 1.0)) {
+            return Some((x, y));
+        }
+        y += PM_STICKY + 1.0;
+    }
+    None
+}
+
 /// New suggested items that would sit on an item or on a suggestion still pending (the model did not use a free
 /// position, or the board changed while it thought) move to the first free position for their size, so two
-/// suggestions never stack and a pinch always takes the one that shows. Other ops are kept as they are.
+/// suggestions never stack and a pinch always takes the one that shows. On a PM sheet a sticky with a lane also
+/// goes into its own lane's column (the first free spot down it), wherever the model put it. Other ops are kept as
+/// they are.
 pub fn unstack(board: &Board, ghosts: Vec<GhostOp>) -> Vec<GhostOp> {
     let mut rects = taken(board);
     ghosts
         .into_iter()
         .map(|mut g| {
-            if g.op == "item.create"
-                && let Some((x, y, w, h)) = ghost_rect(board, &g)
-            {
-                let overlaps = rects.iter().any(|(rx, ry, rw, rh)| {
-                    x < rx + rw && *rx < x + w && y < ry + rh && *ry < y + h
-                });
-                if overlaps
-                    && let Some((nx, ny)) =
-                        grid_slots(board, &rects, w.ceil() as i64, h.ceil() as i64)
-                            .first()
-                            .copied()
-                    && let Some(args) = g.args.as_object_mut()
-                {
+            if g.op != "item.create" {
+                return g;
+            }
+            let Some((x, y, w, h)) = ghost_rect(board, &g) else {
+                return g;
+            };
+            let lane = match serde_json::from_value::<Item>(g.args.clone()) {
+                Ok(Item::Sticky(s)) if board.round.kit == BoardKit::Pm => s.lane,
+                _ => None,
+            };
+            let in_lane = lane.is_none_or(|l| {
+                let x0 = pm_lane_index(l) * PM_LANE_W;
+                x >= x0 && x + w <= x0 + PM_LANE_W
+            });
+            let spot = if overlaps(&rects, (x, y, w, h)) || !in_lane {
+                match lane {
+                    Some(l) => lane_spot(board, &rects, l),
+                    None => None,
+                }
+                .or_else(|| {
+                    grid_slots(board, &rects, w.ceil() as i64, h.ceil() as i64)
+                        .first()
+                        .map(|&(nx, ny)| (nx as f64, ny as f64))
+                })
+            } else {
+                None
+            };
+            match (spot, g.args.as_object_mut()) {
+                (Some((nx, ny)), Some(args)) => {
                     args.insert("x".into(), json!(nx));
                     args.insert("y".into(), json!(ny));
-                    rects.push((nx as f64, ny as f64, w, h));
-                } else {
-                    rects.push((x, y, w, h));
+                    rects.push((nx, ny, w, h));
                 }
+                _ => rects.push((x, y, w, h)),
             }
             g
         })

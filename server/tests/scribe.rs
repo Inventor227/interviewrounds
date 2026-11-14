@@ -732,7 +732,8 @@ async fn a_second_scribe_call_never_stacks_its_suggestion_on_a_pending_one() {
         )
         .await;
     assert_eq!(first.len(), 1);
-    assert_eq!(xy(&first[0]), (2.0, 2.0));
+    // A pain sticky goes into the pain lane's column (12 to 24 cm), at the top.
+    assert_eq!(xy(&first[0]), (14.5, 3.0));
     session.push_ghosts(first);
 
     // Call 2 while it is pending: its free positions skip the pending sticky ...
@@ -757,14 +758,19 @@ async fn a_second_scribe_call_never_stacks_its_suggestion_on_a_pending_one() {
         .iter()
         .map(|b| b.text.as_str())
         .collect();
-    assert!(!prompt.contains("Free positions: 2,2;"), "{prompt}");
-    // ... and its sticky, placed at (2,2) anyway, moves to the first free one.
-    assert_eq!(second.len(), 1);
-    let (x, y) = xy(&second[0]);
+    let free = prompt
+        .lines()
+        .find(|l| l.starts_with("Free positions: "))
+        .unwrap()
+        .to_string();
     assert!(
-        x >= 2.0 + 7.0 || y >= 2.0 + 7.0,
-        "moved off the pending sticky: {x},{y}"
+        !free.contains(" 14,2;"),
+        "the pending sticky's spot is not offered: {free}"
     );
+    assert!(free.starts_with("Free positions: 2,2;"), "{free}");
+    // ... and its sticky, placed at (2,2) anyway, goes down its own lane under the pending one.
+    assert_eq!(second.len(), 1);
+    assert_eq!(xy(&second[0]), (14.5, 11.0));
     session.push_ghosts(second);
     let at: Vec<(f64, f64)> = session.ghosts().iter().map(xy).collect();
     assert_eq!(at.len(), 2);
