@@ -188,10 +188,11 @@ export class PanelController {
         joining().then(() => void (joined = true)),
         old ? this.waitQuiet(old).then(() => void (quietFirst = !joined)) : undefined,
       ]);
-      // A pause holds the swap until Resume; the new voice waits there, muted and silent.
-      if (!off()) await this.ready();
       // A sentence the outgoing voice only started after its first wait is let to finish too (once, bounded).
       if (!off() && old && quietFirst) await this.waitQuiet(old);
+      // A pause holds the swap until Resume; the new voice waits there, muted and silent. Nothing is awaited
+      // between this and the switch, so a pause can never land in between.
+      if (!off()) await this.ready();
     } catch (err) {
       this.dropIncoming(epoch, slot.t);
       if (off()) return;
