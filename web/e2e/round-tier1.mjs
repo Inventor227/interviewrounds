@@ -112,7 +112,7 @@ for (const [i, text] of ANSWERS.entries()) {
   const reply = await answer(text, 120000);
   replies.push(reply);
   stage(`answer ${i + 1}`, reply);
-  if (kit && !pinched && i >= 1) pinched = await pinchGhost(4);
+  if (kit && kit !== 'coding' && !pinched && i >= 1) pinched = await pinchGhost(4);
   if (MEETING && i === 2) {
     const fl = await until('the floor to move', () => {
       const c = globalThis.__round.controller;
@@ -126,7 +126,16 @@ for (const [i, text] of ANSWERS.entries()) {
   }
 }
 
-if (kit && !MEETING) {
+if (kit === 'coding') {
+  // The coding sheet is the code panel, the approach and the complexity slots: hand-drawn boxes stay ink by design,
+  // and the Scribe fills the slots itself. Recorded, not drawn.
+  const b = await board();
+  result.coding_board = { items: b.items.map((x) => x.kind), scribe: b.log.filter((e) => e.src === 'scribe').map((e) => `${e.op}:${e.accepted}`) };
+  stage('coding sheet', result.coding_board);
+  await look(S, -52);
+  await sleep(800);
+  await shot('07-sheet');
+} else if (kit && !MEETING) {
   // Two boxes and a connector, drawn by hand on the sheet.
   await look(S, -52);
   await draw(roughBox(8, 10, 12, 7, 3));
