@@ -422,7 +422,7 @@ to it played), with the last one to three answers and the latest `board.focus` (
 session; a suggestion that no longer applies when it returns is dropped. It takes about 2 s. Suggestions never stack: a
 suggested new item goes where no item and no pending suggestion is (the Scribe is offered only such positions, and a
 new item that would still land on one moves to the first free position for its size, also when the board changed
-while the Scribe ran). The page keeps the same rule for the list it gets: a new item on another pending suggestion
+while the Scribe ran; a PM sticky with a lane goes to the first free spot down its own lane's column). The page keeps the same rule for the list it gets: a new item on another pending suggestion
 moves to the first free spot, so a pinch always takes the suggestion that shows. Accepting such a moved suggestion
 sends it where it is shown.
 
