@@ -216,6 +216,7 @@ The hosted app runs as one Docker container next to a Postgres database on a sin
 
 ## Licences and credits
 
+- **This project:** MIT licence, see `LICENSE`. Third-party parts below keep their own licences.
 - **Avatars:** Microsoft Rocketbox avatars and animations, MIT licence, converted with `tools/avatars/`. Notice and
   list of changes: `web/public/avatars/LICENSE.md`.
 - **Third-party code served to the browser:** HeadAudio (lip sync, MIT), three.js (MIT), the meshoptimizer decoder
