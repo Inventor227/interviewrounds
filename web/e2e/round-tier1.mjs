@@ -70,9 +70,12 @@ if (INPUT === 'controllers') await L.call('xr', 'set-input-mode', { mode: 'contr
 const desk = await placeDesk(S);
 stage('desk placed', desk);
 await waitState(['live'], 120000);
-await look(S, MEETING ? -12 : -14, MEETING ? 10 : 0);
-await sleep(1200);
-await shot('04-greeted');
+// A meeting's clock and its silence checks run on: its first answer goes out before the slow capture.
+if (!MEETING) {
+  await look(S, -14, 0);
+  await sleep(1200);
+  await shot('04-greeted');
+}
 stage('greeted', { lines: await page(() => globalThis.__rec.lines), timings: await page(() => globalThis.__round.timings()) });
 
 /** Accepts the first suggestion that shows up, by pinch (the script's hand) on the ghost. */
@@ -158,7 +161,12 @@ for (const [i, turn] of turns.entries()) {
   stage(`answer ${i + 1}`, reply);
   if (BOARD && i === 1) await drawTwoBoxes();
   if (BOARD && !pinched && i >= 2) pinched = await pinchGhost(turn.drawing ? 12 : 4);
-  if (MEETING && i === 2) {
+  if (MEETING && i === 0) {
+    await look(S, -12, 10);
+    await sleep(800);
+    await shot('04-greeted');
+  }
+  if (MEETING && i === 1) {
     // round-lib's until ends the run on a timeout: a poll of its own, with one more ask if the floor stays.
     const floorNow = () => page(() => {
       const c = globalThis.__round.controller;
