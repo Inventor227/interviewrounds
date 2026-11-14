@@ -213,15 +213,22 @@ if (kit === 'coding') {
   await shot('09-wall-board');
 }
 
-// Spoken lines: no tool names, no hold line, the candidate is "you".
-const lines = await page(() => globalThis.__rec.lines.filter((l) => l.role === 'agent').map((l) => ({ who: l.who, text: l.text })));
+// Spoken lines: no tool names, no hold line, the candidate is "you". Checked now and again after the summary, so
+// the closing line (said after End, the one most likely to name a tool or the candidate) is checked too.
 const TOOLS = /\b(show_question|next_phase|point_at|give_hint|hand_over|end_round)\b/i;
 const third = PM ? /\bthe candidate\b/i : /\bthe (user|candidate)\b/i;
-result.checks.agent_lines = lines.length;
-result.checks.tool_names = lines.filter((l) => TOOLS.test(l.text));
-result.checks.hold_lines = lines.filter((l) => /sorry, give me a second/i.test(l.text));
-result.checks.third_person = lines.filter((l) => third.test(l.text));
-for (const k of ['tool_names', 'hold_lines', 'third_person']) if (result.checks[k].length) problem(`spoken ${k}`, result.checks[k]);
+const agentLines = (rec) => rec.lines.filter((l) => l.role === 'agent').map((l) => ({ who: l.who, text: l.text }));
+const checkLines = (lines) => {
+  const found = {
+    tool_names: lines.filter((l) => TOOLS.test(l.text)),
+    hold_lines: lines.filter((l) => /sorry, give me a second/i.test(l.text)),
+    third_person: lines.filter((l) => third.test(l.text)),
+  };
+  Object.assign(result.checks, found, { agent_lines: lines.length });
+  return found;
+};
+const lines = agentLines(await page(() => globalThis.__rec));
+for (const [k, v] of Object.entries(checkLines(lines))) if (v.length) problem(`spoken ${k}`, v);
 
 // End, the quick card, the summary.
 await look(S, -20);
@@ -240,6 +247,16 @@ await shot('12-summary');
 
 const final = await page(() => ({ timings: globalThis.__round.timings(), rec: globalThis.__rec, session: globalThis.__round.session.session_id, stats: globalThis.__xrApp.stats() }));
 final.board = kit ? await board() : null;
+
+// The same checks over every line of the round, the goodbye included.
+const everyLine = agentLines(final.rec);
+result.checks.closing_lines = everyLine.slice(lines.length);
+const before = new Set(lines.map((l) => l.text));
+for (const [k, v] of Object.entries(checkLines(everyLine))) {
+  const late = v.filter((l) => !before.has(l.text));
+  if (late.length) problem(`spoken ${k} after End`, late);
+}
+if (!result.checks.closing_lines.length) result.warnings.push('no closing line was heard after End');
 
 // The report page, and its JSON for the schema check.
 await page(() => globalThis.__xrApp.ui.emit('report'));
