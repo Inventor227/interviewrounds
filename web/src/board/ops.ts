@@ -14,6 +14,7 @@ import type {
   GhostOp,
   OpArgsMap,
 } from '../shared/types';
+import { destack } from './destack';
 import { validateOp } from './validate';
 
 class Reject extends Error {}
@@ -500,7 +501,7 @@ export class BoardStore {
         !ghosts.some((x) => x.op_id === g.op_id) &&
         !(g.op === 'item.label' && scribeLabels.has(g.args.id)),
     );
-    this.set({ ...this.board, ghosts: [...ghosts, ...local].filter((g) => !committed.has(g.op_id)) });
+    this.set({ ...this.board, ghosts: destack(this.board, [...ghosts, ...local].filter((g) => !committed.has(g.op_id))) });
   }
 
   /**
