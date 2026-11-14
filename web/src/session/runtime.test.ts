@@ -39,8 +39,10 @@ const fake = vi.hoisted(() => {
 
 vi.mock('../net/ws', () => ({ SessionSocket: fake.Socket }));
 vi.mock('../app/components/data', () => ({ loadMe: async () => fake.me, setMe: vi.fn() }));
+const warm = vi.hoisted(() => ({ calls: 0 }));
 vi.mock('../xr/avatar', () => ({
   manifestEntry: async () => ({}),
+  warmSimplifier: async () => void warm.calls++,
   Avatar: {
     load: async () => ({ root: { visible: false }, place() {}, setMode() {}, lookAt() {}, pointAt() {}, attachVoice: async () => undefined, setUserSpeaking() {}, update() {}, dispose() {} }),
   },
@@ -113,6 +115,8 @@ describe('the round runtime', () => {
 
   it('the_session_id_is_read_from_the_socket_path', async () => {
     const { sessionIdOf, deps } = await ready();
+    // Two people at the table: the side seat's simplifier loads with the room.
+    expect(warm.calls).toBeGreaterThan(0);
     expect(sessionIdOf('/ws/session/9f0c-ab')).toBe('9f0c-ab');
     expect(sessionIdOf('/ws/session/abc?x=1')).toBe('abc');
     expect(sessionIdOf('wss://rounds.example/ws/session/abc#frag')).toBe('abc');
