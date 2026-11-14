@@ -508,18 +508,21 @@ async function meetingRound() {
   // A meeting's card is the user's own meeting: nothing from the question bank appears on it.
   check("meeting starts with an empty brief card", !mstate.d.brief?.question, mstate.d.brief);
 
-  // A hand-over moves the floor: the browser joins the next attendee, whose first line is already spoken.
+  // A hand-over moves the floor the way the browser does it: the next attendee's voice joins ahead of time
+  // (deferred, silent), then its hand-over marker gets the prepared line word for word.
   const handOver = async (since) => {
     const ho = frames.find((x) => x.t_ms >= since && x.f.t === "panel.hand_over");
     if (!ho) return;
     const { to, opening_line } = ho.f.d;
-    const res = await api("POST", `/api/sessions/${id}/panelists/${to}/join`, { opening_line });
+    const res = await api("POST", `/api/sessions/${id}/panelists/${to}/join`, { deferred: true, from: floor });
     record("http", "join", { to, status: res.status });
-    if (res.status === 200) {
-      floor = to;
-      spoken(opening_line, to);
-      say(`hand-over to ${to}: "${opening_line}"`);
-    }
+    if (res.status !== 200) return;
+    floor = to;
+    const line = await turn(id, token, "[event: handover]", `hand-over to ${to}`, to);
+    const words = (x) => x.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+    if (opening_line) check(`hand-over to ${to} says the prepared line`, words(line.reply) === words(opening_line), { said: line.reply, prepared: opening_line });
+    spoken(line.reply, to);
+    say(`hand-over to ${to}: "${line.reply}"`);
   };
 
   let since = now();
