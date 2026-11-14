@@ -316,6 +316,13 @@ Validating with Ajv: use draft 2020-12 (`ajv/dist/2020`) with `allowUnionTypes: 
 - Report `session.seniority` is the session's `level` (junior, mid, senior, staff); meeting sessions use `n/a`.
 - Report `session.role` is the round's `role` (`none` for meetings).
 - Report `round_details.template` is `MeetingSetup.template_id`, with `null` → `"custom"`.
+- Report `round_details.board_as_text` (design rounds) is the saved board in plain words for people, one part per
+  line: `Components: Seat map cache (cache), ...`, `Links: Booking service → Seat table`, and classes, stickies,
+  metrics and groups as the kit has them, items by their labels in reading order. It never carries the live
+  summary's header or item ids (the interviewer's board text stays as it is). The scorer reads the same text. No
+  report field, and nothing on the public scorecard, carries the app's notes to the interviewer (`[Board update`,
+  `[App note`, `[event: ...]`, "do not read aloud") or Scribe item ids such as `x2_1`: they are taken out when a
+  report is stored and when it is served.
 
 ## Board ops
 
