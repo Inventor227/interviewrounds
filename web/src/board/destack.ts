@@ -43,7 +43,8 @@ export function destack(board: Board, ghosts: GhostOp[]): GhostOp[] {
   return ghosts.map((g) => {
     if (g.op !== 'item.create' || g.args.kind === 'ink') return g;
     const r = itemRect(g.args);
-    if (!placed.some((p) => overlap(r, p))) {
+    // Off the other pending suggestions and off the board's items (one just accepted among them).
+    if (!placed.some((p) => overlap(r, p)) && !items.some((p) => overlap(r, p))) {
       placed.push(r);
       return g;
     }
