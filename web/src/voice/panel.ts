@@ -5,8 +5,10 @@
 //   silent (no first message, nothing recorded) and it connects muted. From that moment nobody
 //   hears the user. Once the outgoing voice is quiet (and the round is not paused), the new one
 //   gets `[event: handover]` (the server answers with the prepared line, no model call), its mic
-//   opens and the old one stops. So the gap between the two is only the new voice's own speech
-//   start, and there is never a moment with two voices or with nobody in the room.
+//   opens and the old one stops a moment later (its last word is not clipped). So the gap between
+//   the two is only the new voice's own speech start, and there is never a moment with two voices
+//   or with nobody in the room. A voice is never cut before it has spoken: a hand-over waits for a
+//   sentence that is still being thought of, and for a new panelist's opening line.
 // - joined: everyone is connected from the start; only the floor has the mic. A hand-over moves
 //   the mic and sends the new floor `[event: handover]` so it speaks its prepared line.
 
@@ -16,13 +18,19 @@ import { VoiceError, type TransportOptions, type VoiceTransport } from './transp
 
 export type MakeTransport = (p: Panelist, opts?: TransportOptions) => VoiceTransport;
 
+/** The outgoing voice is stopped this long after it went quiet, so the end of its last word still plays. */
+export const OLD_VOICE_TAIL_MS = 300;
+
 export interface PanelOptions {
   api?: Pick<Api, 'joinPanelist'>;
   /**
-   * Resolves once this transport's agent is not speaking (or after a short cap), so a hand-over
-   * never cuts the outgoing panelist mid-sentence or overlaps two voices.
+   * Resolves once this transport's agent has said what it is saying or about to say (bounded), so a
+   * hand-over never cuts the outgoing panelist mid-sentence, or before it spoke, or overlaps two
+   * voices. `expectSpeech`: the voice was just asked for its opening line and has not started it.
    */
-  waitQuiet?: (t: VoiceTransport) => Promise<void>;
+  waitQuiet?: (t: VoiceTransport, expectSpeech?: boolean) => Promise<void>;
+  /** How long after the switch the outgoing voice is stopped (OLD_VOICE_TAIL_MS). */
+  tailMs?: number;
   /** Resolves when a hand-over may take the floor now: at once while the round runs, on Resume while it is paused. */
   ready?: () => Promise<void>;
 }
@@ -31,8 +39,13 @@ export class PanelController {
   private readonly transports = new Map<string, VoiceTransport>();
   private readonly panel: Map<string, Panelist>;
   private readonly api: Pick<Api, 'joinPanelist'>;
-  private readonly waitQuiet: (t: VoiceTransport) => Promise<void>;
+  private readonly waitQuiet: (t: VoiceTransport, expectSpeech?: boolean) => Promise<void>;
   private readonly ready: () => Promise<void>;
+  private readonly tailMs: number;
+  /** Voices asked for their opening line (`[event: handover]`) that have not started on it yet. */
+  private readonly owed = new Set<VoiceTransport>();
+  /** Outgoing voices in their short tail before they are stopped. */
+  private readonly leaving = new Set<VoiceTransport>();
   private floorId: string;
   private muted = false;
   /** A swap is under way: the outgoing floor no longer hears the user. */
@@ -56,6 +69,7 @@ export class PanelController {
     this.api = opts.api ?? defaultApi;
     this.waitQuiet = opts.waitQuiet ?? (async () => undefined);
     this.ready = opts.ready ?? (async () => undefined);
+    this.tailMs = opts.tailMs ?? OLD_VOICE_TAIL_MS;
   }
 
   get floor(): string {
@@ -90,7 +104,7 @@ export class PanelController {
       ids.map(async (id) => {
         const p = await this.withVoice(id);
         if (this.stopped) return;
-        const t = this.make(p);
+        const t = this.track(this.make(p));
         // Only the floor may hear the user, from the first moment on.
         if (this.muted || id !== this.floorId) t.setMicMuted(true);
         this.transports.set(id, t);
@@ -137,7 +151,9 @@ export class PanelController {
     this.stopped = true;
     const ts = this.all();
     if (this.incoming) ts.push(this.incoming);
+    ts.push(...this.leaving);
     this.incoming = null;
+    this.leaving.clear();
     this.transports.clear();
     await Promise.allSettled(ts.map((t) => t.stop()));
   }
@@ -152,14 +168,14 @@ export class PanelController {
 
     if (this.res.panel_mode === 'joined') {
       // Let the outgoing panelist finish its hand-off sentence first.
-      if (old) await this.waitQuiet(old);
+      if (old) await this.waitQuiet(old, this.owed.has(old));
       await this.ready();
       if (off()) return;
       const next = this.transports.get(to);
       if (!next) throw new Error(`panelist ${to} is not connected`);
       this.floorId = to;
       void this.applyGating();
-      next.sendEvent(VOICE_MARKERS.handover);
+      this.askLine(next);
       return;
     }
 
@@ -172,7 +188,7 @@ export class PanelController {
       if (off()) return;
       const p = { ...this.panel.get(to)!, voice };
       this.panel.set(to, p);
-      const t = this.make(p);
+      const t = this.track(this.make(p));
       slot.t = t;
       this.incoming = t;
       t.setMicMuted(true);
@@ -186,10 +202,10 @@ export class PanelController {
       // The new voice joins and connects while the outgoing one says its last sentence.
       await Promise.all([
         joining().then(() => void (joined = true)),
-        old ? this.waitQuiet(old).then(() => void (quietFirst = !joined)) : undefined,
+        old ? this.waitQuiet(old, this.owed.has(old)).then(() => void (quietFirst = !joined)) : undefined,
       ]);
       // A sentence the outgoing voice only started after its first wait is let to finish too (once, bounded).
-      if (!off() && old && quietFirst) await this.waitQuiet(old);
+      if (!off() && old && quietFirst) await this.waitQuiet(old, this.owed.has(old));
       // A pause holds the swap until Resume; the new voice waits there, muted and silent. Nothing is awaited
       // between this and the switch, so a pause can never land in between.
       if (!off()) await this.ready();
@@ -210,9 +226,35 @@ export class PanelController {
     this.transports.set(to, next);
     this.floorId = to;
     this.swapping = false;
-    next.sendEvent(VOICE_MARKERS.handover);
+    this.askLine(next);
     void this.applyGating();
-    if (old) await old.stop();
+    if (old) this.retire(old);
+  }
+
+  /** Watches a voice for the start of the opening line it owes (see `owed`). */
+  private track(t: VoiceTransport): VoiceTransport {
+    t.on('mode', (m) => {
+      if (m === 'thinking' || m === 'speaking') this.owed.delete(t);
+    });
+    t.on('ended', () => this.owed.delete(t));
+    return t;
+  }
+
+  /** The new floor says its prepared line; a hand-over after this one waits for that line to be heard. */
+  private askLine(t: VoiceTransport): void {
+    this.owed.add(t);
+    t.sendEvent(VOICE_MARKERS.handover);
+  }
+
+  /** Stops the outgoing voice after a short tail (its mic is already closed and the new voice is not up yet). */
+  private retire(t: VoiceTransport): void {
+    this.owed.delete(t);
+    this.leaving.add(t);
+    const stop = () => {
+      if (this.leaving.delete(t)) void t.stop().catch(() => undefined);
+    };
+    if (this.tailMs > 0) setTimeout(stop, this.tailMs);
+    else stop();
   }
 
   /** A swap that did not happen: its new voice stops, and the floor it left hears the user again. */

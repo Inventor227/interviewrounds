@@ -96,8 +96,13 @@ export const TURN_GAP_MS = 3000;
 export const AGENT_REPLY_MS = 2000;
 /** Longest wait for the goodbye line before the round is closed anyway. */
 export const ENDING_GRACE_MS = 15_000;
-/** Longest wait for the outgoing panelist to finish its sentence before a hand-over. */
+/** Longest wait for the outgoing panelist to finish its sentence before a hand-over, once it is speaking. */
 export const HANDOFF_WAIT_MS = 5000;
+/**
+ * Longest wait for a panelist who is thinking (or was just asked for its opening line) to start speaking before a
+ * hand-over goes on without its sentence.
+ */
+export const HANDOFF_START_MS = 4000;
 /** No agent speech this long after `[event: start]` → offer "Tap to hear your interviewer". */
 export const GREETING_WATCHDOG_MS = 8000;
 /** A user segment with no update for this long is treated as over (it never finalized). */
@@ -290,7 +295,8 @@ export class RoundController {
   private transportSeq = 0;
   private readonly modes = new Map<VoiceTransport, VoiceMode>();
   private readonly voices = new Map<string, MediaStream>();
-  private readonly quietWaiters = new Map<VoiceTransport, Set<() => void>>();
+  /** Hand-overs waiting for a voice's sentence to be over: told of every mode change of that voice, and its end. */
+  private readonly quietWaiters = new Map<VoiceTransport, Set<(m: VoiceMode | 'ended') => void>>();
   /** A hand-over released by Resume whose opening line is the welcome back (none was asked for otherwise). */
   private welcomeBackBy: { to: string } | null = null;
   private voicesUp = false;
@@ -718,7 +724,7 @@ export class RoundController {
   private makePanel(res: CreateSessionRes): PanelController {
     return new PanelController(res, (p, o) => this.wire(this.deps.makeTransport(p, o, this.res ?? res)), {
       api: this.deps.api,
-      waitQuiet: (t) => this.waitQuiet(t),
+      waitQuiet: (t, expectSpeech) => this.waitQuiet(t, expectSpeech),
       // A hand-over caught by a pause waits for Resume: nobody new speaks while the user is away.
       ready: () => this.unpaused(),
     });
@@ -1393,19 +1399,44 @@ export class RoundController {
     return flying;
   }
 
-  /** Resolves when the transport's agent is not speaking, or after HANDOFF_WAIT_MS. */
-  private waitQuiet(t: VoiceTransport): Promise<void> {
-    if (this.modes.get(t) !== 'speaking') return Promise.resolve();
+  /**
+   * Resolves once the voice has said what it is saying or about to say, so a hand-over never cuts a sentence or a
+   * line before it is heard: at once when it is quiet with nothing on its way; while it is thinking (or
+   * `expectSpeech`: it was just asked for its opening line) first for its speech to start (HANDOFF_START_MS at most),
+   * then for it to end (HANDOFF_WAIT_MS at most once it speaks). A voice that ends counts as quiet.
+   */
+  private waitQuiet(t: VoiceTransport, expectSpeech = false): Promise<void> {
+    const now = this.modes.get(t);
+    if (!expectSpeech && now !== 'speaking' && now !== 'thinking') return Promise.resolve();
     return new Promise<void>((resolve) => {
       let set = this.quietWaiters.get(t);
       if (!set) this.quietWaiters.set(t, (set = new Set()));
+      let speaking = now === 'speaking';
+      let thought = now === 'thinking';
+      let timer: ReturnType<typeof setTimeout>;
       const done = () => {
         clearTimeout(timer);
-        set.delete(done);
+        set.delete(watch);
         resolve();
       };
-      const timer = setTimeout(done, HANDOFF_WAIT_MS);
-      set.add(done);
+      const watch = (m: VoiceMode | 'ended') => {
+        if (m === 'ended') return done();
+        if (m === 'speaking') {
+          if (speaking) return;
+          speaking = true;
+          clearTimeout(timer);
+          timer = setTimeout(done, HANDOFF_WAIT_MS);
+          return;
+        }
+        if (m === 'thinking') {
+          thought = true;
+          return;
+        }
+        // Back to listening: the sentence is over, or the reply it was thinking of came to nothing.
+        if (speaking || thought) done();
+      };
+      timer = setTimeout(done, speaking ? HANDOFF_WAIT_MS : HANDOFF_START_MS);
+      set.add(watch);
     });
   }
 
@@ -1449,7 +1480,7 @@ export class RoundController {
   private onMode(t: VoiceTransport, m: VoiceMode): void {
     const now = Date.now();
     this.modes.set(t, m);
-    if (m !== 'speaking') for (const done of [...(this.quietWaiters.get(t) ?? [])]) done();
+    for (const watch of [...(this.quietWaiters.get(t) ?? [])]) watch(m);
     const avatar = this.deps.avatars?.(t.panelistId);
     // Paused: everyone sits and listens, whatever a voice still reports.
     avatar?.setMode(this.st === 'paused' ? 'listening' : m);
@@ -1622,7 +1653,7 @@ export class RoundController {
       void panel.stopAll();
       return;
     }
-    for (const done of [...(this.quietWaiters.get(t) ?? [])]) done();
+    for (const watch of [...(this.quietWaiters.get(t) ?? [])]) watch('ended');
     if (this.floorT() !== t || this.finishing) return;
     // During a pause the server releases the voices after 45 s: Resume makes new ones.
     if (this.st === 'paused') {

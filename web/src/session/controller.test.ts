@@ -15,7 +15,8 @@ import type { SocketStatus } from '../net/ws';
 import { FakeTransport, type Speaker } from '../voice/fake';
 import { panelist, ScriptedTransport, sessionRes } from '../voice/testkit';
 import { VoiceError, type TransportOptions } from '../voice/transport';
-import { LONG_ANSWER_CUT_IN_MS, RoundController, SessionError, type RoundControllerDeps, type RoundError } from './controller';
+import { HANDOFF_START_MS, LONG_ANSWER_CUT_IN_MS, RoundController, SessionError, type RoundControllerDeps, type RoundError } from './controller';
+import { OLD_VOICE_TAIL_MS } from '../voice/panel';
 import type { NoticeKind } from './notices';
 import type { AvatarPort, HeadSamplerPort, SocketPort, UiAction, VisibilityPort, XRPort, XRVisibilityLike } from './ports';
 import { StageTimings } from './timings';
@@ -898,6 +899,7 @@ describe('RoundController hand-overs', () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(p2.sentEvents).toEqual(['[event: handover]']);
     expect(p2.muted).toBe(false);
+    await vi.advanceTimersByTimeAsync(OLD_VOICE_TAIL_MS); // its last word plays out first
     expect(t.stopped).toBe(true);
     expect(h.ctl.floor).toBe('p2');
 
@@ -910,6 +912,7 @@ describe('RoundController hand-overs', () => {
     expect(h2.transports[1]!.sentEvents).toEqual([]);
     await vi.advanceTimersByTimeAsync(200);
     expect(h2.transports[1]!.sentEvents).toEqual(['[event: handover]']);
+    await vi.advanceTimersByTimeAsync(OLD_VOICE_TAIL_MS);
     expect(t2.stopped).toBe(true);
   });
 
@@ -930,6 +933,7 @@ describe('RoundController hand-overs', () => {
     t.mode('listening');
     await vi.advanceTimersByTimeAsync(0);
     expect(h.transports[1]!.sentEvents).toEqual(['[event: handover]']);
+    await vi.advanceTimersByTimeAsync(OLD_VOICE_TAIL_MS); // its last word plays out first
     expect(t.stopped).toBe(true);
   });
 
@@ -955,6 +959,7 @@ describe('RoundController hand-overs', () => {
     expect(p2.muted).toBe(true);
     t1.mode('listening');
     await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(OLD_VOICE_TAIL_MS); // its last word plays out first
     expect(t1.stopped).toBe(true);
     expect(t1.muted).toBe(true);
     expect(p2.muted).toBe(false);
@@ -1007,7 +1012,7 @@ describe('RoundController hand-overs', () => {
 
     // The server sends the hand-over again (its floor already says p2): the page tries once more, and it works.
     h.socket.serverSend('panel.hand_over', { from: 'p1', to: 'p2', opening_line: 'Hi' });
-    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(OLD_VOICE_TAIL_MS);
     expect(h.api.joinPanelist).toHaveBeenCalledTimes(2);
     expect(h.ctl.floor).toBe('p2');
     expect(t1.stopped).toBe(true);
@@ -1016,40 +1021,6 @@ describe('RoundController hand-overs', () => {
     h.socket.serverSend('panel.hand_over', { from: 'p1', to: 'p2', opening_line: 'Hi' });
     await vi.advanceTimersByTimeAsync(0);
     expect(h.api.joinPanelist).toHaveBeenCalledTimes(2);
-  });
-
-  it('a_held_swap_that_fails_after_a_short_resume_leaves_the_floor_welcoming_the_user_back', async () => {
-    const h = harness({ slow: ['p2'] });
-    const t1 = await live(h);
-    const errors = errorsOf(h);
-    t1.mode('speaking');
-    h.socket.serverSend('panel.hand_over', { from: 'p1', to: 'p2', opening_line: 'Hi' });
-    await vi.waitFor(() => expect(h.transports[1]?.started).toBe(true)); // p2 is joining
-    const p2 = h.transports[1] as SlowTransport;
-    h.ui('pause');
-    t1.mode('listening');
-    h.ui('resume'); // a short pause: the swap is to be the welcome back
-    await vi.advanceTimersByTimeAsync(0);
-    expect(t1.sentEvents).toEqual([]);
-    p2.fail(new Error('the voice did not join'));
-    await vi.advanceTimersByTimeAsync(0);
-    // The old voice keeps the floor and welcomes the user back: never a silent room.
-    expect(h.ctl.floor).toBe('p1');
-    expect(t1.sentEvents).toEqual(['[event: resume]']);
-    expect(t1.muted).toBe(false);
-    expect(errors.map((e) => e.code)).toEqual(['handover_failed']);
-    expect(h.ctl.state).toBe('live');
-  });
-
-  it('an_error_from_a_voice_off_the_floor_is_a_failed_hand_over_not_a_lost_round', async () => {
-    const h = harness({ slow: ['p2'] });
-    const t1 = await live(h);
-    const errors = errorsOf(h);
-    h.socket.serverSend('panel.hand_over', { from: 'p1', to: 'p2', opening_line: 'Hi' });
-    await vi.waitFor(() => expect(h.transports[1]?.started).toBe(true));
-    h.transports[1]!.events.emit('error', new VoiceError('connect_failed', 'agent did not join'));
-    t1.events.emit('error', new VoiceError('mic_toggle_failed', 'the floor is still the floor'));
-    expect(errors.map((e) => e.code)).toEqual(['handover_failed', 'mic_toggle_failed']);
   });
 
   it('an_end_mid_swap_keeps_the_outgoing_voice_for_the_goodbye', async () => {
@@ -1088,13 +1059,111 @@ describe('RoundController hand-overs', () => {
     expect(p2!.sentEvents).toEqual(['[event: handover]']);
     expect(p3!.panelistId).toBe('p3');
     expect(h.api.joinPanelist).toHaveBeenLastCalledWith('sess1', 'p3', { deferred: true, from: 'p2' });
-    // p3 waits for p2's opening line to be over.
+    // p3 joins at once but waits for p2's opening line, which takes Fish a moment to start: p2 is never cut before
+    // it spoke, and p3 says nothing meanwhile.
+    await vi.advanceTimersByTimeAsync(1_500);
+    expect(p3!.sentEvents).toEqual([]);
+    expect(p2!.stopped).toBe(false);
+    expect(h.ctl.floor).toBe('p2');
+    p2!.mode('thinking');
+    await vi.advanceTimersByTimeAsync(1_000);
     p2!.mode('speaking');
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(p3!.sentEvents).toEqual([]);
+    expect(p2!.stopped).toBe(false);
     p2!.mode('listening');
-    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(OLD_VOICE_TAIL_MS);
     expect(p3!.sentEvents).toEqual(['[event: handover]']);
     expect(h.ctl.floor).toBe('p3');
     expect(h.transports.filter((t) => !t.stopped).map((t) => t.panelistId)).toEqual(['p3']);
+  });
+
+  it('a_new_voice_that_never_starts_its_line_holds_the_next_hand_over_only_so_long', async () => {
+    const h = harness({ res: { panel: [panelist('p1', 0), panelist('p2', 1), panelist('p3', 2)] } });
+    await live(h);
+    h.socket.serverSend('panel.hand_over', { from: 'p1', to: 'p2', opening_line: 'Hi' });
+    await vi.advanceTimersByTimeAsync(0);
+    h.socket.serverSend('panel.hand_over', { from: 'p2', to: 'p3', opening_line: 'Me next' });
+    await vi.advanceTimersByTimeAsync(HANDOFF_START_MS - 10);
+    const p3 = h.transports[2]!;
+    expect(p3.sentEvents).toEqual([]);
+    await vi.advanceTimersByTimeAsync(20);
+    expect(p3.sentEvents).toEqual(['[event: handover]']);
+  });
+
+  it('an_old_voice_still_thinking_says_its_hand_off_sentence_even_when_the_join_is_quick', async () => {
+    // The director of an app event can beat the voice's speech start; the join is done long before.
+    const h = harness();
+    const t1 = await live(h);
+    t1.mode('thinking');
+    h.socket.serverSend('panel.hand_over', { from: 'p1', to: 'p2', opening_line: 'Hi' });
+    await vi.advanceTimersByTimeAsync(2_000);
+    const p2 = h.transports[1]!;
+    expect(p2.started).toBe(true);
+    expect(p2.sentEvents).toEqual([]);
+    expect(t1.stopped).toBe(false);
+    t1.mode('speaking'); // its sentence starts late
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(p2.sentEvents).toEqual([]);
+    expect(t1.stopped).toBe(false);
+    t1.mode('listening');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(p2.sentEvents).toEqual(['[event: handover]']);
+    expect(t1.stopped).toBe(false); // the tail of its last word
+    await vi.advanceTimersByTimeAsync(OLD_VOICE_TAIL_MS);
+    expect(t1.stopped).toBe(true);
+    // A voice that thinks and then says nothing does not hold the swap.
+    const h2 = harness();
+    const u1 = await live(h2);
+    u1.mode('thinking');
+    h2.socket.serverSend('panel.hand_over', { from: 'p1', to: 'p2', opening_line: 'Hi' });
+    await vi.advanceTimersByTimeAsync(500);
+    u1.mode('listening');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h2.transports[1]!.sentEvents).toEqual(['[event: handover]']);
+    // And one that never starts is waited for only so long.
+    const h3 = harness();
+    const w1 = await live(h3);
+    w1.mode('thinking');
+    h3.socket.serverSend('panel.hand_over', { from: 'p1', to: 'p2', opening_line: 'Hi' });
+    await vi.advanceTimersByTimeAsync(HANDOFF_START_MS + 10);
+    expect(h3.transports[1]!.sentEvents).toEqual(['[event: handover]']);
+  });
+
+  it('a_held_swap_that_fails_after_a_short_resume_leaves_the_floor_welcoming_the_user_back', async () => {
+    let fail!: (e: Error) => void;
+    const h = harness({ slow: ['p2'] });
+    const t1 = await live(h);
+    const errors = errorsOf(h);
+    t1.mode('speaking');
+    h.socket.serverSend('panel.hand_over', { from: 'p1', to: 'p2', opening_line: 'Hi' });
+    await vi.waitFor(() => expect(h.transports[1]?.started).toBe(true)); // p2 is joining
+    const p2 = h.transports[1] as SlowTransport;
+    fail = p2.fail;
+    h.ui('pause');
+    t1.mode('listening');
+    h.ui('resume'); // a short pause: the swap is to be the welcome back
+    await vi.advanceTimersByTimeAsync(0);
+    expect(t1.sentEvents).toEqual([]);
+    fail(new Error('the voice did not join'));
+    await vi.advanceTimersByTimeAsync(0);
+    // The old voice keeps the floor and welcomes the user back: never a silent room.
+    expect(h.ctl.floor).toBe('p1');
+    expect(t1.sentEvents).toEqual(['[event: resume]']);
+    expect(t1.muted).toBe(false);
+    expect(errors.map((e) => e.code)).toEqual(['handover_failed']);
+    expect(h.ctl.state).toBe('live');
+  });
+
+  it('an_error_from_a_voice_off_the_floor_is_a_failed_hand_over_not_a_lost_round', async () => {
+    const h = harness({ slow: ['p2'] });
+    const t1 = await live(h);
+    const errors = errorsOf(h);
+    h.socket.serverSend('panel.hand_over', { from: 'p1', to: 'p2', opening_line: 'Hi' });
+    await vi.waitFor(() => expect(h.transports[1]?.started).toBe(true));
+    h.transports[1]!.events.emit('error', new VoiceError('connect_failed', 'agent did not join'));
+    t1.events.emit('error', new VoiceError('mic_toggle_failed', 'the floor is still the floor'));
+    expect(errors.map((e) => e.code)).toEqual(['handover_failed', 'mic_toggle_failed']);
   });
 
   it('no_markers_or_voice_lost_during_a_hand_over', async () => {
@@ -2269,6 +2338,7 @@ describe('RoundController pause and headset removal', () => {
     expect(t2.panelistId).toBe('p2');
     expect(t2.sentEvents).toEqual(['[event: handover]']);
     expect(t2.muted).toBe(false);
+    await vi.advanceTimersByTimeAsync(OLD_VOICE_TAIL_MS); // its last word plays out first
     expect(t1.stopped).toBe(true);
     expect(h.ctl.floor).toBe('p2');
     // The new panelist's opening line is the welcome back: no second line is asked for.
@@ -2298,6 +2368,7 @@ describe('RoundController pause and headset removal', () => {
     expect(t2.sentEvents).toEqual(['[event: handover]']);
     expect(h.markers()).not.toContain('[event: resume]');
     expect(t2.muted).toBe(false);
+    await vi.advanceTimersByTimeAsync(OLD_VOICE_TAIL_MS); // its last word plays out first
     expect(t1.stopped).toBe(true);
     expect(h.ctl.floor).toBe('p2');
   });
