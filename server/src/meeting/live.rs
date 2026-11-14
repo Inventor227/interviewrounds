@@ -242,6 +242,62 @@ fn quoted_list(items: &[String]) -> String {
         .join("; ")
 }
 
+/// The AI attendee the candidate's words were addressed to by name, other than `panelist_id` (the attendee
+/// replying): the first name as the first word, or the second after an opener ("Tom, what do you see?", "So Tom,
+/// ..."), as the last word ("... what do you think, Tom?") or after "for", "ask", "asking" or "to" ("a question for
+/// Tom"). A name inside a sentence ("as Tom said") is a mention, not an address; two different names are not one
+/// address.
+pub fn addressed_attendee<'a>(
+    meeting: &'a MeetingState,
+    panelist_id: &str,
+    words: &str,
+) -> Option<&'a AttendeeState> {
+    let tokens: Vec<String> = words
+        .split(|c: char| !(c.is_alphanumeric() || c == '\''))
+        .filter(|t| !t.is_empty())
+        .map(|t| t.trim_end_matches("'s").to_lowercase())
+        .collect();
+    // Words that may come before a name that opens an address ("So Tom, ...", "Okay Tom, ...").
+    const OPENERS: &[&str] = &[
+        "so", "and", "hi", "hey", "okay", "ok", "well", "now", "but", "right", "thanks", "yes",
+        "yeah", "sure", "great",
+    ];
+    let addressed = |name: &str| {
+        tokens.iter().enumerate().any(|(i, t)| {
+            t == name
+                && (i == 0
+                    || (i == 1 && OPENERS.contains(&tokens[0].as_str()))
+                    || i + 1 == tokens.len()
+                    || matches!(tokens[i - 1].as_str(), "for" | "ask" | "asking" | "to"))
+        })
+    };
+    let mut found = meeting.attendees.iter().filter(|a| {
+        let first = a
+            .name
+            .split_whitespace()
+            .next()
+            .unwrap_or_default()
+            .to_lowercase();
+        !a.panelist_id.is_empty()
+            && a.panelist_id != panelist_id
+            && !first.is_empty()
+            && addressed(&first)
+    });
+    let one = found.next()?;
+    found.next().is_none().then_some(one)
+}
+
+/// The note for the attendee replying when the candidate's words were for another attendee: give that attendee the
+/// floor at once, with their answer. It goes before anything else about who speaks next.
+pub fn addressed_note(meeting: &MeetingState, panelist_id: &str, words: &str) -> Option<String> {
+    let to = addressed_attendee(meeting, panelist_id, words)?;
+    Some(format!(
+        "The candidate's last words were for {}, not you. Do not answer for them and do not say they will come in later: say one short line that names them, then hand over to {} with their answer to the candidate, in their own voice, under twenty five words.",
+        to.name,
+        named(to)
+    ))
+}
+
 fn named(a: &AttendeeState) -> String {
     format!("{} (panelist id {})", a.name, a.panelist_id)
 }

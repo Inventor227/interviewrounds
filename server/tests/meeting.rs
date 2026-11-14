@@ -47,6 +47,8 @@ struct FakeLlm {
     streamed: Mutex<Vec<MessagesRequest>>,
     /// Each create takes this long (a slow model).
     create_delay: Mutex<Duration>,
+    /// Director calls (requests with tools) take their reply from here when it has one.
+    directors: Mutex<VecDeque<MessagesResponse>>,
 }
 
 impl FakeLlm {
@@ -97,6 +99,11 @@ fn response(text: String) -> MessagesResponse {
 impl LlmApi for FakeLlm {
     async fn create(&self, req: &MessagesRequest) -> Result<MessagesResponse, ClaudeError> {
         self.created.lock().unwrap().push(req.clone());
+        if !req.tools.is_empty()
+            && let Some(r) = self.directors.lock().unwrap().pop_front()
+        {
+            return Ok(r);
+        }
         let delay = *self.create_delay.lock().unwrap();
         if !delay.is_zero() {
             tokio::time::sleep(delay).await;
@@ -2498,4 +2505,195 @@ async fn meeting_live_prompts_never_describe_tools_and_the_director_keeps_them()
         }
     }
     assert!(checked >= 8, "{checked} prompts checked");
+}
+
+// ---------- the candidate speaks to an attendee by name ----------
+
+#[test]
+fn an_attendee_named_first_or_last_is_addressed_and_a_mention_is_not() {
+    let catalog = catalog();
+    let (s, plan) = pitch_plan(&catalog);
+    let m = MeetingState::from_parts(&s, &plan);
+    let rhea = m.attendee("Rhea").unwrap().panelist_id.clone();
+    let tom = m.attendee("Tom").unwrap().panelist_id.clone();
+    let to = |words: &str| live::addressed_attendee(&m, &rhea, words).map(|a| a.name.clone());
+    assert_eq!(
+        to("Tom, what churn do you see in your portfolio?").as_deref(),
+        Some("Tom")
+    );
+    assert_eq!(
+        to("So Tom, how would you size this?").as_deref(),
+        Some("Tom")
+    );
+    assert_eq!(
+        to("What do you think of the churn, Tom?").as_deref(),
+        Some("Tom")
+    );
+    assert_eq!(
+        to("I have a question for Tom about the data room.").as_deref(),
+        Some("Tom")
+    );
+    assert_eq!(
+        to("As Tom said earlier, churn matters to us.").as_deref(),
+        None,
+        "a mention"
+    );
+    assert_eq!(
+        to("Rhea, what do you need to decide?").as_deref(),
+        None,
+        "the one replying"
+    );
+    assert_eq!(to("We grew fifteen percent a month.").as_deref(), None);
+    // From Tom's side, Rhea named first is an address to Rhea.
+    assert_eq!(
+        live::addressed_attendee(&m, &tom, "Rhea, is that enough?").map(|a| a.name.as_str()),
+        Some("Rhea")
+    );
+}
+
+fn meeting_with_events(
+    id: &str,
+) -> (
+    Router,
+    AppState,
+    Arc<FakeLlm>,
+    String,
+    String,
+    tokio::sync::broadcast::Receiver<ir_server::orchestrator::ServerEvent>,
+) {
+    let catalog = catalog();
+    let llm = FakeLlm::new();
+    let (router, app) = test_app(llm.clone(), catalog.clone());
+    let (s, plan) = pitch_plan(&catalog);
+    let meeting = MeetingState::from_parts(&s, &plan);
+    let tom = meeting.attendee("Tom").unwrap().panelist_id.clone();
+    let mut st = meeting_session(id, &catalog, meeting);
+    let rhea = st.floor.clone();
+    st.status = ir_server::orchestrator::SessionStatus::Live;
+    let rx = st.events.subscribe();
+    app.registry.insert(st);
+    (router, app, llm, rhea, tom, rx)
+}
+
+async fn hand_overs(
+    rx: &mut tokio::sync::broadcast::Receiver<ir_server::orchestrator::ServerEvent>,
+    wait: Duration,
+) -> Vec<(String, String, String)> {
+    let mut out = Vec::new();
+    let end = tokio::time::Instant::now() + wait;
+    while let Ok(Ok(ev)) = tokio::time::timeout_at(end, rx.recv()).await {
+        if let ir_server::orchestrator::ServerEvent::HandOver {
+            from,
+            to,
+            opening_line,
+        } = ev
+        {
+            out.push((from, to, opening_line));
+        }
+    }
+    out
+}
+
+#[tokio::test]
+async fn the_candidate_asking_tom_directly_gives_tom_the_floor_even_when_the_director_does_not() {
+    let (router, app, llm, rhea, tom, mut rx) = meeting_with_events("m-addr");
+    // The chair's reply defers ("Tom can come in after"); its director hands over to nobody.
+    llm.reply("Good question. Tom can come in after I finish with the market.");
+    llm.directors
+        .lock()
+        .unwrap()
+        .push_back(response(String::new()));
+    say(
+        &router,
+        "m-addr",
+        &rhea,
+        json!([
+            {"role": "user", "content": "[event: start]"},
+            {"role": "assistant", "content": "Thanks for coming in. Over to you."},
+            {"role": "user", "content": "Tom, what churn do you see across your portfolio?"}
+        ]),
+    )
+    .await;
+    // The chair's live call was told to give Tom the floor.
+    let note = last_note(llm.streamed().last().unwrap());
+    assert!(
+        note.contains("The candidate's last words were for Tom, not you"),
+        "{note}"
+    );
+    // And the app hands over to Tom when the director did not.
+    let got = hand_overs(&mut rx, Duration::from_secs(2)).await;
+    assert_eq!(got, vec![(rhea.clone(), tom.clone(), String::new())]);
+    let session = app.registry.get("m-addr").unwrap();
+    assert_eq!(session.lock().await.floor, tom);
+
+    // Tom's voice asks with the hand-over marker: his note says the words were for him, and he answers.
+    llm.reply("About two percent a month on young cohorts.");
+    say(
+        &router,
+        "m-addr",
+        &tom,
+        json!([{"role": "user", "content": "[event: handover]"}]),
+    )
+    .await;
+    let note = last_note(llm.streamed().last().unwrap());
+    assert!(
+        note.contains("the candidate's last words were for you"),
+        "{note}"
+    );
+}
+
+#[tokio::test]
+async fn the_directors_own_hand_over_to_the_named_attendee_is_the_only_one() {
+    let (router, _app, llm, rhea, tom, mut rx) = meeting_with_events("m-addr2");
+    llm.reply("Tom, that one is yours.");
+    llm.directors.lock().unwrap().push_back(MessagesResponse {
+        content: vec![ContentBlock::ToolUse {
+            id: "toolu_h".into(),
+            name: "hand_over".into(),
+            input: json!({"to": tom, "line": "About two percent a month, but the cohorts are young."}),
+        }],
+        ..response(String::new())
+    });
+    say(
+        &router,
+        "m-addr2",
+        &rhea,
+        json!([{"role": "user", "content": "Tom, what churn do you see?"}]),
+    )
+    .await;
+    let got = hand_overs(&mut rx, Duration::from_secs(2)).await;
+    assert_eq!(
+        got,
+        vec![(
+            rhea,
+            tom,
+            "About two percent a month, but the cohorts are young.".to_string()
+        )]
+    );
+}
+
+#[tokio::test]
+async fn a_chair_led_meeting_keeps_its_floor_when_nobody_else_is_named() {
+    let (router, app, llm, rhea, _tom, mut rx) = meeting_with_events("m-addr3");
+    llm.reply("Okay. How did you size the market?");
+    llm.directors
+        .lock()
+        .unwrap()
+        .push_back(response(String::new()));
+    say(
+        &router,
+        "m-addr3",
+        &rhea,
+        json!([{"role": "user", "content": "We want a partner meeting next week. As Tom said, churn is low."}]),
+    )
+    .await;
+    assert!(
+        hand_overs(&mut rx, Duration::from_millis(800))
+            .await
+            .is_empty()
+    );
+    let session = app.registry.get("m-addr3").unwrap();
+    assert_eq!(session.lock().await.floor, rhea);
+    let note = last_note(llm.streamed().last().unwrap());
+    assert!(!note.contains("last words were for"), "{note}");
 }

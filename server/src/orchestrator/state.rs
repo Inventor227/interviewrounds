@@ -352,6 +352,10 @@ pub struct SessionState {
     pub dev_empty_replies: u8,
     /// Director calls of committed replies, waiting for the caller to send them.
     pub director_jobs: Vec<DirectorJob>,
+    /// Meetings: turns that answered words addressed to another attendee by name (turn id to the replying
+    /// panelist and that attendee's panelist id). Their director must hand over; if it does not, the app does
+    /// (`director_done`).
+    pub addressed: HashMap<u64, (String, String)>,
     /// Replies to the candidate's speech committed so far: each one closes a candidate utterance (the board
     /// Scribe runs after it).
     pub speech_commits: u64,
@@ -545,6 +549,7 @@ impl SessionState {
             director_calls: 0,
             dev_empty_replies: 0,
             director_jobs: Vec::new(),
+            addressed: HashMap::new(),
             speech_commits: 0,
             message_owners: HashMap::new(),
             meeting_updates: Default::default(),
@@ -1111,9 +1116,25 @@ impl SessionState {
         Vec::new()
     }
 
-    /// The director finished for turn `id`: its calls ride with the parked turn, are applied now if the turn is
-    /// already committed, and are dropped if the turn was never played.
-    pub fn director_done(&mut self, id: u64, calls: Vec<ToolCall>) -> Vec<ServerEvent> {
+    /// The director finished for turn `id` (or failed: no calls): its calls ride with the parked turn, are applied
+    /// now if the turn is already committed, and are dropped if the turn was never played. A meeting turn that
+    /// answered words addressed to another attendee gets a hand-over to them when the director made none.
+    pub fn director_done(&mut self, id: u64, mut calls: Vec<ToolCall>) -> Vec<ServerEvent> {
+        if let Some((from, to)) = self.addressed.remove(&id) {
+            // The director chose (a hand-over of its own, or the end), or the round is closing: nothing to add.
+            let decided = calls
+                .iter()
+                .any(|c| c.name == "hand_over" || c.name == "end_round");
+            if !decided && self.closing_line.is_none() && self.pending_close.is_none() {
+                tracing::info!(session_id = %self.id, turn_id = id, to = %to, "the candidate spoke to another attendee: handing over");
+                calls.push(ToolCall {
+                    id: format!("app_handover_{id}"),
+                    name: "hand_over".into(),
+                    input: serde_json::json!({"to": to, "line": ""}),
+                    panelist_id: from,
+                });
+            }
+        }
         if let Some(p) = self.provisional.iter_mut().find(|p| p.id == id) {
             p.tool_calls.extend(calls);
             return Vec::new();

@@ -202,6 +202,12 @@ pub fn turn_note(
     if let Some((_, meeting_notes)) = meeting_parts {
         notes.extend(meeting_notes);
     }
+    // Meetings: the candidate spoke to another attendee by name. That attendee gets the floor for the reply.
+    if let (Some(m), Some(words)) = (state.meeting.as_ref(), input.speech())
+        && let Some(note) = crate::meeting::live::addressed_note(m, panelist_id, words)
+    {
+        notes.push(note);
+    }
 
     let board_text = if !state.board_text.trim().is_empty() {
         state.board_text.trim().to_string()
@@ -238,6 +244,20 @@ pub fn turn_note(
     (tidy(&fill(&state.turn_note_template, &vars)), warned)
 }
 
+/// Meetings: the candidate's newest words were addressed to this attendee by name.
+fn addressed_to_me(state: &SessionState, panelist_id: &str) -> bool {
+    let Some(m) = state.meeting.as_ref() else {
+        return false;
+    };
+    state
+        .turns
+        .iter()
+        .rev()
+        .find(|t| t.speaker == "candidate")
+        .and_then(|t| crate::meeting::live::addressed_attendee(m, "", &t.text))
+        .is_some_and(|a| a.panelist_id == panelist_id)
+}
+
 /// The note an app event adds to the turn.
 fn event_note(
     state: &SessionState,
@@ -256,6 +276,7 @@ fn event_note(
             }
             "Time check from the app: no boundary has passed; carry on.".into()
         }
+        EventKind::Handover if addressed_to_me(state, panelist_id) => "You now hold the floor because the candidate's last words were for you: answer them first, briefly and in your own voice, then carry on.".into(),
         EventKind::Handover => "You now hold the floor. Your colleague just handed over to you; ask your first question in one or two sentences.".into(),
         EventKind::Resume => "The candidate is back after a pause or a dropped call. Say a short \"Welcome back.\", restate in one sentence where you were, then ask your next question.".into(),
         EventKind::SilenceCheck => format!(

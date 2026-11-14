@@ -782,6 +782,15 @@ fn turn_stream(
             let id = st.new_turn_id();
             let director_req = (!silent_failure)
                 .then(|| director::build_request(&st, &panelist, &draft, &spoken, &live.fast_model));
+            // Meetings: words addressed to another attendee by name give that attendee the floor (the director's
+            // hand-over, or the app's when it makes none).
+            if director_req.is_some()
+                && let (Some(m), Some(words)) = (st.meeting.as_ref(), input.speech())
+                && let Some(to) = crate::meeting::live::addressed_attendee(m, &panelist, words)
+            {
+                let to = to.panelist_id.clone();
+                st.addressed.insert(id, (panelist.clone(), to));
+            }
             if speech && opts.confirm_speech_turns {
                 st.park(Provisional {
                     id,
@@ -887,10 +896,13 @@ async fn run_director(
         Ok(Ok(resp)) => resp,
         Ok(Err(e)) => {
             tracing::warn!(session_id = %session_id, panelist_id = %panelist, director_ms = ms, error = %e, "director call failed");
+            // No calls; a hand-over the app owes for this turn still happens.
+            session.lock().await.director_done(turn_id, Vec::new());
             return;
         }
         Err(_) => {
             tracing::warn!(session_id = %session_id, panelist_id = %panelist, director_ms = ms, "director timed out");
+            session.lock().await.director_done(turn_id, Vec::new());
             return;
         }
     };
