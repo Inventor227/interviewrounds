@@ -209,11 +209,15 @@ Sequencing and acks:
   sends `to` `[event: handover]`, opens its mic and ends `from`'s voice about 300 ms later (so its last word plays
   out). A voice is never cut before it has spoken: while `from` is thinking, or is itself a panelist that was just
   sent `[event: handover]` and has not started its line (a second hand-over during a swap queues behind the first),
-  the page waits for its speech to start (at most 4 s) and to end (at most 5 s once it speaks). The marker's turn
+  the page waits for its speech to start (at most 4 s) and to end (at most 15 s once it speaks). The marker's turn
   makes its panelist the floor unless a newer hand-over already moved the floor to a panelist whose line is still to
   be said. A pause holds the swap with the
   new voice connected, muted and silent; on Resume its line is the welcome back (no `[event: resume]`). After a voice
-  release the new voices are made for the server's floor and that voice gets `[event: handover]`. An end during a
+  release the new voices are made for the server's floor and that voice gets `[event: handover]`. In a meeting, words
+  the candidate addresses to another attendee by name (the name first, or after a word like "so", last, or after
+  "for", "ask" or "to"; not a mention inside a sentence) give that attendee the floor for the reply: the attendee
+  replying is told to hand over, and when its director makes no hand-over (or fails) the app makes one with no
+  prepared line, so the named attendee's `[event: handover]` turn answers the candidate first. An end during a
   swap drops the joining voice: `from` says the goodbye. A swap that fails (join error, a voice that does not start or
   drops before it speaks) leaves `from` on the floor, hearing the user again; the server's next hand-over to `to` is
   the retry. The page reports it as `handover_failed`, never as a lost round; if the failed swap was held by a pause
@@ -415,7 +419,12 @@ Pinned by `content/fixtures/board-undo/*.json`.
 Ghosts are Scribe suggestions (`src: "scribe"`). `board.ghosts` carries the full list of pending ghosts (it replaces the
 previous list). In a round with a board the server runs the Scribe once after each candidate answer is final (the reply
 to it played), with the last one to three answers and the latest `board.focus` (fresh for 20 s), one call at a time per
-session; a suggestion that no longer applies when it returns is dropped. It takes about 2 s.
+session; a suggestion that no longer applies when it returns is dropped. It takes about 2 s. Suggestions never stack: a
+suggested new item goes where no item and no pending suggestion is (the Scribe is offered only such positions, and a
+new item that would still land on one moves to the first free position for its size, also when the board changed
+while the Scribe ran). The page keeps the same rule for the list it gets: a new item on another pending suggestion
+moves to the first free spot, so a pinch always takes the suggestion that shows. Accepting such a moved suggestion
+sends it where it is shown.
 
 - **Accept** (pinch, or the 4 s settle): send the ghost's op as a normal `board.op` with the same `op_id`, `src: "scribe"`,
   `op` and `args`. Committing that `op_id` removes the ghost.
