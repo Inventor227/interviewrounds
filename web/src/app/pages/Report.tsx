@@ -782,10 +782,14 @@ class ReportBoundary extends Component<{ onRetry: () => void; children: Componen
   }
 }
 
-/** Scoring gave up (the model was down, or its answers were broken twice): one tap scores it again. */
+/**
+ * Scoring gave up (the model was down, or its answers were broken twice): one tap scores it again. At the daily
+ * limit the button stays off with the server's message; a report scored meanwhile (409) is simply loaded.
+ */
 function Failed(props: { id: string; onRetried: () => void }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [limited, setLimited] = useState(false);
   const retry = async () => {
     setBusy(true);
     setErr(null);
@@ -794,6 +798,12 @@ function Failed(props: { id: string; onRetried: () => void }) {
       props.onRetried();
     } catch (e) {
       const a = toApiError(e);
+      if (a.status === 409) {
+        // Scored meanwhile (another tab, a late attempt): show it.
+        props.onRetried();
+        return;
+      }
+      if (a.code === 'rescore_limit') setLimited(true);
       setErr(a.code === 'rescore_limit' ? a.message : a.status === 0 ? 'No connection. Try again.' : 'Could not start it again. Try again in a minute.');
       setBusy(false);
     }
@@ -808,7 +818,7 @@ function Failed(props: { id: string; onRetried: () => void }) {
           </p>
         )}
         <div class="row">
-          <button type="button" class="btn btn-primary" disabled={busy} onClick={() => void retry()} data-test="report-retry">
+          <button type="button" class="btn btn-primary" disabled={busy || limited} onClick={() => void retry()} data-test="report-retry">
             {busy ? 'Starting…' : 'Try again'}
           </button>
           <a class="btn" href="/history">

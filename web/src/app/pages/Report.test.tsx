@@ -320,7 +320,31 @@ describe('Report', () => {
     await settle();
     expect($(root, 'report-retry-error')?.textContent).toBe('This report was retried twice today. Try again tomorrow.');
     expect($(root, 'report-failed')).not.toBeNull();
-    expect(($(root, 'report-retry') as HTMLButtonElement).disabled).toBe(false);
+    // Another tap would only be refused again: the button stays off with the message.
+    expect(($(root, 'report-retry') as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('try_again_on_a_report_scored_meanwhile_shows_the_report', async () => {
+    let scored = false;
+    useFakeServer({
+      routes: {
+        'GET /api/sessions/f3/report': () =>
+          scored ? fakeReport('f3') : new Response(JSON.stringify({ code: 'not_ready', message: 'Report not ready' }), { status: 404 }),
+        'GET /api/sessions/f3': () => ({ status: scored ? 'scored' : 'failed', report_ready: scored }),
+        'POST /api/sessions/f3/report': () => {
+          // Another tab's try finished first.
+          scored = true;
+          return new Response(JSON.stringify({ code: 'conflict', message: 'This report is already scored.' }), { status: 409 });
+        },
+      },
+    });
+    const root = await renderApp('/report/f3');
+    await settle();
+    await click($(root, 'report-retry'));
+    await settle();
+    expect($(root, 'report-retry-error')).toBeNull();
+    expect($(root, 'report-failed')).toBeNull();
+    expect($(root, 'report-section-verdict')).not.toBeNull();
   });
 
   it('report_lists_the_board_in_words_part_by_part', async () => {
