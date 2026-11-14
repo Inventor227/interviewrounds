@@ -47,5 +47,9 @@
     "I would like to hear from both of you. Tom, you have been quiet so far. What is your biggest concern with this round?",
     "That is fair. Our cohorts are young, so we track churn by the month a clinic joined, and our oldest twelve clinics have not churned at all. About sixty percent of the round goes to sales, and the rest to product and support.",
     "So my ask is simple: a partner meeting next week to discuss terms. What would you need to see before then?"
-  ]
+  ],
+  "sde.system_design.short.drawing": "The box on the left is the waiting room and the box on the right is the booking service. The waiting room admits fans to the booking service at a steady rate.",
+  "sde.object_design.short.drawing": "The box on the left is the Hub class and the box on the right is the Bay class. A Hub has many Bays, and each Bay has one Charger.",
+  "pm.product_sense.short.drawing": "The box on the left is the movers from another city and the box on the right is the verified listing feed. The listing feed is built for those movers first.",
+  "pm.execution.short.drawing": "The box on the left is group orders started and the box on the right is checkout completed. The drop shows up between them, in the share link step."
 }

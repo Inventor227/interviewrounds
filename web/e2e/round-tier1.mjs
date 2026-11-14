@@ -102,17 +102,52 @@ async function pinchGhost(waitRounds) {
   return ghost;
 }
 
+/** Two boxes and a connector, drawn by hand on the sheet (the kit decides what a box becomes: a component, a class). */
+async function drawTwoBoxes() {
+  await look(S, -52);
+  await draw(roughBox(8, 10, 12, 7, 3));
+  await sleep(1000);
+  await draw(roughBox(38, 10, 12, 7, 5));
+  await sleep(1000);
+  let b = await board();
+  const drawn = b.items.filter((x) => x.kind !== 'ink' && x.label === null);
+  stage('two boxes', { items: b.items.length, drawn: drawn.length, kinds: b.items.map((x) => x.kind) });
+  if (drawn.length >= 2) {
+    const [c1, c2] = drawn;
+    await draw(L.along([[c1.x + c1.w + 0.4, c1.y + c1.h / 2], [c2.x + 1.5, c2.y + c2.h / 2]], 1.5));
+    await sleep(1200);
+    b = await board();
+    stage('connected', { edges: b.edges.length });
+    // The emulator's scripted pinch closes about 2 cm short of where it is sent, so it can take a card instead of
+    // its edge (the same is reported, not required, in round-design.mjs). Reported, not a failure.
+    if (!b.edges.length) {
+      result.warnings.push('the scripted connector did not become an edge');
+      stage('WARNING the scripted connector did not become an edge', { items: b.items.map((i) => [i.x, i.y, i.w, i.h]) });
+    }
+  } else {
+    problem('the two drawn boxes did not become cards', { kinds: b.items.map((x) => x.kind) });
+  }
+  await sleep(600);
+  await shot('07-drawn');
+}
+
+const BOARD = kit && kit !== 'coding' && !MEETING;
+const DRAWING = JSON.parse(readFileSync(path.join(APP, 'e2e', 'tier1-lines.json'), 'utf8'))[`${ROUND}.drawing`] ?? null;
 const replies = [];
-for (const [i, text] of ANSWERS.entries()) {
+// Board rounds draw after the second answer, so the answers after it (and one about the drawing) give the Scribe
+// something to suggest for the drawn cards.
+const turns = [...ANSWERS.map((t) => ({ text: t })), ...(BOARD && DRAWING ? [{ text: DRAWING, drawing: true }] : [])];
+for (const [i, turn] of turns.entries()) {
   const st = await roundState();
   if (!st || st.state !== 'live') {
     problem('the round ended before all answers', { answered: i, state: st?.state });
     break;
   }
-  const reply = await answer(text, 120000);
+  const reply = await answer(turn.text, 120000);
   replies.push(reply);
   stage(`answer ${i + 1}`, reply);
-  if (kit && kit !== 'coding' && !pinched && i >= 1) pinched = await pinchGhost(4);
+  if (BOARD && i === 1) await drawTwoBoxes();
+  if (BOARD && !pinched && i >= 2) pinched = await pinchGhost(turn.drawing ? 12 : 4);
   if (MEETING && i === 2) {
     const fl = await until('the floor to move', () => {
       const c = globalThis.__round.controller;
@@ -135,34 +170,8 @@ if (kit === 'coding') {
   await look(S, -52);
   await sleep(800);
   await shot('07-sheet');
-} else if (kit && !MEETING) {
-  // Two boxes and a connector, drawn by hand on the sheet.
-  await look(S, -52);
-  await draw(roughBox(8, 10, 12, 7, 3));
-  await sleep(1000);
-  await draw(roughBox(38, 10, 12, 7, 5));
-  await sleep(1000);
-  let b = await board();
-  const drawn = b.items.filter((x) => x.kind === 'component' && x.label === null);
-  stage('two boxes', { items: b.items.length, drawn: drawn.length, kinds: b.items.map((x) => x.kind) });
-  if (drawn.length >= 2) {
-    const [c1, c2] = drawn;
-    await draw(L.along([[c1.x + c1.w + 0.4, c1.y + c1.h / 2], [c2.x + 1.5, c2.y + c2.h / 2]], 1.5));
-    await sleep(1200);
-    b = await board();
-    stage('connected', { edges: b.edges.length });
-    // The emulator's scripted pinch closes about 2 cm short of where it is sent, so it can take a card instead of
-    // its edge (the same is reported, not required, in round-design.mjs). Reported, not a failure.
-    if (!b.edges.length) {
-      result.warnings.push('the scripted connector did not become an edge');
-      stage('WARNING the scripted connector did not become an edge', { items: b.items.map((i) => [i.x, i.y, i.w, i.h]) });
-    }
-  } else {
-    problem('the two drawn boxes did not become cards', { kinds: b.items.map((x) => x.kind) });
-  }
-  await sleep(600);
-  await shot('07-drawn');
-  if (!pinched) pinched = await pinchGhost(12);
+} else if (BOARD) {
+  if (!pinched) pinched = await pinchGhost(8);
   if (!pinched) problem('no suggestion arrived to accept', null);
   await look(S, -5);
   await sleep(800);
