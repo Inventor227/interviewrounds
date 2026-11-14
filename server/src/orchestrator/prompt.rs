@@ -154,10 +154,14 @@ pub fn turn_note(
 
     let mut warned = false;
     let meeting_parts = state.meeting.as_ref().map(|m| {
+        let addressed = input
+            .speech()
+            .is_some_and(|w| crate::meeting::live::addressed_attendee(m, panelist_id, w).is_some());
         crate::meeting::live::turn_parts(
             m,
             panelist_id,
             &crate::meeting::live::Clock::of(state, now),
+            addressed,
         )
     });
     let time_line = if let Some((line, _)) = &meeting_parts {

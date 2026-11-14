@@ -411,6 +411,7 @@ pub fn turn_parts(
     meeting: &MeetingState,
     panelist_id: &str,
     clock: &Clock,
+    addressed: bool,
 ) -> (String, Vec<String>) {
     let Some(me) = meeting.by_panelist(panelist_id) else {
         return (String::new(), Vec::new());
@@ -490,11 +491,12 @@ pub fn turn_parts(
         notes.push("The candidate has not made a clear ask yet.".into());
     }
 
-    // Who speaks next.
-    if let Some(next) = meeting
-        .next_speaker
-        .as_deref()
-        .and_then(|n| meeting.attendee(n))
+    // Who speaks next: not when the candidate's words were for another attendee (that note says who, alone).
+    if !addressed
+        && let Some(next) = meeting
+            .next_speaker
+            .as_deref()
+            .and_then(|n| meeting.attendee(n))
     {
         let instruction = meeting.next_speaker_instruction.trim();
         if next.name == me.name {

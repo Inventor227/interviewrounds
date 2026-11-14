@@ -2732,3 +2732,68 @@ async fn a_chair_led_meeting_keeps_its_floor_when_nobody_else_is_named() {
     let note = last_note(llm.streamed().last().unwrap());
     assert!(!note.contains("last words were for"), "{note}");
 }
+
+/// The pitch with a third attendee, Sam (rules-only plan).
+fn trio_meeting(catalog: &Catalog) -> MeetingState {
+    let s = setup(json!({
+        "template_id": "investor_pitch",
+        "goal": "Get a partner meeting next week to discuss terms for our seed round.",
+        "user_role": "Founder and CEO",
+        "attendees": [
+            {"name": "Rhea", "role": "Partner, seed fund", "cares_about": ["market size"],
+             "personality": "skeptical", "decision_power": "approver", "voice_base": "persona.ana"},
+            {"name": "Tom", "role": "Associate", "cares_about": ["churn"], "personality": "neutral",
+             "voice_base": "persona.leo"},
+            {"name": "Sam", "role": "Venture partner", "cares_about": ["the team"], "personality": "neutral",
+             "voice_base": "persona.daniel"}
+        ],
+        "length": "short",
+        "difficulty": "realistic"
+    }));
+    let plan = build_plan(catalog, &s, None).unwrap();
+    MeetingState::from_parts(&s, &plan)
+}
+
+#[tokio::test]
+async fn an_addressed_turn_follows_only_the_address_not_the_next_speaker_or_another_hand_over() {
+    let catalog = catalog();
+    let llm = FakeLlm::new();
+    let (router, app) = test_app(llm.clone(), catalog.clone());
+    let mut meeting = trio_meeting(&catalog);
+    // The meeting state picked Sam to speak next; the candidate asks Tom.
+    meeting.next_speaker = Some("Sam".into());
+    let tom = meeting.attendee("Tom").unwrap().panelist_id.clone();
+    let sam = meeting.attendee("Sam").unwrap().panelist_id.clone();
+    let mut st = meeting_session("m-trio", &catalog, meeting);
+    let floor = st.floor.clone();
+    assert_ne!(floor, tom);
+    st.status = ir_server::orchestrator::SessionStatus::Live;
+    let mut rx = st.events.subscribe();
+    app.registry.insert(st);
+    llm.reply("Tom, go ahead.");
+    // The director hands over to Sam, against the reply.
+    llm.directors.lock().unwrap().push_back(MessagesResponse {
+        content: vec![ContentBlock::ToolUse {
+            id: "toolu_h".into(),
+            name: "hand_over".into(),
+            input: json!({"to": sam, "line": "Let me ask about the team."}),
+        }],
+        ..response(String::new())
+    });
+    say(
+        &router,
+        "m-trio",
+        &floor,
+        json!([{"role": "user", "content": "Tom, what churn do you see?"}]),
+    )
+    .await;
+    let note = last_note(llm.streamed().last().unwrap());
+    assert!(note.contains("last words were for Tom"), "{note}");
+    assert!(
+        !note.contains("The app picked Sam"),
+        "no second instruction: {note}"
+    );
+    // The hand-over goes to Tom, not to Sam.
+    let got = hand_overs(&mut rx, Duration::from_secs(2)).await;
+    assert_eq!(got, vec![(floor, tom, String::new())]);
+}

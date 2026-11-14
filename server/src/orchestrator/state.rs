@@ -1121,10 +1121,16 @@ impl SessionState {
     /// answered words addressed to another attendee gets a hand-over to them when the director made none.
     pub fn director_done(&mut self, id: u64, mut calls: Vec<ToolCall>) -> Vec<ServerEvent> {
         if let Some((from, to)) = self.addressed.remove(&id) {
-            // The director chose (a hand-over of its own, or the end), or the round is closing: nothing to add.
-            let decided = calls
-                .iter()
-                .any(|c| c.name == "hand_over" || c.name == "end_round");
+            let to_them = |c: &ToolCall| {
+                c.name == "hand_over"
+                    && c.input.get("to").and_then(serde_json::Value::as_str) == Some(to.as_str())
+            };
+            // The director chose the addressed attendee (with its own line), or the end; or the round is closing.
+            let decided = calls.iter().any(|c| to_them(c) || c.name == "end_round");
+            // A hand-over to someone else would contradict the reply, which named the addressed attendee: dropped.
+            if !decided {
+                calls.retain(|c| c.name != "hand_over");
+            }
             if !decided && self.closing_line.is_none() && self.pending_close.is_none() {
                 tracing::info!(session_id = %self.id, turn_id = id, to = %to, "the candidate spoke to another attendee: handing over");
                 calls.push(ToolCall {
