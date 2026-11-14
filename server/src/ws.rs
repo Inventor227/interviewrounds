@@ -165,6 +165,9 @@ pub struct SessionTiming {
     /// A round paused this long without a break has its voices released (their sessions bill per minute); a
     /// resume makes new ones.
     pub voice_release: Duration,
+    /// After a swap hand-over's new voice says its line, the outgoing voice still open this long later is ended by
+    /// the server (the browser normally ends it a moment after the switch).
+    pub outgoing_voice_grace: Duration,
 }
 
 impl Default for SessionTiming {
@@ -181,6 +184,7 @@ impl Default for SessionTiming {
             read_timeout: Duration::from_secs(45),
             janitor: Duration::from_secs(30),
             voice_release: Duration::from_secs(45),
+            outgoing_voice_grace: Duration::from_secs(15),
         }
     }
 }

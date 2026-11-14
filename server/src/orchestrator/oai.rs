@@ -538,6 +538,16 @@ fn turn_stream(
                     );
                 }
                 guard.done = true;
+                // A hand-over line asked for with the marker: the browser has switched voices. The outgoing voice is
+                // ended here too if the browser has not ended it within the grace.
+                if matches!(input, UserInput::Event(EventKind::Handover)) {
+                    crate::persist::end_outgoing_voices_after(
+                        &app,
+                        &session_id,
+                        &panelist,
+                        app.timing.outgoing_voice_grace,
+                    );
+                }
                 tracing::info!(session_id = %session_id, panelist_id = %panelist, llm_ttft_ms = 0u64, total_ms = started.elapsed().as_millis() as u64, "handover line");
                 yield Ok(chunks.content(&spoken));
                 yield Ok(chunks.finish(&Usage::default()));

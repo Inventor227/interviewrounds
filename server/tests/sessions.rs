@@ -1196,6 +1196,91 @@ async fn a_deferred_swap_join_is_silent_and_its_handover_marker_records_the_line
 }
 
 #[tokio::test]
+async fn the_server_ends_the_outgoing_voice_when_the_browser_has_not_after_the_switch() {
+    let app = live::test_app(Options {
+        timing: ir_server::ws::SessionTiming {
+            outgoing_voice_grace: Duration::from_millis(400),
+            ..Default::default()
+        },
+        ..Options::default()
+    })
+    .await;
+    let cookie = app.guest().await;
+    let res = app.create(&cookie, full_req("fish")).await;
+    let id = res.body["session_id"].as_str().unwrap().to_string();
+    app.set_status(&id, ir_server::orchestrator::SessionStatus::Live)
+        .await;
+    let handle = app.state.registry.get(&id).unwrap();
+    handle
+        .lock()
+        .await
+        .apply_tool_calls(&[ir_server::orchestrator::tools::ToolCall {
+            id: "toolu_h".into(),
+            name: "hand_over".into(),
+            input: json!({"to": "p2", "line": "Hi, I'm Ana."}),
+            panelist_id: "p1".into(),
+        }]);
+    let res = app
+        .call(
+            Method::POST,
+            &format!("/api/sessions/{id}/panelists/p2/join"),
+            Some(&cookie),
+            Some(json!({"deferred": true, "from": "p1"})),
+        )
+        .await;
+    assert_eq!(res.status, StatusCode::OK, "{}", res.body);
+    let ended = |fid: &'static str| {
+        let app = &app;
+        async move {
+            app.fish_paths("POST")
+                .await
+                .iter()
+                .any(|p| p.ends_with(&format!("{fid}/end")))
+        }
+    };
+    // The browser switches (the new voice's marker) but never ends the old voice (the tab died).
+    let body = json!({"model": "x", "stream": true,
+        "messages": [{"role": "user", "content": "[event: handover]"}],
+        "fishaudio_extra_body": {"session_id": id, "panelist_id": "p2"}});
+    let req = axum::http::Request::post("/v1/chat/completions")
+        .header(header::AUTHORIZATION, "Bearer test-llm-secret")
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(axum::body::Body::from(body.to_string()))
+        .unwrap();
+    use tower::ServiceExt;
+    let res = app.router.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let _ = common::body_bytes(res).await;
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    assert!(!ended("fish-1").await, "not before the grace");
+    live::eventually(
+        "the outgoing voice ended by the server",
+        Duration::from_secs(3),
+        || ended("fish-1"),
+    )
+    .await;
+    assert!(!ended("fish-2").await, "the new floor keeps its voice");
+    let uuid = Uuid::parse_str(&id).unwrap();
+    let open = || async {
+        let row = persist::fetch_session(&app.state.db, uuid)
+            .await
+            .unwrap()
+            .unwrap();
+        row.fish_entries()
+            .into_iter()
+            .filter(|e| e.ended_at.is_none())
+            .map(|e| e.panelist_id)
+            .collect::<Vec<_>>()
+    };
+    live::eventually(
+        "only the new floor's voice left open",
+        Duration::from_secs(3),
+        || async { open().await == ["p2"] },
+    )
+    .await;
+}
+
+#[tokio::test]
 async fn concurrent_creates_take_the_last_slot_once() {
     let app = live::test_app(Options {
         env: &[("USAGE_PHASE", "judging")],

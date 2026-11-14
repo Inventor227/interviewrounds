@@ -250,6 +250,7 @@ fn quick() -> SessionTiming {
         read_timeout: Duration::from_secs(45),
         janitor: Duration::from_secs(60),
         voice_release: Duration::from_secs(45),
+        outgoing_voice_grace: Duration::from_secs(15),
     }
 }
 
