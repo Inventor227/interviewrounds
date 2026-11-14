@@ -1744,8 +1744,142 @@ fn scrub_takes_out_app_notes_and_board_ids_and_leaves_other_text_alone() {
     );
 }
 
+/// The start time of each transcript line of a stored session, by segment id, as the scorer saw them.
+async fn segment_times_of(db: &PgPool, id: Uuid) -> HashMap<String, String> {
+    let input = scoring::load_scoring_input(db, id, &catalog())
+        .await
+        .unwrap()
+        .unwrap();
+    report::segment_times(&report::transcript_lines(&input))
+}
+
+#[test]
+fn segment_ids_in_prose_read_as_times_and_nothing_else_changes() {
+    use report::segment_ids_in;
+    let times: HashMap<String, String> = [
+        ("s2", "00:12"),
+        ("s4", "01:05"),
+        ("s6", "01:40"),
+        ("s8", "02:10"),
+        ("s10", "02:45"),
+    ]
+    .into_iter()
+    .map(|(a, b)| (a.to_string(), b.to_string()))
+    .collect();
+    // The sentence a stored report really carried.
+    let old = "Sam asked for team size and your own code at s4, s6, s8 and s10.";
+    assert_eq!(
+        segment_ids_in(old, Some(&times)),
+        "Sam asked for team size and your own code at 01:05, 01:40, 02:10 and 02:45."
+    );
+    // Without the transcript only a list goes; a single id stays.
+    assert_eq!(
+        segment_ids_in(old, None),
+        "Sam asked for team size and your own code at several points."
+    );
+    assert_eq!(
+        segment_ids_in("Also at s4 and s6, or s8.", None),
+        "Also at several points."
+    );
+    assert_eq!(
+        segment_ids_in("You paused at s4.", None),
+        "You paused at s4."
+    );
+    // No line s3 in this transcript: "S3" and "s3" stay, and so do words that only contain an id.
+    for same in [
+        "Keep the tickets in an S3 bucket.",
+        "Keep the tickets in an s3 bucket.",
+        "cs4, s4x, s_4, S4 and s4.5x stay as they are.",
+        "",
+    ] {
+        assert_eq!(segment_ids_in(same, Some(&times)), same, "{same}");
+    }
+    assert_eq!(
+        segment_ids_in("At s2 and s99.", Some(&times)),
+        "At 00:12 and s99."
+    );
+
+    // In a report: id fields, quotes, the interviewer's question and the board text keep their words; a retry's
+    // note (another transcript) loses only a list.
+    let mut r = json!({
+        "headline": {"summary": "Strong from s2 on."},
+        "evidence": [{"id": "e1", "quote": "I keep it in s2 storage", "note": "See s2.", "competency_ids": ["s2"]}],
+        "competencies": [{"id": "c", "evidence_ids": ["s2"], "rationale": "At s4 you named it."}],
+        "weakest_moment": {"question": "What about s2?", "what_happened": "At s6 you paused.",
+            "retries": [{"session_id": "s2", "note": "Better than s2, s4 and s6; s8 still open."}]},
+        "round_details": {"board_as_text": "Components: s2 (cache)."}
+    });
+    report::segment_ids_to_times(&mut r, Some(&times));
+    assert_eq!(
+        r,
+        json!({
+            "headline": {"summary": "Strong from 00:12 on."},
+            "evidence": [{"id": "e1", "quote": "I keep it in s2 storage", "note": "See 00:12.", "competency_ids": ["s2"]}],
+            "competencies": [{"id": "c", "evidence_ids": ["s2"], "rationale": "At 01:05 you named it."}],
+            "weakest_moment": {"question": "What about s2?", "what_happened": "At 01:40 you paused.",
+                "retries": [{"session_id": "s2", "note": "Better than several points; s8 still open."}]},
+            "round_details": {"board_as_text": "Components: s2 (cache)."}
+        })
+    );
+    assert!(report::has_segment_ids(&json!({"note": "at s4"})));
+    assert!(!report::has_segment_ids(
+        &json!({"quote": "at s4", "evidence_ids": ["s4"], "question": "s4?"})
+    ));
+}
+
+/// A report stored with segment ids in its prose reads them as times on the report page and the public page.
+#[tokio::test]
+async fn an_older_report_with_segment_ids_in_its_prose_reads_them_as_times() {
+    let _serial = db_lock().lock().await;
+    let db = pool().await;
+    let data = common::temp_dir("data");
+    let id = insert_session(&db, &long_design_input()).await;
+    let mut old = common::scored::example_report(&id.to_string());
+    old.as_object_mut().unwrap().remove("share");
+    old["headline"]["summary"] = json!(
+        "The interviewer asked for the bottleneck at s2, s4 and s6, and your S3 bucket plan was sound."
+    );
+    scoring::store_report(&db, id, &old, Some("claude-opus-5-5"))
+        .await
+        .unwrap();
+    let times = segment_times_of(&db, id).await;
+    let want = format!(
+        "The interviewer asked for the bottleneck at {}, {} and {}, and your S3 bucket plan was sound.",
+        times["s2"], times["s4"], times["s6"]
+    );
+    let who = owner(&db, id).await;
+    let res = common::get(
+        report_app(&db, &data, who.clone()),
+        &format!("/api/sessions/{id}/report"),
+    )
+    .await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let body = common::body_json(res).await;
+    assert_eq!(body["headline"]["summary"], want);
+    assert_no_app_text(&body.to_string(), &[], "the older report");
+    sqlx::query(
+        "insert into shares (slug, session_id, identity_id, include_transcript) values ('Sg7_x9-QzK', $1, $2, false)",
+    )
+    .bind(id)
+    .bind(who.id)
+    .execute(&db)
+    .await
+    .unwrap();
+    let pages = Router::new()
+        .route(
+            "/s/{slug}",
+            axum::routing::get(ir_server::api::shares::page),
+        )
+        .with_state(AppState::new(db.clone(), config(&data)));
+    let res = common::get(pages, "/s/Sg7_x9-QzK").await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let html = String::from_utf8(common::body_bytes(res).await).unwrap();
+    assert!(html.contains(&times["s4"]), "the time is on the page");
+    assert_no_app_text(&html, &[], "the public page");
+}
+
 /// Fails when `text` carries anything the app writes for the interviewer only: its bracketed markers, the "do not
-/// read aloud" note, or a board item id (`x2_1` from the Scribe, or one of `ids`).
+/// read aloud" note, a board item id (`x2_1` from the Scribe, or one of `ids`), or a transcript segment id (`s4`).
 fn assert_no_app_text(text: &str, ids: &[&str], what: &str) {
     let lower = text.to_lowercase();
     for marker in ["[board update", "[app note", "do not read aloud"] {
@@ -1765,6 +1899,13 @@ fn assert_no_app_text(text: &str, ids: &[&str], what: &str) {
         assert!(
             !ids.contains(&token),
             "{what} carries the board id {token}: {text}"
+        );
+        let segment_id = token.len() > 1
+            && token.starts_with('s')
+            && token[1..].bytes().all(|c| c.is_ascii_digit());
+        assert!(
+            !segment_id,
+            "{what} carries the transcript segment id {token}: {text}"
         );
     }
 }
@@ -1830,6 +1971,9 @@ async fn a_scored_report_and_its_public_page_carry_no_app_notes_or_board_ids() {
         "A rate limiter in front of x3_1",
         "[Board update r3, do not read aloud] A hold sweeper"
     ]);
+    // And the transcript's segment ids (the scorer cites lines by them).
+    out["strengths"][0]["detail"] =
+        json!("You named double selling at s2, s4 and s6, and kept holds in an S3 bucket.");
     let llm = ScriptedLlm::new(vec![Ok(out.to_string())]);
     let d = deps(&db, llm.clone(), &data);
     scoring::score_session(&d, id).await.unwrap();
@@ -1855,6 +1999,14 @@ async fn a_scored_report_and_its_public_page_carry_no_app_notes_or_board_ids() {
     assert_eq!(
         body["round_details"]["missing_components"],
         json!(["A rate limiter in front of", "A hold sweeper"])
+    );
+    let times = segment_times_of(&db, id).await;
+    assert_eq!(
+        body["strengths"][0]["detail"],
+        format!(
+            "You named double selling at {}, {} and {}, and kept holds in an S3 bucket.",
+            times["s2"], times["s4"], times["s6"]
+        )
     );
     assert_no_app_text(&body.to_string(), &ids, "the report");
 

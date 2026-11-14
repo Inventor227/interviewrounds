@@ -334,9 +334,11 @@ fn str_of(v: &Value, key: &str) -> Option<String> {
 
 /// A stored report as people get to read it (the report page and the public scorecard). Reports scored before
 /// the board text was written for people carry the interviewer's live board summary: it is rebuilt from the
-/// saved board (or dropped), and the app's notes to the interviewer are taken out of every field.
+/// saved board (or dropped), and the app's notes to the interviewer are taken out of every field. Transcript
+/// segment ids the model wrote into prose read as the times of their lines.
 pub async fn readable_report(
     db: &PgPool,
+    catalog: &Catalog,
     session_id: Uuid,
     report: &mut Value,
 ) -> Result<(), sqlx::Error> {
@@ -362,7 +364,30 @@ pub async fn readable_report(
         }
     }
     report::scrub_app_text(report);
+    readable_segment_ids(db, catalog, session_id, report).await;
     Ok(())
+}
+
+/// Segment ids in a stored report's prose as the times of their lines in the session's transcript. When the
+/// transcript cannot be read, only a list of ids goes ("at several points").
+pub async fn readable_segment_ids(
+    db: &PgPool,
+    catalog: &Catalog,
+    session_id: Uuid,
+    report: &mut Value,
+) {
+    if !report::has_segment_ids(report) {
+        return;
+    }
+    let times = match load_scoring_input(db, session_id, catalog).await {
+        Ok(Some(input)) => Some(report::segment_times(&report::transcript_lines(&input))),
+        Ok(None) => None,
+        Err(err) => {
+            tracing::warn!(session_id = %session_id, error = %format!("{err:#}"), "transcript not read for the report's segment ids");
+            None
+        }
+    };
+    report::segment_ids_to_times(report, times.as_ref());
 }
 
 /// The saved board in plain words. A stored document that does not read as a board falls back to the stored

@@ -380,8 +380,12 @@ pub async fn history(
                 "round_id": round_id,
                 "title": title,
                 "started_at": at,
-                // Older reports may carry the interviewer's notes the model copied: never shown.
-                "headline": crate::scoring::report::scrub_str(&headline.unwrap_or_default()),
+                // Older reports may carry the interviewer's notes the model copied: never shown. A list of
+                // transcript segment ids goes too (the transcript is not read for a list of sessions).
+                "headline": crate::scoring::report::segment_ids_in(
+                    &crate::scoring::report::scrub_str(&headline.unwrap_or_default()),
+                    None
+                ),
             })
         })
         .collect();

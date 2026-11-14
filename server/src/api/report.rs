@@ -68,7 +68,7 @@ async fn get_report(
             .await?;
     match report {
         Some(mut r) => {
-            crate::scoring::readable_report(&app.db, id, &mut r).await?;
+            crate::scoring::readable_report(&app.db, &app.catalog, id, &mut r).await?;
             if r.is_object() {
                 r["share"] = super::shares::share_block(&app.db, id).await?;
             }

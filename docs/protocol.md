@@ -343,7 +343,12 @@ Validating with Ajv: use draft 2020-12 (`ajv/dist/2020`) with `allowUnionTypes: 
   summary's header or item ids (the interviewer's board text stays as it is). The scorer reads the same text. No
   report field, and nothing on the public scorecard, carries the app's notes to the interviewer (`[Board update`,
   `[App note`, `[event: ...]`, "do not read aloud") or Scribe item ids such as `x2_1`: they are taken out when a
-  report is stored and when it is served.
+  report is stored and when it is served. Transcript segment ids the scorer cites lines by (`s4`) never show in
+  prose either: a whole lower-case `s<digits>` word that is an id of the session's transcript reads as the start
+  time of that line (`01:05`), at scoring and when served (report, public page, retry prompt). Ids, quotes, the
+  weakest moment's question and the board text keep their words, and "S3" or an id the transcript does not have
+  stays. The History list (no transcript read) only drops a list of ids ("at s4, s6 and s8" reads "at several
+  points").
 
 ## Board ops
 

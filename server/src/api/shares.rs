@@ -249,7 +249,7 @@ async fn page_inner(app: &AppState, slug: &str) -> anyhow::Result<Response> {
     let Some((mut report, round_id, mode, panel, started_at, created_at)) = row else {
         return Ok(missing());
     };
-    crate::scoring::readable_report(&app.db, session_id, &mut report).await?;
+    crate::scoring::readable_report(&app.db, &app.catalog, session_id, &mut report).await?;
     let lines = if with_transcript {
         crate::retry::lines(&app.db, session_id).await?
     } else {
