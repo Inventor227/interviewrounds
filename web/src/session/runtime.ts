@@ -601,7 +601,7 @@ export function createRoundRuntime({ preview }: RuntimeOptions): RoundController
       // board's own sheet, and in rounds without a board there is no sheet at all.
       let lastDesk: unknown = null;
       const tmp = { x: 0, y: 0, z: 0 };
-      const rec = recorder();
+      const rec = import.meta.env.DEV ? recorder() : null;
       let lipAt = 0;
       const lastLip = new Map<string, number>();
       cleanups.push(
@@ -682,7 +682,7 @@ export function createRoundRuntime({ preview }: RuntimeOptions): RoundController
   const makeTransport = (p: Panelist, o: TransportOptions | undefined, res: CreateSessionRes): VoiceTransport => {
     const make = settings ? browser.makeTransport({ voice_speed: settings.voice_speed }) : base;
     const t = make(p, o, res);
-    const rec = recorder();
+    const rec = import.meta.env.DEV ? recorder() : null;
     if (rec) {
       Object.assign(rec.meta, describeSession(res));
       recordTransport(rec, t);
@@ -696,7 +696,7 @@ export function createRoundRuntime({ preview }: RuntimeOptions): RoundController
   };
 
   const makeSocket = (wsUrl: string, clientToken: string, lastSeq = 0): SocketPort => {
-    const rec = recorder();
+    const rec = import.meta.env.DEV ? recorder() : null;
     socket = new SessionSocket(wsUrl, clientToken, rec ? { lastSeq, WebSocketImpl: rec.socketClass() } : { lastSeq });
     sessionId = sessionIdOf(wsUrl);
     wireSocket();
@@ -712,7 +712,7 @@ export function createRoundRuntime({ preview }: RuntimeOptions): RoundController
     visibility: browser.pageVisibility,
     avatars: (id) => {
       const port = people?.port(id);
-      const rec = recorder();
+      const rec = import.meta.env.DEV ? recorder() : null;
       if (!port || !rec) return port;
       return {
         setMode: (mode) => {

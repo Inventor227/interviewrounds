@@ -13,14 +13,20 @@ const walk = (d) => {
 };
 walk(dist);
 
+/** Development hooks that must never reach a production bundle (each one sits behind `import.meta.env.DEV`). */
+const DEV_HOOKS = ['__avatarDev', '__irNoRender', '__recorder', 'ir_record', '__emu_voice'];
+
 const bad = [];
 for (const f of files) {
   const rel = path.relative(dist, f);
-  if (/(^|\/)voice-[fm][^/]*\.wav$/.test(rel) || /AvatarDev/.test(rel) || /devScene/.test(rel)) bad.push(rel);
-  if (/\.(js|mjs|html)$/.test(f) && readFileSync(f, 'utf8').includes('__avatarDev')) bad.push(`${rel} (mentions __avatarDev)`);
+  if (/(^|\/)voice-[fm][^/]*\.wav$/.test(rel) || /AvatarDev/.test(rel) || /devScene/.test(rel) || /(^|\/)__emu_voice(\/|$)/.test(rel)) bad.push(rel);
+  if (/\.(js|mjs|html)$/.test(f)) {
+    const text = readFileSync(f, 'utf8');
+    for (const hook of DEV_HOOKS) if (text.includes(hook)) bad.push(`${rel} (mentions ${hook})`);
+  }
 }
 if (bad.length) {
   console.error(`dev-only files in ${dist}:\n  ${bad.join('\n  ')}`);
   process.exit(1);
 }
-console.log(`dist ok: ${files.length} files, no dev pages`);
+console.log(`dist ok: ${files.length} files, no dev pages or hooks`);

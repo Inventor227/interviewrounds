@@ -221,7 +221,8 @@ function LiveSession(props: { launch: Taken }) {
       room?.onChange(() => bump((n) => n + 1)) ?? (() => undefined),
     ];
     if (dev) (globalThis as { __round?: unknown }).__round = { controller, room, get session() { return current(); }, timings: () => room?.timings.spans() };
-    const rec = recorder();
+    // Development only: the production build drops the recorder and everything it pulls in.
+    const rec = import.meta.env.DEV ? recorder() : null;
     if (rec) offs.push(recordController(rec, controller));
     return () => {
       offs.forEach((o) => o());
