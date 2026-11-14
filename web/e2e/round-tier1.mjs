@@ -4,8 +4,7 @@
 // summary → the report page, whose JSON is saved for the report.v1 check. Every spoken line is checked for tool names,
 // the hold line and "the user" (PM rounds: "the candidate"; there "the user" is a product's user).
 //   ROUND_ID=<round id> (meeting.short runs the investor pitch with its two attendees)  INPUT=hands|controllers
-//   plan/ops-tools/emu.sh <worktree> <worktree>/web/e2e/round-tier1.mjs --env-file <dev key + ROUND_ID> --timeout 40 \
-//     --out plan/shots/t22/<round>
+//   Emulator run (see README.md): env DEV_KEY, IR_API_ORIGIN and ROUND_ID; allow up to 40 minutes.
 import { copyFileSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';

@@ -2,7 +2,7 @@
 // a new guest's first design round. After the desk is placed the ghost hand shows "Pinch and draw a box" and the
 // interviewer waits (no hello, no greeting) until the user has drawn one box (or 20 s have passed); then the round
 // starts. A second round in the same tab has no onboarding. Then: leaving the headset view during placement.
-//   plan/ops-tools/emu.sh <worktree> <worktree>/web/e2e/round-onboarding.mjs --env-file <env file> --timeout 40 --out plan/shots/t21/onboarding
+//   Emulator run (see README.md): env DEV_KEY and IR_API_ORIGIN; allow up to 40 minutes.
 import { copyFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';

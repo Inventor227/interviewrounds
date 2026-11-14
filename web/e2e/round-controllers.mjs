@@ -3,7 +3,7 @@
 // controller's tip and trigger, two boxes and a connector are drawn (one box by ray, one by touch), a tray card is
 // picked by ray, a suggestion is accepted with the trigger, Pause, Resume and End are
 // pressed on the round bar by ray, and See full report on the summary card.
-//   plan/ops-tools/emu.sh <worktree> <worktree>/web/e2e/round-controllers.mjs --env-file <dev key file> --timeout 50 --out plan/shots/t25/controllers
+//   Emulator run (see README.md): env DEV_KEY and IR_API_ORIGIN; allow up to 50 minutes.
 import { copyFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';

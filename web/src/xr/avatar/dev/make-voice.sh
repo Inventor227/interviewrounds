@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Builds the dev page's test voices with eSpeak NG (run in a throwaway Debian container, not on a laptop):
-#   plan tooling: remote.sh <worktree> node --pull web/src/xr/avatar/dev/voice-f.wav --pull web/src/xr/avatar/dev/voice-m.wav \
-#     -- 'bash web/src/xr/avatar/dev/make-voice.sh'
+#   in a node:22-bookworm container with the repository at the working directory:
+#     bash web/src/xr/avatar/dev/make-voice.sh   (then copy voice-f.wav and voice-m.wav back next to this script)
 set -euo pipefail
 cd "$(dirname "$0")"
 apt-get -qq update >/dev/null && apt-get -qq install -y espeak-ng python3 >/dev/null

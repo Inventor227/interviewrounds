@@ -1,7 +1,7 @@
 // End to end in the emulator for any round by id (ROUND_ID in the env file; default the short coding round): Start
 // page → mic and room → Enter → touch the desk → greeting → one typed answer → shots of the sheet for that round's kit
 // → End → scoring. Against a real server with the typed-turn fake voice.
-//   plan/ops-tools/emu.sh <worktree> <worktree>/web/e2e/round-kit.mjs --env-file <dev key + ROUND_ID> --timeout 30 --out plan/shots/int-web/coding
+//   Emulator run (see README.md): env DEV_KEY, IR_API_ORIGIN and ROUND_ID; allow up to 30 minutes.
 import { copyFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';

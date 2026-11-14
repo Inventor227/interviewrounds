@@ -15,13 +15,13 @@ Everything the pipeline keeps on the server lives in `/root/ir-avatar-work/` (ov
 | `build/` | scratch, deleted after a run |
 | `out/` | the GLBs and manifest of the last run |
 
-Keep this folder outside `/root/ir-dev/`. The dev scripts (`remote.sh`, `emu.sh`) mirror each worktree into
-`/root/ir-dev/<worktree>/` with `rsync --delete`, so anything else stored there is wiped on the next sync.
+Keep this folder outside any folder that another tool mirrors with `rsync --delete` (such as a synced copy of the
+repository), or the next sync wipes it. `AVATAR_HOST` names the build server's ssh host.
 
 ## Preview screenshots
 
 ```
-ssh ioflood 'docker run --rm --name ir-avatar-shots --cpus 6 --memory 6g --ipc=host -v /root/ir-avatar-work:/work \
+ssh "$AVATAR_HOST" 'docker run --rm --name ir-avatar-shots --cpus 6 --memory 6g --ipc=host -v /root/ir-avatar-work:/work \
   -w /work/tools/preview mcr.microsoft.com/playwright:v1.64.1-noble \
   bash -c "npm ci && node shots.mjs /work/out /work/tools/manifest.json /work/build/shots"'
 ```

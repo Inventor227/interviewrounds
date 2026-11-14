@@ -1,7 +1,7 @@
 // Two rounds in one tab, in the emulator against a real server with the typed-turn fake voice: a quick round from
 // home to the report page, back home without a reload, then a second quick round: the room is torn down and built
 // again, and the headset session is entered a second time.
-//   plan/ops-tools/emu.sh <worktree> <worktree>/web/e2e/round-twice.mjs --env-file <dev key file> --timeout 35 --out plan/shots/int-web/twice
+//   Emulator run (see README.md): env DEV_KEY and IR_API_ORIGIN; allow up to 35 minutes.
 import { copyFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';

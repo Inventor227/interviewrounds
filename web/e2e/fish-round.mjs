@@ -7,8 +7,7 @@
 //
 //   ROUND=behavioral|design|meeting  VIEW=preview|xr  SPEECH=voice|typed  MAX_MIN=<hard stop, default 6>
 //   FISH_OK=1 must be set: without it the script refuses to start.
-//   plan/ops-tools/emu.sh <worktree> <worktree>/web/e2e/fish-round.mjs --size 1280x720 --env-file <env> --timeout 30 \
-//     --out plan/video/raw/<round>
+//   Emulator run (see README.md): viewport 1280x720; env DEV_KEY, IR_API_ORIGIN and FISH_OK=1; allow up to 30 minutes.
 //
 // Every voice this opens is ended on the way out, also when a step fails (the round is ended, then the page leaves).
 // The run prints the Fish session ids (never a token) so they can be checked from outside.

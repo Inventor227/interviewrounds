@@ -1,7 +1,7 @@
 // End to end in the emulator, against the deployed server with the typed-turn fake voice: a two person meeting
 // rehearsal (the investor pitch). Meeting setup → Get the room ready → Enter the meeting room → touch the table →
 // the chair opens → two typed answers → a question to the other attendee (hand-over) → End.
-//   plan/ops-tools/emu.sh <worktree> <worktree>/web/e2e/round-meeting.mjs --room conference_room --env-file <dev key file> --timeout 40 --out plan/shots/int-web/meeting
+//   Emulator run (see README.md): room conference_room; env DEV_KEY and IR_API_ORIGIN; allow up to 40 minutes.
 import { copyFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';

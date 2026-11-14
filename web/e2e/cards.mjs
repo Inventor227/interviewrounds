@@ -1,7 +1,7 @@
 // Every interruption card in the room, for layout: the round is brought live (fake voice), then each card of
 // session/notices.ts is put up through the round UI (staged: the real flows are in round-pause.mjs and the unit
 // tests), plus the brief card with the longest question in content and the hints.
-//   plan/ops-tools/emu.sh <worktree> <worktree>/web/e2e/cards.mjs --env-file <env file> --timeout 40 --out plan/shots/t21/cards
+//   Emulator run (see README.md): env DEV_KEY and IR_API_ORIGIN; allow up to 40 minutes.
 import { copyFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';

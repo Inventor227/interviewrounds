@@ -1,7 +1,7 @@
 // How fast WebAudio runs in the emulator's browser: plays a 20 s line of synthetic speech into a
 // MediaStreamDestination (as fish-round.mjs feeds the microphone) and compares its length with the wall time it took,
 // on a page without WebGL and on the 2D preview of the room, at two viewport sizes and two latency hints.
-//   plan/ops-tools/emu.sh <worktree> <worktree>/web/e2e/audio-probe.mjs --size 1280x720 --out plan/shots/t22/audio-probe
+//   Emulator run (see README.md): viewport 1280x720.
 import { copyFileSync, mkdirSync, readdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';

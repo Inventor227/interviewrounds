@@ -2,7 +2,7 @@
 // placed with a controller's tip (trigger, then the dwell), the controller model from this origin, every button of
 // the round bar and of the status and summary cards pressed by ray, the sheet moved by its grab bar with a
 // controller (touch and ray) and with a hand, and the change from controllers to hands and back.
-//   plan/ops-tools/emu.sh <worktree> <worktree>/web/e2e/xr-input.mjs --timeout 30 --out plan/shots/t25/room
+//   Emulator run (see README.md): allow up to 30 minutes.
 
 import { copyFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';

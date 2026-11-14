@@ -1,6 +1,6 @@
 // Screenshots of every 2D page and state, against the fixture API (?fake=<scenario>), at the
-// Quest Browser size with its dim palette and at phone width. Run with plan tooling:
-//   emu.sh <worktree> web/e2e/pages.mjs --cpus 2 --size 1280x720
+// Quest Browser size with its dim palette and at phone width.
+//   Emulator run (see README.md): viewport 1280x720; 2 CPU cores are enough.
 // Each batch runs inside the managed browser (Playwright page and the app frame).
 import { writeFileSync } from 'node:fs';
 import path from 'node:path';

@@ -2,7 +2,7 @@
 // with real mouse input, plus the coding panel standing beside the sheet in XR (/dev/sheet).
 // Each kit: a few hand gestures, Scribe ops where the Scribe would write (voice text), checks,
 // then a screenshot and a crisp render of the board.
-//   plan/ops-tools/emu.sh <worktree> <worktree>/web/e2e/kits.mjs --out plan/shots/kits
+//   Emulator run (see README.md).
 import { writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { call, enterXR, iwsdk, screenshot, sleep, waitReady } from './emu-lib.mjs';
