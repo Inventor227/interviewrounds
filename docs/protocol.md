@@ -30,7 +30,8 @@ JSON; cookie `ir_id` identifies the device/user; all under same origin. A new gu
   the outgoing panelist (`from`) still says its hand-off sentence: the Fish session is minted with no `first_message`,
   nothing is added to the history, the floor stays where `panel.hand_over` put it, and `from`'s open Fish session is
   not ended (the browser ends it once the new voice has the floor; otherwise the server ends every other panelist's
-  voice made before the new one that is still open 15 s after the new voice's `[event: handover]`, and the next join, a voice release or the
+  voice made before the new one that is still open 15 s after the new voice's `[event: handover]` turn, with a
+  prepared line or a model reply, and the next join, a voice release or the
   round's end ends it too). Every other open Fish session of the round is ended. The new panelist's opening line is then said
   through `[event: handover]` (see the hand-over below); `opening_line` is ignored. Without `deferred` (older pages) the
   server adds the opening line to the shared history as that panelist's turn, gives it to the new Fish session as
@@ -214,10 +215,16 @@ Sequencing and acks:
   be said. A pause holds the swap with the
   new voice connected, muted and silent; on Resume its line is the welcome back (no `[event: resume]`). After a voice
   release the new voices are made for the server's floor and that voice gets `[event: handover]`. In a meeting, words
-  the candidate addresses to another attendee by name (the name first, or after a word like "so", last, or after
-  "for", "ask" or "to"; not a mention inside a sentence) give that attendee the floor for the reply: the attendee
-  replying is told to hand over, and when its director makes no hand-over (or fails) the app makes one with no
-  prepared line, so the named attendee's `[event: handover]` turn answers the candidate first. An end during a
+  the candidate addresses to another attendee by name give that attendee the floor for the reply. Only clear forms
+  of address count, read from the transcript's punctuation: the name opening a sentence (alone or after "so",
+  "okay" and the like, not after "thanks" or "yes") followed by a comma or question mark ("Tom, what's your..."), a
+  closing tag after a comma ("..., Tom?"), the very last words "a question for Tom" or "over to Tom", or a request
+  like "let me ask Tom" (not "did you ask Tom"). A mention elsewhere in a sentence never counts, and a name that is
+  also an ordinary word (Grace, Will) counts only capitalised in one of the comma forms. A transcript with no
+  punctuation at all counts only the name as its first word or the request to ask them. Two names, or the replying attendee's own, count as none. The attendee
+  replying is told to hand over (and is not given the meeting's own "who speaks next" note); a director hand-over
+  to anyone else is dropped, and when it makes none (or fails) the app makes one with no prepared line, so the named
+  attendee's `[event: handover]` turn answers the candidate first. An end during a
   swap drops the joining voice: `from` says the goodbye. A swap that fails (join error, a voice that does not start or
   drops before it speaks) leaves `from` on the floor, hearing the user again; the server's next hand-over to `to` is
   the retry. The page reports it as `handover_failed`, never as a lost round; if the failed swap was held by a pause
@@ -422,8 +429,10 @@ to it played), with the last one to three answers and the latest `board.focus` (
 session; a suggestion that no longer applies when it returns is dropped. It takes about 2 s. Suggestions never stack: a
 suggested new item goes where no item and no pending suggestion is (the Scribe is offered only such positions, and a
 new item that would still land on one moves to the first free position for its size, also when the board changed
-while the Scribe ran; a PM sticky with a lane goes to the first free spot down its own lane's column). The page keeps the same rule for the list it gets: a new item on another pending suggestion
-moves to the first free spot, so a pinch always takes the suggestion that shows. Accepting such a moved suggestion
+while the Scribe ran; a PM sticky with a lane goes to the first free spot down its own lane's column, or, when the column is full,
+fanned just below its lowest row). The page keeps the same rule for the list it gets: a new item on another pending suggestion
+or on a board item (a suggestion just accepted) moves to the first free spot, so a pinch always takes the suggestion
+that shows. Accepting such a moved suggestion
 sends it where it is shown.
 
 - **Accept** (pinch, or the 4 s settle): send the ghost's op as a normal `board.op` with the same `op_id`, `src: "scribe"`,
