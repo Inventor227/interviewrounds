@@ -217,11 +217,14 @@ Sequencing and acks:
   release the new voices are made for the server's floor and that voice gets `[event: handover]`. In a meeting, words
   the candidate addresses to another attendee by name give that attendee the floor for the reply. Only clear forms
   of address count, read from the transcript's punctuation: the name opening a sentence (alone or after "so",
-  "okay" and the like, not after "thanks" or "yes") followed by a comma or question mark ("Tom, what's your..."), a
-  closing tag after a comma ("..., Tom?"), the very last words "a question for Tom" or "over to Tom", or a request
-  like "let me ask Tom" (not "did you ask Tom"). A mention elsewhere in a sentence never counts, and a name that is
-  also an ordinary word (Grace, Will) counts only capitalised in one of the comma forms. A transcript with no
-  punctuation at all counts only the name as its first word or the request to ask them. Two names, or the replying attendee's own, count as none. The attendee
+  "okay" and the like, not after "thanks" or "yes") followed by a comma or question mark ("Tom, what's your..."), the
+  name as a sentence by itself before a capitalised word (Fish writes that comma as a full stop: "Tom. You have
+  been quiet."), the name opening a sentence before "back to you" or "over to you", a closing tag after a comma
+  ("..., Tom?"), the very last words "a question for Tom" or "over to Tom", or a request like "let me ask Tom" (not
+  "did you ask Tom"). A mention elsewhere in a sentence never counts. A name that is also an ordinary word (Grace,
+  Will) counts only capitalised in one of the forms before the last two. So does a word that is no attendee's name
+  but sounds like exactly one (the same Soundex code, at most two letters apart, not a common word: "Ria" for
+  Rhea). A transcript with no punctuation at all counts only the name as its first word or the request to ask them. Two names, or the replying attendee's own, count as none. The attendee
   replying is told to hand over (and is not given the meeting's own "who speaks next" note); a director hand-over
   to anyone else is dropped, and when it makes none (or fails) the app makes one with no prepared line, so the named
   attendee's `[event: handover]` turn answers the candidate first. An end during a
