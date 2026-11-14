@@ -15,7 +15,7 @@ import type { SocketStatus } from '../net/ws';
 import { FakeTransport, type Speaker } from '../voice/fake';
 import { panelist, ScriptedTransport, sessionRes } from '../voice/testkit';
 import { VoiceError, type TransportOptions } from '../voice/transport';
-import { HANDOFF_START_MS, LONG_ANSWER_CUT_IN_MS, RoundController, SessionError, type RoundControllerDeps, type RoundError } from './controller';
+import { HANDOFF_START_MS, HANDOFF_WAIT_MS, LONG_ANSWER_CUT_IN_MS, RoundController, SessionError, type RoundControllerDeps, type RoundError } from './controller';
 import { OLD_VOICE_TAIL_MS } from '../voice/panel';
 import type { NoticeKind } from './notices';
 import type { AvatarPort, HeadSamplerPort, SocketPort, UiAction, VisibilityPort, XRPort, XRVisibilityLike } from './ports';
@@ -908,12 +908,30 @@ describe('RoundController hand-overs', () => {
     const t2 = await live(h2);
     t2.mode('speaking');
     h2.socket.serverSend('panel.hand_over', { from: 'p1', to: 'p2', opening_line: 'Hi' });
-    await vi.advanceTimersByTimeAsync(4900);
+    await vi.advanceTimersByTimeAsync(HANDOFF_WAIT_MS - 100);
     expect(h2.transports[1]!.sentEvents).toEqual([]);
     await vi.advanceTimersByTimeAsync(200);
     expect(h2.transports[1]!.sentEvents).toEqual(['[event: handover]']);
     await vi.advanceTimersByTimeAsync(OLD_VOICE_TAIL_MS);
     expect(t2.stopped).toBe(true);
+  });
+
+  it('a_long_hand_off_sentence_is_never_cut', async () => {
+    // Rhea's hand-off to Tom ran past 5 s with a real voice and was cut mid-word.
+    const h = harness();
+    const t1 = await live(h);
+    t1.mode('speaking');
+    h.socket.serverSend('panel.hand_over', { from: 'p1', to: 'p2', opening_line: 'Hi' });
+    await vi.advanceTimersByTimeAsync(9_000);
+    const p2 = h.transports[1]!;
+    expect(p2.started).toBe(true); // joined long ago, waiting muted
+    expect(p2.sentEvents).toEqual([]);
+    expect(t1.stopped).toBe(false);
+    t1.mode('listening'); // the sentence ends after 9 s
+    await vi.advanceTimersByTimeAsync(0);
+    expect(p2.sentEvents).toEqual(['[event: handover]']);
+    await vi.advanceTimersByTimeAsync(OLD_VOICE_TAIL_MS);
+    expect(t1.stopped).toBe(true);
   });
 
   it('a_hand_over_that_lands_before_the_sentence_starts_still_lets_it_finish', async () => {

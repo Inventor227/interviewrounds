@@ -96,8 +96,11 @@ export const TURN_GAP_MS = 3000;
 export const AGENT_REPLY_MS = 2000;
 /** Longest wait for the goodbye line before the round is closed anyway. */
 export const ENDING_GRACE_MS = 15_000;
-/** Longest wait for the outgoing panelist to finish its sentence before a hand-over, once it is speaking. */
-export const HANDOFF_WAIT_MS = 5000;
+/**
+ * Longest wait for the outgoing panelist to finish its sentence before a hand-over, once it is speaking. Long, so
+ * a long hand-off sentence is never cut: the new voice is joined meanwhile, so the gap after it stays short.
+ */
+export const HANDOFF_WAIT_MS = 15_000;
 /**
  * Longest wait for a panelist who is thinking (or was just asked for its opening line) to start speaking before a
  * hand-over goes on without its sentence.
