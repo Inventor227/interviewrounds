@@ -330,8 +330,8 @@ export class RoundController {
   private micHeld = false;
   /** New voices were made during this pause and have not been asked to speak yet. */
   private rebuilt = false;
-  /** Counts the voice sets of this round: 0 for the first, one more after every reconnect. */
-  private voiceEpoch = 0;
+  /** Each voice transport's number in this round (`wire`): a reply is one voice's, whatever its segment id. */
+  private readonly voiceNo = new WeakMap<VoiceTransport, number>();
   private degraded = false;
   /** The user came back into view during this pause: the card says "Welcome back". */
   private cameBack = false;
@@ -931,9 +931,8 @@ export class RoundController {
     // Ended or closed while the old voices stopped: nothing new is opened.
     if (this.disposed || this.st !== 'paused') return;
     this.modes.clear();
-    // The new voices number their replies from the start again: nothing of the old ones may be
-    // mistaken for them (a reply is reported as played once per voice and segment).
-    this.voiceEpoch++;
+    // The new voices number their replies from the start again: their keys carry the voice's own number, so
+    // nothing of the old ones is mistaken for them (a reply is reported as played once per voice and segment).
     this.spokenSent.clear();
     this.spokenPending = null;
     this.lastAgentSegment = null;
@@ -1305,6 +1304,7 @@ export class RoundController {
 
   private wire(t: VoiceTransport): VoiceTransport {
     const gen = ++this.transportSeq;
+    this.voiceNo.set(t, gen);
     t.on('mode', (m) => this.onMode(t, m));
     t.on('userTranscript', (e) => this.onUser(t, gen, e));
     t.on('agentText', (e) => this.onAgentText(t, e));
@@ -1597,11 +1597,11 @@ export class RoundController {
     if (t === this.floorT()) this.agentSaid = e.text;
     const split = this.latency.agentText(Date.now(), e.segmentId);
     if (split) this.events.emit('latency', split);
-    this.noteSpoken(t.panelistId, e);
+    this.noteSpoken(t, e);
     this.events.emit('transcript', {
       panelistId: t.panelistId,
       role: 'agent',
-      segmentId: this.agentKey(t.panelistId, e.segmentId),
+      segmentId: this.agentKey(t, e.segmentId),
       text: e.text,
       final: false,
     });
@@ -1620,17 +1620,22 @@ export class RoundController {
    * `voice.spoken`: the first words of a reply as they played, once per reply. Sent as soon as
    * enough has played, so the server's actions for the reply land while it is being said.
    */
-  private noteSpoken(panelistId: string, e: AgentText): void {
-    const key = this.agentKey(panelistId, e.segmentId);
+  private noteSpoken(t: VoiceTransport, e: AgentText): void {
+    const key = this.agentKey(t, e.segmentId);
     if (this.spokenSent.has(key)) return;
     if (this.spokenPending && this.spokenPending.key !== key) this.flushSpoken();
-    this.spokenPending = { key, panelistId, text: e.text };
+    this.spokenPending = { key, panelistId: t.panelistId, text: e.text };
     if (e.text.trim().length >= SPOKEN_MIN_CHARS) this.flushSpoken();
   }
 
-  /** One reply of one voice: panelist, the voice set it belongs to (new after a reconnect), segment. */
-  private agentKey(panelistId: string, segmentId: string): string {
-    return this.voiceEpoch ? `${panelistId}.r${this.voiceEpoch}.${segmentId}` : `${panelistId}.${segmentId}`;
+  /**
+   * One reply of one voice: panelist, the voice it came from, segment. A panelist who gets the floor back has a
+   * new voice whose segment ids start again (the typed-turn voice counts from 1), and a reconnect makes new voices
+   * too: their replies must never be taken for earlier ones (the transcript would overwrite those lines, and
+   * `voice.spoken` would never go out for them, so the server would not know they played).
+   */
+  private agentKey(t: VoiceTransport, segmentId: string): string {
+    return `${t.panelistId}.${this.voiceNo.get(t) ?? 0}.${segmentId}`;
   }
 
   private flushSpoken(): void {

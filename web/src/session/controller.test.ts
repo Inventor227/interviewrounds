@@ -916,6 +916,38 @@ describe('RoundController hand-overs', () => {
     expect(t2.stopped).toBe(true);
   });
 
+  it('a_panelist_back_on_the_floor_has_its_replies_reported_even_when_its_new_voice_reuses_segment_ids', async () => {
+    // p1 -> p2 -> p1: p1's new voice numbers its replies from the start again (the typed-turn voice does).
+    const h = harness();
+    const lines: string[] = [];
+    h.ctl.on('transcript', (l) => l.role === 'agent' && lines.push(l.segmentId));
+    const t1 = await live(h); // its greeting was segment a0
+    t1.mode('speaking');
+    t1.agent('a1', 'Tell me about the market. Tom will take the churn question.');
+    t1.mode('listening');
+    h.socket.serverSend('panel.hand_over', { from: 'p1', to: 'p2', opening_line: 'Hi' });
+    await vi.advanceTimersByTimeAsync(0);
+    const p2 = h.transports[1]!;
+    p2.mode('speaking');
+    p2.agent('a1', 'Churn first: how many clinics left last quarter? Rhea, back to you.');
+    p2.mode('listening');
+    h.socket.serverSend('panel.hand_over', { from: 'p2', to: 'p1', opening_line: 'Thanks' });
+    await vi.advanceTimersByTimeAsync(OLD_VOICE_TAIL_MS);
+    const back = h.transports[2]!;
+    expect(back.panelistId).toBe('p1');
+    back.mode('speaking');
+    back.agent('a1', "Thanks, Tom. To close: it's not now for the partner meeting.");
+    back.mode('listening');
+    // Every reply is reported as played and is its own transcript line, the return to the floor included.
+    expect(h.socket.of('voice.spoken').map((v) => v.text_prefix.slice(0, 20))).toEqual([
+      'Tell me about the ma',
+      'Churn first: how man',
+      "Thanks, Tom. To clos",
+    ]);
+    expect(new Set(lines).size).toBe(lines.length);
+    expect(lines.filter((l) => l.startsWith('p1.') && l.endsWith('.a1'))).toHaveLength(2);
+  });
+
   it('a_long_hand_off_sentence_is_never_cut', async () => {
     // Rhea's hand-off to Tom ran past 5 s with a real voice and was cut mid-word.
     const h = harness();

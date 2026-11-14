@@ -216,7 +216,7 @@ if (kit === 'coding') {
 // the closing line (said after End, the one most likely to name a tool or the candidate) is checked too.
 const TOOLS = /\b(show_question|next_phase|point_at|give_hint|hand_over|end_round)\b/i;
 const third = PM ? /\bthe candidate\b/i : /\bthe (user|candidate)\b/i;
-const agentLines = (rec) => rec.lines.filter((l) => l.role === 'agent').map((l) => ({ who: l.who, text: l.text }));
+const agentLines = (rec) => rec.lines.filter((l) => l.role === 'agent').map((l) => ({ key: l.segmentId, who: l.who, text: l.text }));
 const checkLines = (lines) => {
   const found = {
     tool_names: lines.filter((l) => TOOLS.test(l.text)),
@@ -232,6 +232,9 @@ for (const [k, v] of Object.entries(checkLines(lines))) if (v.length) problem(`s
 // End, the quick card, the summary.
 await look(S, -20);
 const endAt = Date.now();
+// The round may have closed itself first (its own clock, or the interviewer's end): then its goodbye was already
+// said before End, and End only finishes what is under way.
+const stateAtEnd = await page(() => globalThis.__round.controller.state);
 await page(() => globalThis.__round.controller.end());
 await waitState(['scoring', 'summary'], 60000);
 await shot('10-scoring');
@@ -247,15 +250,20 @@ await shot('12-summary');
 const final = await page(() => ({ timings: globalThis.__round.timings(), rec: globalThis.__rec, session: globalThis.__round.session.session_id, stats: globalThis.__xrApp.stats() }));
 final.board = kit ? await board() : null;
 
-// The same checks over every line of the round, the goodbye included.
+// The same checks over every line of the round, the goodbye included. Lines are told apart by their key
+// (panelist, voice, segment), so a line first heard after End is one whose key was not there before.
 const everyLine = agentLines(final.rec);
-result.checks.closing_lines = everyLine.slice(lines.length);
-const before = new Set(lines.map((l) => l.text));
+const beforeKeys = new Set(lines.map((l) => l.key));
+result.checks.closing_lines = everyLine.filter((l) => !beforeKeys.has(l.key));
+result.checks.state_at_end = stateAtEnd;
 for (const [k, v] of Object.entries(checkLines(everyLine))) {
-  const late = v.filter((l) => !before.has(l.text));
+  const late = v.filter((l) => !beforeKeys.has(l.key));
   if (late.length) problem(`spoken ${k} after End`, late);
 }
-if (!result.checks.closing_lines.length) result.warnings.push('no closing line was heard after End');
+if (!result.checks.closing_lines.length) {
+  if (stateAtEnd === 'live') result.warnings.push('no closing line was heard after End');
+  else result.warnings.push(`the round had closed itself (${stateAtEnd}) before End: its goodbye came before it`);
+}
 
 // The report page, and its JSON for the schema check.
 await page(() => globalThis.__xrApp.ui.emit('report'));
