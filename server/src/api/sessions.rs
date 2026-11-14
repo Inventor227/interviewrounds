@@ -76,6 +76,15 @@ pub struct CreateSessionReq {
 pub struct JoinReq {
     #[serde(default)]
     pub opening_line: Option<String>,
+    /// A hand-over joined ahead of time: the new voice connects while the outgoing one finishes its sentence.
+    /// Nothing is said or recorded now and the floor stays as the hand-over left it; the line prepared for this
+    /// panelist is said, once, on its `[event: handover]`. `opening_line` is ignored.
+    #[serde(default)]
+    pub deferred: bool,
+    /// With `deferred`: the panelist whose voice is still speaking. Its open voice is not ended here (the browser
+    /// ends it once the new voice takes over; the next join or the round's end ends it otherwise).
+    #[serde(default)]
+    pub from: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1009,9 +1018,11 @@ async fn resume_inner(app: &AppState, identity: &Identity, id: &str) -> AppResul
     Ok(Json(res).into_response())
 }
 
-/// `POST /api/sessions/{id}/panelists/{pid}/join {opening_line?}` (swap mode hand-over). The opening line goes
-/// into the shared history as the new panelist's turn (Fish speaks it as `first_message`, so our endpoint never
-/// sees it), and the floor moves. Joining a panelist that already has a live voice returns that voice.
+/// `POST /api/sessions/{id}/panelists/{pid}/join {opening_line?, deferred?, from?}` (swap mode hand-over). The
+/// opening line goes into the shared history as the new panelist's turn (Fish speaks it as `first_message`, so our
+/// endpoint never sees it), and the floor moves. With `deferred` the new voice joins silent instead: no first
+/// message, nothing recorded, and the voice of `from` keeps speaking; its line comes on `[event: handover]`.
+/// Joining a panelist that already has a live voice returns that voice.
 pub async fn join(
     State(app): State<AppState>,
     Extension(identity): Extension<Identity>,
@@ -1038,11 +1049,15 @@ pub async fn join(
                 "The round is paused; resume it first.".into(),
             ));
         }
-        let line = req
-            .opening_line
-            .map(|l| l.trim().to_string())
-            .filter(|l| !l.is_empty())
-            .or_else(|| st.pending_handover.get(&pid).cloned());
+        // Joined ahead of time, the voice says nothing yet: its line is said through the endpoint later.
+        let line = if req.deferred {
+            None
+        } else {
+            req.opening_line
+                .map(|l| l.trim().to_string())
+                .filter(|l| !l.is_empty())
+                .or_else(|| st.pending_handover.get(&pid).cloned())
+        };
         let fake = st.settings.voice == VoiceKind::Fake;
         let spec = if fake {
             None
@@ -1077,10 +1092,13 @@ pub async fn join(
         None => json!({"transport": "fake"}),
         Some(spec) => {
             // One voice at a time: every other open Fish session ends (including a stale one of this
-            // panelist), once Fish confirms; settlement ends whatever is left.
+            // panelist), once Fish confirms; settlement ends whatever is left. Joined ahead of time, the outgoing
+            // panelist's voice is still finishing its sentence: the browser ends it once the new one speaks.
+            let keep = req.deferred.then_some(req.from.as_deref()).flatten();
             let stale: Vec<String> = entries
                 .iter()
                 .filter(|e| e.ended_at.is_none())
+                .filter(|e| keep.is_none_or(|k| e.panelist_id != k || k == pid))
                 .map(|e| e.fish_session_id.clone())
                 .collect();
             hub.voices.lock().unwrap_or_else(|e| e.into_inner()).clear();
@@ -1117,6 +1135,8 @@ pub async fn join(
                 now,
             );
         }
+        // Ahead of time the floor stays as the hand-over left it; the line's `[event: handover]` confirms it.
+        None if req.deferred => {}
         None => st.floor = pid.clone(),
     }
     persist::save_live(

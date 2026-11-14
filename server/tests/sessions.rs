@@ -1058,6 +1058,144 @@ async fn join_twice_returns_the_same_voice() {
 }
 
 #[tokio::test]
+async fn a_deferred_swap_join_is_silent_and_its_handover_marker_records_the_line_once() {
+    let app = live::test_app(Options::default()).await;
+    let cookie = app.guest().await;
+    let res = app.create(&cookie, full_req("fish")).await;
+    let id = res.body["session_id"].as_str().unwrap().to_string();
+    app.set_status(&id, ir_server::orchestrator::SessionStatus::Live)
+        .await;
+    // The director hands over: the floor moves and the line is prepared (the browser hears of it while p1 still
+    // says its hand-off sentence).
+    let line = "Hi, I'm Ana. Let's talk about what fails first.";
+    let handle = app.state.registry.get(&id).unwrap();
+    {
+        let mut st = handle.lock().await;
+        let events = st.apply_tool_calls(&[ir_server::orchestrator::tools::ToolCall {
+            id: "toolu_h".into(),
+            name: "hand_over".into(),
+            input: json!({"to": "p2", "line": line}),
+            panelist_id: "p1".into(),
+        }]);
+        assert_eq!(events.len(), 1);
+    }
+    let said = |st: &ir_server::orchestrator::SessionState| {
+        st.history.iter().filter(|m| m.text() == line).count()
+    };
+
+    // Joined ahead of time, twice (a retry after a failed connect): one silent voice, nothing said or recorded.
+    let path = format!("/api/sessions/{id}/panelists/p2/join");
+    let body = json!({"deferred": true, "from": "p1", "opening_line": "Not this line."});
+    let first = app
+        .call(Method::POST, &path, Some(&cookie), Some(body.clone()))
+        .await;
+    assert_eq!(first.status, StatusCode::OK, "{}", first.body);
+    let second = app
+        .call(Method::POST, &path, Some(&cookie), Some(body))
+        .await;
+    assert_eq!(first.body, second.body, "the same voice again");
+    let minted = app.fish_calls("POST", "/v1/agent/sessions").await;
+    assert_eq!(minted.len(), 2, "floor + one for p2");
+    assert!(
+        minted[1]["overrides"]
+            .get("first_message")
+            .is_none_or(Value::is_null),
+        "the new voice joins silent: {}",
+        minted[1]
+    );
+    assert_eq!(minted[1]["llm_extra_body"]["panelist_id"], "p2");
+    {
+        let st = handle.lock().await;
+        assert_eq!(said(&st), 0, "nothing is recorded at the join");
+        assert_eq!(st.floor, "p2");
+        assert_eq!(
+            st.pending_handover.get("p2").map(String::as_str),
+            Some(line)
+        );
+    }
+    // p1 is still finishing its sentence: its voice is not ended by the join.
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert!(
+        !app.fish_paths("POST")
+            .await
+            .iter()
+            .any(|p| p.ends_with("fish-1/end")),
+        "the outgoing voice keeps speaking"
+    );
+
+    // Once p1 is quiet the browser sends p2 the hand-over marker: the prepared line, word for word, no model call,
+    // recorded once; a second marker does not say it again.
+    let turn = |text: &str| {
+        let body = json!({"model": "x", "stream": true,
+            "messages": [{"role": "user", "content": text}],
+            "fishaudio_extra_body": {"session_id": id, "panelist_id": "p2"}});
+        axum::http::Request::post("/v1/chat/completions")
+            .header(header::AUTHORIZATION, "Bearer test-llm-secret")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(axum::body::Body::from(body.to_string()))
+            .unwrap()
+    };
+    use tower::ServiceExt;
+    let model_calls = app.llm.requests.lock().unwrap().len();
+    let res = app
+        .router
+        .clone()
+        .oneshot(turn("[event: handover]"))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let text = String::from_utf8(common::body_bytes(res).await).unwrap();
+    assert!(
+        text.contains("Let's talk about what fails first."),
+        "{text}"
+    );
+    assert_eq!(app.llm.requests.lock().unwrap().len(), model_calls);
+    {
+        let st = handle.lock().await;
+        assert_eq!(said(&st), 1, "the line is in the shared history once");
+        assert!(st.pending_handover.get("p2").is_none());
+        assert_eq!(st.floor, "p2");
+        assert_eq!(st.turns.last().unwrap().speaker, "p2");
+    }
+    let res = app
+        .router
+        .clone()
+        .oneshot(turn("[event: handover]"))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let _ = common::body_bytes(res).await;
+    let st = handle.lock().await;
+    assert_eq!(said(&st), 1, "never twice");
+    drop(st);
+
+    // The next hand-over's join ends the earlier voice that was kept.
+    let res = app
+        .call(
+            Method::POST,
+            &format!("/api/sessions/{id}/panelists/p1/join"),
+            Some(&cookie),
+            Some(json!({"deferred": true, "from": "p2"})),
+        )
+        .await;
+    assert_eq!(res.status, StatusCode::OK, "{}", res.body);
+    live::eventually("p1's first voice ended", Duration::from_secs(3), || async {
+        app.fish_paths("POST")
+            .await
+            .iter()
+            .any(|p| p.ends_with("fish-1/end"))
+    })
+    .await;
+    assert!(
+        !app.fish_paths("POST")
+            .await
+            .iter()
+            .any(|p| p.ends_with("fish-2/end")),
+        "p2's voice is the outgoing one now"
+    );
+}
+
+#[tokio::test]
 async fn concurrent_creates_take_the_last_slot_once() {
     let app = live::test_app(Options {
         env: &[("USAGE_PHASE", "judging")],
