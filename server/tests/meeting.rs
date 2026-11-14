@@ -2645,6 +2645,46 @@ fn real_transcripts_of_an_address_count_and_near_names_in_a_mention_do_not() {
     }
 }
 
+/// Speech recognition misspells names ("Ria" for Rhea): nobody corrects how a name was said. The rule is in every
+/// attendee's stable prompt, and in the turn note when the address rule matched a name by sound.
+#[test]
+fn attendees_never_correct_how_a_name_was_said() {
+    let catalog = catalog();
+    let (s, plan) = pitch_plan(&catalog);
+    let st = meeting_session("m-names", &catalog, MeetingState::from_parts(&s, &plan));
+    for p in &st.panel {
+        let system: String = p.system.iter().map(|b| b.text.as_str()).collect();
+        assert!(
+            system.contains(live::MISHEARD_NAME_RULE),
+            "{}: {system}",
+            p.panelist_id
+        );
+    }
+    let m = st.meeting.as_ref().unwrap();
+    let rhea = m.attendee("Rhea").unwrap().panelist_id.clone();
+    let tom = m.attendee("Tom").unwrap().panelist_id.clone();
+    let note_for = |who: &str, said: &str| {
+        turn_note(&st, who, &UserInput::Speech(said.into()), Instant::now()).0
+    };
+    // Said to Tom (he hands over) and to Rhea herself (nobody is handed the floor): both are told.
+    let misheard = "Ria back to you for a moment. What would you need to see?";
+    for who in [&tom, &rhea] {
+        let n = note_for(who, misheard);
+        assert!(
+            n.contains("\"Ria\" is Rhea") && n.contains(live::MISHEARD_NAME_RULE),
+            "{n}"
+        );
+    }
+    // The name heard right, or a near name in a mention: no such note.
+    for said in [
+        "Rhea, back to you for a moment. What would you need to see?",
+        "Do you agree with Ria?",
+    ] {
+        let n = note_for(&tom, said);
+        assert!(!n.contains("misspelled"), "{said}: {n}");
+    }
+}
+
 fn meeting_with_events(
     id: &str,
 ) -> (

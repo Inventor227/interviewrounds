@@ -212,6 +212,24 @@ pub fn turn_note(
     {
         notes.push(note);
     }
+    // Meetings: a name the speech recogniser misspelled ("Ria" for Rhea) is never corrected out loud, in the reply
+    // to those words or in the turn of the attendee they handed the floor to.
+    if let Some(m) = state.meeting.as_ref() {
+        let last_said = state
+            .turns
+            .iter()
+            .rev()
+            .find(|t| t.speaker == "candidate")
+            .map(|t| t.text.as_str());
+        let words = input.speech().or_else(|| {
+            matches!(input.event(), Some(EventKind::Handover))
+                .then_some(last_said)
+                .flatten()
+        });
+        if let Some(note) = words.and_then(|w| crate::meeting::live::misheard_name_note(m, w)) {
+            notes.push(note);
+        }
+    }
 
     let board_text = if !state.board_text.trim().is_empty() {
         state.board_text.trim().to_string()

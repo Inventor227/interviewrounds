@@ -244,6 +244,8 @@ fn quoted_list(items: &[String]) -> String {
 
 /// One word of what the candidate said, with the nearest non-space characters around it.
 struct Word {
+    /// As written, without a trailing "'s".
+    text: String,
     /// Lower case, without a trailing "'s".
     lower: String,
     capital: bool,
@@ -271,6 +273,7 @@ fn words_of(text: &str) -> Vec<Word> {
             continue;
         }
         out.push(Word {
+            text: raw.trim_end_matches("'s").to_string(),
             lower: raw.to_lowercase().trim_end_matches("'s").to_string(),
             capital: raw.chars().next().is_some_and(char::is_uppercase),
             before: chars[..start]
@@ -448,20 +451,13 @@ fn asked(w: &[Word], i: usize) -> bool {
     i >= 2 && w[i - 1].lower == "ask" && matches!(w[i - 2].lower.as_str(), "me" | "to" | "i" | "us")
 }
 
-/// The AI attendee the candidate's words were addressed to by name, other than `panelist_id` (the attendee
-/// replying), by the forms in [`is_address`]. A name in an ordinary sentence ("Do you agree with Tom?", "Tom mentioned
-/// churn", "I'll send the deck to Tom") is a mention, not an address. A word that is no attendee's first name but
-/// sounds like exactly one of them ([`sounds_like`], "Ria" for Rhea) stands for that attendee. When the attendee
-/// replying is addressed too, or two others are, nobody is.
-pub fn addressed_attendee<'a>(
+/// Every attendee the candidate's words address by name, by the forms in [`is_address`], in order and once each,
+/// with the word as written when it only sounds like their name ("Ria" for Rhea).
+fn addresses<'a>(
     meeting: &'a MeetingState,
-    panelist_id: &str,
     words: &str,
-) -> Option<&'a AttendeeState> {
+) -> Vec<(&'a AttendeeState, Option<String>)> {
     let w = words_of(words);
-    if w.is_empty() {
-        return None;
-    }
     let punctuated = words
         .chars()
         .any(|c| matches!(c, ',' | '.' | '?' | '!' | ';' | ':'));
@@ -474,7 +470,7 @@ pub fn addressed_attendee<'a>(
             Some((a, first))
         })
         .collect();
-    let mut found: Vec<&AttendeeState> = Vec::new();
+    let mut found: Vec<(&AttendeeState, Option<String>)> = Vec::new();
     for (i, word) in w.iter().enumerate() {
         let exact: Vec<&AttendeeState> = named
             .iter()
@@ -493,16 +489,48 @@ pub fn addressed_attendee<'a>(
         };
         if let [one] = who.as_slice()
             && is_address(&w, i, punctuated, heard)
-            && !found.iter().any(|f| std::ptr::eq(*f, *one))
+            && !found.iter().any(|(f, _)| std::ptr::eq(*f, *one))
         {
-            found.push(*one);
+            found.push((*one, heard.then(|| word.text.clone())));
         }
     }
-    match found.as_slice() {
-        [one] if one.panelist_id != panelist_id => Some(one),
+    found
+}
+
+/// The AI attendee the candidate's words were addressed to by name, other than `panelist_id` (the attendee
+/// replying), by the forms in [`is_address`]. A name in an ordinary sentence ("Do you agree with Tom?", "Tom mentioned
+/// churn", "I'll send the deck to Tom") is a mention, not an address. A word that is no attendee's first name but
+/// sounds like exactly one of them ([`sounds_like`], "Ria" for Rhea) stands for that attendee. When the attendee
+/// replying is addressed too, or two others are, nobody is.
+pub fn addressed_attendee<'a>(
+    meeting: &'a MeetingState,
+    panelist_id: &str,
+    words: &str,
+) -> Option<&'a AttendeeState> {
+    match addresses(meeting, words).as_slice() {
+        [(one, _)] if one.panelist_id != panelist_id => Some(*one),
         _ => None,
     }
 }
+
+/// When the candidate addressed someone by a word that only sounds like their name (speech recognition wrote
+/// "Ria" for Rhea), the note that says so: nobody corrects, spells or comments on how a name was said.
+pub fn misheard_name_note(meeting: &MeetingState, words: &str) -> Option<String> {
+    let heard: Vec<String> = addresses(meeting, words)
+        .into_iter()
+        .filter_map(|(a, as_written)| Some(format!("\"{}\" is {}", as_written?, a.name)))
+        .collect();
+    (!heard.is_empty()).then(|| {
+        format!(
+            "Speech recognition misspelled a name in the candidate's words: {}. They said it right. {MISHEARD_NAME_RULE}",
+            heard.join(", ")
+        )
+    })
+}
+
+/// The rule for names the speech recogniser misspells, in the stable prompt and in the turn note above.
+pub const MISHEARD_NAME_RULE: &str =
+    "Never correct, spell or comment on how anyone said a name; just answer.";
 
 /// The note for the attendee replying when the candidate's words were for another attendee: give that attendee the
 /// floor at once, with their answer. The meeting's own "who speaks next" note is left out of such a turn.
