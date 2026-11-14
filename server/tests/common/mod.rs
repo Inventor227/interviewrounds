@@ -1,5 +1,5 @@
-//! Shared helpers for integration tests. Tests that touch Postgres need `DATABASE_URL`
-//! (run them through `plan/ops-tools/remote.sh <worktree> rust --pg -- cargo test`).
+//! Shared helpers for integration tests. Tests that touch Postgres need `DATABASE_URL` pointing at a scratch
+//! database (`DATABASE_URL=postgres://... cargo test`; the remote test runner sets it up with its Postgres option).
 #![allow(dead_code)]
 
 pub mod live;
@@ -17,7 +17,7 @@ use tower::ServiceExt;
 
 pub fn database_url() -> String {
     std::env::var("DATABASE_URL")
-        .expect("DATABASE_URL must be set for database tests (use remote.sh with --pg)")
+        .expect("DATABASE_URL must be set for database tests (a scratch Postgres database)")
 }
 
 pub fn test_config(database_url: &str, public_dir: &Path) -> Config {
