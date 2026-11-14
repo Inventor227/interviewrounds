@@ -60,6 +60,8 @@ struct ScriptedLlm {
     /// The card's model is overloaded (its fallback answers).
     card_model_down: bool,
     requests: Mutex<Vec<MessagesRequest>>,
+    /// When each main scorecard call was made.
+    main_at: Mutex<Vec<Instant>>,
 }
 
 fn is_card(req: &MessagesRequest) -> bool {
@@ -200,6 +202,7 @@ impl LlmApi for ScriptedLlm {
                 .map(stream_of)
                 .ok_or_else(|| ClaudeError::BadRequest("no scripted side reply".into()));
         }
+        self.main_at.lock().unwrap().push(Instant::now());
         if self.panic_main {
             panic!("scripted crash");
         }
@@ -2681,6 +2684,8 @@ async fn an_outage_backs_off_once_then_ends_in_try_again_not_a_hang() {
     let events = Arc::new(RecordedEvents::default());
     let mut d = deps(&db, llm.clone(), &data).with_events(events.clone());
     d.retry_backoff = Duration::from_millis(600);
+    // No wait for a board image: the only time between the attempts is the backoff itself.
+    d.board_wait = Duration::ZERO;
     let started = Instant::now();
     let res = tokio::time::timeout(Duration::from_secs(20), scoring::score_session(&d, id))
         .await
@@ -2689,11 +2694,25 @@ async fn an_outage_backs_off_once_then_ends_in_try_again_not_a_hang() {
     assert!(res.is_err());
     // Two attempts inside the budget, the second on the fallback after the backoff; no wait after the last one.
     assert_eq!(llm.main_models(), ["claude-opus-5-5", "claude-sonnet-5-5"]);
-    assert!(took >= Duration::from_millis(600), "{took:?}");
+    let at = llm.main_at.lock().unwrap().clone();
+    assert_eq!(at.len(), 2);
+    let gap = at[1] - at[0];
+    assert!(gap >= Duration::from_millis(600), "the second call came {gap:?} after the first");
+    assert!(gap < Duration::from_millis(600) + Duration::from_secs(2), "{gap:?}");
     assert!(
         took < Duration::from_millis(600) + Duration::from_secs(5),
         "{took:?}"
     );
+    // Without the backoff the two calls come straight one after the other (the gap above is the backoff's).
+    let id_fast = insert_session(&db, &long_design_input()).await;
+    let fast = ScriptedLlm::new(vec![Err(ClaudeError::Overloaded), Err(ClaudeError::Overloaded)]);
+    let mut d0 = deps(&db, fast.clone(), &data);
+    d0.retry_backoff = Duration::ZERO;
+    d0.board_wait = Duration::ZERO;
+    assert!(scoring::score_session(&d0, id_fast).await.is_err());
+    let at = fast.main_at.lock().unwrap().clone();
+    assert_eq!(at.len(), 2);
+    assert!(at[1] - at[0] < Duration::from_millis(400), "{:?}", at[1] - at[0]);
     assert_eq!(scoring::attempts_used(&db, id).await.unwrap(), 2);
     // The clear end state: failed, and the socket is told so (the page offers Try again).
     assert_eq!(status(&db, id).await, "failed");
