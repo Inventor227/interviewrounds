@@ -1685,6 +1685,47 @@ fn post(path: String, ct: &'static str, body: Vec<u8>) -> Request<Body> {
         .unwrap()
 }
 
+#[test]
+fn scrub_takes_out_app_notes_and_board_ids_and_leaves_other_text_alone() {
+    use report::scrub_str;
+    for same in [
+        "The event: a launch,  with two spaces .",
+        "Use a[i] and board[x1] in the loop; x1_ is fine, so is box12_3.",
+        "Café déjà vu: nothing to cut.",
+        "",
+    ] {
+        assert_eq!(scrub_str(same), same);
+    }
+    assert_eq!(
+        scrub_str("[Board update r3, do not read aloud] A hold sweeper"),
+        "A hold sweeper"
+    );
+    assert_eq!(
+        scrub_str("You designed x3_1 around double selling (do not read aloud)."),
+        "You designed around double selling."
+    );
+    assert_eq!(
+        scrub_str("[ App note: the candidate is quiet ]Ask again."),
+        "Ask again."
+    );
+    assert_eq!(
+        scrub_str("Boxes x12_3, x2_1 and the queue."),
+        "Boxes, and the queue."
+    );
+    assert_eq!(
+        scrub_str("[event: handover] Hi, I am Priya."),
+        "Hi, I am Priya."
+    );
+    // A report's ids, links and times are never touched.
+    let mut r = json!({"id": "x2_1", "evidence_ids": ["x2_1"], "share": {"public_slug": "ab-x12_3-c"},
+        "note": "On x2_1 [App note, x]."});
+    report::scrub_app_text(&mut r);
+    assert_eq!(
+        r,
+        json!({"id": "x2_1", "evidence_ids": ["x2_1"], "share": {"public_slug": "ab-x12_3-c"}, "note": "On."})
+    );
+}
+
 /// Fails when `text` carries anything the app writes for the interviewer only: its bracketed markers, the "do not
 /// read aloud" note, or a board item id (`x2_1` from the Scribe, or one of `ids`).
 fn assert_no_app_text(text: &str, ids: &[&str], what: &str) {

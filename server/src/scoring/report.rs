@@ -2230,10 +2230,12 @@ pub fn scrub_str(s: &str) -> String {
     }
     let chars: Vec<char> = s.chars().collect();
     let mut out = String::with_capacity(s.len());
+    // Text with none of them cut (a plain "event:" in prose) is given back exactly as it was.
+    let mut removed = false;
     let mut i = 0;
     while i < chars.len() {
         let c = chars[i];
-        if c == '[' {
+        if c == '[' && has_marker {
             let ahead: String = chars[i + 1..]
                 .iter()
                 .skip_while(|c| c.is_whitespace())
@@ -2252,10 +2254,14 @@ pub fn scrub_str(s: &str) -> String {
                 } else {
                     end
                 };
+                removed = true;
                 continue;
             }
         }
-        if c == 'x' && (i == 0 || !(chars[i - 1].is_ascii_alphanumeric() || chars[i - 1] == '_')) {
+        if c == 'x'
+            && has_id
+            && (i == 0 || !(chars[i - 1].is_ascii_alphanumeric() || chars[i - 1] == '_'))
+        {
             let len = chars[i..]
                 .iter()
                 .take_while(|c| c.is_ascii_alphanumeric() || **c == '_')
@@ -2263,19 +2269,26 @@ pub fn scrub_str(s: &str) -> String {
             let token: String = chars[i..i + len].iter().collect();
             if is_scribe_id(&token) {
                 i += len;
+                removed = true;
                 continue;
             }
         }
-        let rest: String = chars[i..i + NOT_ALOUD.len().min(chars.len() - i)]
-            .iter()
-            .flat_map(|c| c.to_lowercase())
-            .collect();
-        if rest == NOT_ALOUD {
-            i += NOT_ALOUD.len();
-            continue;
+        if has_note && (c == 'd' || c == 'D') {
+            let rest: String = chars[i..i + NOT_ALOUD.len().min(chars.len() - i)]
+                .iter()
+                .flat_map(|c| c.to_lowercase())
+                .collect();
+            if rest == NOT_ALOUD {
+                i += NOT_ALOUD.len();
+                removed = true;
+                continue;
+            }
         }
         out.push(c);
         i += 1;
+    }
+    if !removed {
+        return s.to_string();
     }
     // What the cuts leave behind: doubled spaces, a space before punctuation, empty brackets.
     let mut tidy = out
@@ -2284,11 +2297,12 @@ pub fn scrub_str(s: &str) -> String {
         .collect::<Vec<_>>()
         .join(" ");
     for (from, to) in [
+        ("()", ""),
+        ("( )", ""),
         (" ,", ","),
         (" .", "."),
         (" ;", ";"),
         (" :", ":"),
-        ("()", ""),
         (",,", ","),
     ] {
         while tidy.contains(from) {
