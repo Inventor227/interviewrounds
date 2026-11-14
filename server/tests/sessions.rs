@@ -1281,6 +1281,75 @@ async fn the_server_ends_the_outgoing_voice_when_the_browser_has_not_after_the_s
 }
 
 #[tokio::test]
+async fn the_server_also_ends_the_outgoing_voice_after_a_hand_over_with_no_prepared_line() {
+    let app = live::test_app(Options {
+        timing: ir_server::ws::SessionTiming {
+            outgoing_voice_grace: Duration::from_millis(300),
+            ..Default::default()
+        },
+        ..Options::default()
+    })
+    .await;
+    let cookie = app.guest().await;
+    let res = app.create(&cookie, full_req("fish")).await;
+    let id = res.body["session_id"].as_str().unwrap().to_string();
+    app.set_status(&id, ir_server::orchestrator::SessionStatus::Live)
+        .await;
+    // A hand-over with no line (the app's own, for words addressed to p2): the marker gets a model turn.
+    app.state
+        .registry
+        .get(&id)
+        .unwrap()
+        .lock()
+        .await
+        .apply_tool_calls(&[ir_server::orchestrator::tools::ToolCall {
+            id: "toolu_h".into(),
+            name: "hand_over".into(),
+            input: json!({"to": "p2", "line": ""}),
+            panelist_id: "p1".into(),
+        }]);
+    let res = app
+        .call(
+            Method::POST,
+            &format!("/api/sessions/{id}/panelists/p2/join"),
+            Some(&cookie),
+            Some(json!({"deferred": true, "from": "p1"})),
+        )
+        .await;
+    assert_eq!(res.status, StatusCode::OK, "{}", res.body);
+    let body = json!({"model": "x", "stream": true,
+        "messages": [{"role": "user", "content": "[event: handover]"}],
+        "fishaudio_extra_body": {"session_id": id, "panelist_id": "p2"}});
+    let req = axum::http::Request::post("/v1/chat/completions")
+        .header(header::AUTHORIZATION, "Bearer test-llm-secret")
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(axum::body::Body::from(body.to_string()))
+        .unwrap();
+    use tower::ServiceExt;
+    let res = app.router.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let text = String::from_utf8(common::body_bytes(res).await).unwrap();
+    assert!(text.contains("Hello there."), "a model turn: {text}");
+    live::eventually(
+        "the outgoing voice ended by the server",
+        Duration::from_secs(3),
+        || async {
+            app.fish_paths("POST")
+                .await
+                .iter()
+                .any(|p| p.ends_with("fish-1/end"))
+        },
+    )
+    .await;
+    assert!(
+        !app.fish_paths("POST")
+            .await
+            .iter()
+            .any(|p| p.ends_with("fish-2/end"))
+    );
+}
+
+#[tokio::test]
 async fn the_server_never_ends_a_voice_made_after_the_speakers_own() {
     // A queued second hand-over: the next panelist's voice is joined while the first new panelist says its line,
     // and its entry is saved before the line's turn. The server ends only the voices older than the speaker's.

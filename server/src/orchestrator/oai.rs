@@ -824,6 +824,15 @@ fn turn_stream(
         guard.done = true;
         drop(guard);
         spawn_directors(&app, &session, &session_id, jobs);
+        // A hand-over without a prepared line, answered by the model: the browser has switched voices here too.
+        if matches!(input, UserInput::Event(EventKind::Handover)) && !silent_failure {
+            crate::persist::end_outgoing_voices_after(
+                &app,
+                &session_id,
+                &panelist,
+                app.timing.outgoing_voice_grace,
+            );
+        }
         if let Some(degraded) = degraded_change {
             crate::ws::degraded_changed(&app, &session_id, &session, degraded).await;
         }
