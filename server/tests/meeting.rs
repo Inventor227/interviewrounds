@@ -2586,6 +2586,65 @@ fn an_attendee_named_first_or_last_is_addressed_and_a_mention_is_not() {
     assert_eq!(to("What do you think, Will?").as_deref(), Some("Will"));
 }
 
+/// What the speech recogniser really wrote in a voice meeting: the comma after a name becomes a full stop, and a name
+/// can be misheard ("Ria" for Rhea) with no comma at all.
+#[test]
+fn real_transcripts_of_an_address_count_and_near_names_in_a_mention_do_not() {
+    let catalog = catalog();
+    let (s, plan) = pitch_plan(&catalog);
+    let m = MeetingState::from_parts(&s, &plan);
+    let rhea = m.attendee("Rhea").unwrap().panelist_id.clone();
+    let tom = m.attendee("Tom").unwrap().panelist_id.clone();
+    let to =
+        |from: &str, words: &str| live::addressed_attendee(&m, from, words).map(|a| a.name.clone());
+    // Said "Tom, you have been quiet so far." and "Rhea, back to you for a moment."
+    assert_eq!(
+        to(
+            &rhea,
+            "I would like to hear from both of you. Tom. You have been quiet so far. What is your biggest concern with this round?"
+        )
+        .as_deref(),
+        Some("Tom")
+    );
+    assert_eq!(
+        to(
+            &tom,
+            "Ria back to you for a moment. What would you need to see from us before a partner meeting next week?"
+        )
+        .as_deref(),
+        Some("Rhea")
+    );
+    // The same forms with the name heard right, and a near name in the other forms.
+    for (from, said, who) in [
+        (&rhea, "Tom. What would stop you from investing?", "Tom"),
+        (&rhea, "Tom over to you.", "Tom"),
+        (&tom, "Rhea back to you.", "Rhea"),
+        (&tom, "Ria, what would you need to see?", "Rhea"),
+        (&tom, "What would you need to see, Ria?", "Rhea"),
+        (&rhea, "Tim. You have been quiet so far.", "Tom"),
+    ] {
+        assert_eq!(to(from, said).as_deref(), Some(who), "{said}");
+    }
+    // Near names (Soundex matches) in a mention, a lower-case one, common words that sound like a name, and a name
+    // ending a sentence inside it: no hand-over.
+    for (from, said) in [
+        (&tom, "Do you agree with Ray?"),
+        (&tom, "Do you agree with Ria?"),
+        (&tom, "Ria mentioned the market size."),
+        (&tom, "I spoke to Ria. She agreed."),
+        (&tom, "ria, what would you need to see?"),
+        (&rhea, "Ten. We work with ten clinics in the pilot."),
+        (&rhea, "Then, what would you change?"),
+        (&rhea, "Time? We need six weeks."),
+        (&rhea, "I agree with Tom. Churn is low."),
+        (&rhea, "Thanks. Tom mentioned churn."),
+        // The replying attendee's own name, heard wrong, is not someone else.
+        (&rhea, "Ria back to you for a moment."),
+    ] {
+        assert_eq!(to(from, said).as_deref(), None, "{said}");
+    }
+}
+
 fn meeting_with_events(
     id: &str,
 ) -> (

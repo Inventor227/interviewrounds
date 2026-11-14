@@ -302,18 +302,104 @@ const NOT_OPENERS: &[&str] = &[
     "exactly",
 ];
 
+/// Common words that may open a sentence and sound like a name ("Ten." and "Then, ..." for Tom): never taken for
+/// a misheard name.
+const COMMON_WORDS: &[&str] = &[
+    "a", "i", "it", "its", "we", "you", "your", "our", "my", "me", "us", "they", "them", "then",
+    "than", "this", "that", "these", "those", "there", "here", "the", "to", "too", "two", "ten",
+    "one", "three", "four", "five", "six", "seven", "eight", "nine", "eleven", "twelve", "twenty",
+    "thirty", "forty", "fifty", "hundred", "thousand", "million", "time", "team", "today",
+    "tomorrow", "now", "next", "first", "second", "third", "last", "lastly", "finally", "also",
+    "again", "anyway", "actually", "honestly", "however", "overall", "still", "plus", "look",
+    "listen", "wait", "see", "really", "maybe", "perhaps", "sorry", "fine", "good", "nice", "cool",
+    "perfect", "correct", "true", "indeed", "why", "what", "who", "how", "when", "where", "which",
+    "oh", "ah", "um", "uh", "hmm", "wow", "hello", "bye", "all", "both", "none", "nothing",
+    "everyone", "anyone", "people", "guys", "folks",
+];
+
+/// American Soundex: the first letter and three digits for the consonant sounds after it ("Rhea" and "Ria" are
+/// both R000, "Tom" is T500).
+fn soundex(word: &str) -> Option<String> {
+    let letters: Vec<char> = word
+        .chars()
+        .filter(char::is_ascii_alphabetic)
+        .map(|c| c.to_ascii_lowercase())
+        .collect();
+    let first = *letters.first()?;
+    // 'h' and 'w' are skipped without separating two equal codes; vowels (and 'y') separate them.
+    let code = |c: char| match c {
+        'b' | 'f' | 'p' | 'v' => Some('1'),
+        'c' | 'g' | 'j' | 'k' | 'q' | 's' | 'x' | 'z' => Some('2'),
+        'd' | 't' => Some('3'),
+        'l' => Some('4'),
+        'm' | 'n' => Some('5'),
+        'r' => Some('6'),
+        'h' | 'w' => None,
+        _ => Some('0'),
+    };
+    let mut out = first.to_ascii_uppercase().to_string();
+    let mut last = code(first).unwrap_or('0');
+    for &c in &letters[1..] {
+        let Some(d) = code(c) else { continue };
+        if d != '0' && d != last {
+            out.push(d);
+            if out.len() == 4 {
+                break;
+            }
+        }
+        last = d;
+    }
+    while out.len() < 4 {
+        out.push('0');
+    }
+    Some(out)
+}
+
+fn edit_distance(a: &str, b: &str) -> usize {
+    let a: Vec<char> = a.chars().collect();
+    let b: Vec<char> = b.chars().collect();
+    let mut row: Vec<usize> = (0..=b.len()).collect();
+    for (i, ca) in a.iter().enumerate() {
+        let mut prev = row[0];
+        row[0] = i + 1;
+        for (j, cb) in b.iter().enumerate() {
+            let here = row[j + 1];
+            row[j + 1] = (prev + usize::from(ca != cb)).min(row[j] + 1).min(here + 1);
+            prev = here;
+        }
+    }
+    row[b.len()]
+}
+
+/// A word the speech recogniser may have written for `name` ("Ria" for Rhea): the same Soundex code, at most two
+/// letters changed, and not a common word or a word-like name.
+fn sounds_like(word: &str, name: &str) -> bool {
+    word.len() >= 2
+        && word != name
+        && !COMMON_WORDS.contains(&word)
+        && !ORDINARY_NAMES.contains(&word)
+        && !OPENERS.contains(&word)
+        && !NOT_OPENERS.contains(&word)
+        && edit_distance(word, name) <= 2
+        && soundex(word).is_some_and(|c| Some(c) == soundex(name))
+}
+
 /// Whether the word at `i` is the name used as a form of address, by the transcript's punctuation:
 /// - first in a sentence, followed by a comma or a question mark ("Tom, what ...?", "Tom?", "Tom, you have been
 ///   quiet. What ...?"), or the same after an opener ("So Tom, ...");
+/// - a sentence by itself, before a capitalised word: the speech recogniser writes the comma after a name as a full
+///   stop ("Tom. You have been quiet so far.");
+/// - first in a sentence before "back to you" or "over to you" ("Rhea back to you for a moment.");
 /// - a closing tag: the last word, with a comma before it ("..., what do you think, Tom?");
 /// - the last words "a question for Tom", "over to Tom", "back to Tom", or a request to ask them ("let me ask Tom",
 ///   "I'd like to ask Tom").
 ///
 /// Without any punctuation at all, only the name as the very first word and a request to ask them count. A name
-/// that is also an ordinary word counts only in the first two forms, written with a capital.
-fn is_address(w: &[Word], i: usize, punctuated: bool) -> bool {
+/// that is also an ordinary word, or a word that only sounds like the name (`heard`), counts only in the forms
+/// before the last one, written with a capital.
+fn is_address(w: &[Word], i: usize, punctuated: bool, heard: bool) -> bool {
     let me = &w[i];
-    let ordinary = ORDINARY_NAMES.contains(&me.lower.as_str());
+    let ordinary = ORDINARY_NAMES.contains(&me.lower.as_str()) || heard;
     if ordinary && !me.capital {
         return false;
     }
@@ -334,7 +420,15 @@ fn is_address(w: &[Word], i: usize, punctuated: bool) -> bool {
     if (sentence_start(i) || opener) && vocative {
         return true;
     }
-    if last && me.before == Some(',') {
+    let alone = sentence_start(i)
+        && matches!(me.after, Some('.' | '!'))
+        && w.get(i + 1).is_some_and(|n| n.capital);
+    let handing = sentence_start(i)
+        && w.len() > i + 3
+        && matches!(w[i + 1].lower.as_str(), "back" | "over")
+        && w[i + 2].lower == "to"
+        && w[i + 3].lower == "you";
+    if alone || handing || (last && me.before == Some(',')) {
         return true;
     }
     if ordinary {
@@ -356,8 +450,9 @@ fn asked(w: &[Word], i: usize) -> bool {
 
 /// The AI attendee the candidate's words were addressed to by name, other than `panelist_id` (the attendee
 /// replying), by the forms in [`is_address`]. A name in an ordinary sentence ("Do you agree with Tom?", "Tom mentioned
-/// churn", "I'll send the deck to Tom") is a mention, not an address. When the attendee replying is addressed too, or
-/// two others are, nobody is.
+/// churn", "I'll send the deck to Tom") is a mention, not an address. A word that is no attendee's first name but
+/// sounds like exactly one of them ([`sounds_like`], "Ria" for Rhea) stands for that attendee. When the attendee
+/// replying is addressed too, or two others are, nobody is.
 pub fn addressed_attendee<'a>(
     meeting: &'a MeetingState,
     panelist_id: &str,
@@ -370,22 +465,43 @@ pub fn addressed_attendee<'a>(
     let punctuated = words
         .chars()
         .any(|c| matches!(c, ',' | '.' | '?' | '!' | ';' | ':'));
-    let mut addressed = meeting.attendees.iter().filter(|a| {
-        let first = a
-            .name
-            .split_whitespace()
-            .next()
-            .unwrap_or_default()
-            .to_lowercase();
-        !a.panelist_id.is_empty()
-            && !first.is_empty()
-            && (0..w.len()).any(|i| w[i].lower == first && is_address(&w, i, punctuated))
-    });
-    let one = addressed.next()?;
-    if addressed.next().is_some() || one.panelist_id == panelist_id {
-        return None;
+    let named: Vec<(&AttendeeState, String)> = meeting
+        .attendees
+        .iter()
+        .filter(|a| !a.panelist_id.is_empty())
+        .filter_map(|a| {
+            let first = a.name.split_whitespace().next()?.to_lowercase();
+            Some((a, first))
+        })
+        .collect();
+    let mut found: Vec<&AttendeeState> = Vec::new();
+    for (i, word) in w.iter().enumerate() {
+        let exact: Vec<&AttendeeState> = named
+            .iter()
+            .filter(|(_, first)| *first == word.lower)
+            .map(|(a, _)| *a)
+            .collect();
+        let heard = exact.is_empty();
+        let who = if heard {
+            named
+                .iter()
+                .filter(|(_, first)| sounds_like(&word.lower, first))
+                .map(|(a, _)| *a)
+                .collect()
+        } else {
+            exact
+        };
+        if let [one] = who.as_slice()
+            && is_address(&w, i, punctuated, heard)
+            && !found.iter().any(|f| std::ptr::eq(*f, *one))
+        {
+            found.push(*one);
+        }
     }
-    Some(one)
+    match found.as_slice() {
+        [one] if one.panelist_id != panelist_id => Some(one),
+        _ => None,
+    }
 }
 
 /// The note for the attendee replying when the candidate's words were for another attendee: give that attendee the
@@ -963,4 +1079,38 @@ pub async fn drain(session: &Arc<Mutex<SessionState>>, limit: Duration) {
         tracing::warn!(session_id = %st.id, "meeting state update still running at the end; dropped");
     }
     st.meeting_updates.close();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn soundex_codes_and_near_names() {
+        for (word, code) in [
+            ("Rhea", "R000"),
+            ("Ria", "R000"),
+            ("Ray", "R000"),
+            ("Tom", "T500"),
+            ("Robert", "R163"),
+            ("Rupert", "R163"),
+            ("Ashcraft", "A261"),
+            ("Pfister", "P236"),
+            ("Tymczak", "T522"),
+        ] {
+            assert_eq!(soundex(word).as_deref(), Some(code), "{word}");
+        }
+        assert_eq!(soundex("'"), None);
+        assert_eq!(edit_distance("ria", "rhea"), 2);
+        assert_eq!(edit_distance("ray", "rhea"), 3);
+        assert!(sounds_like("ria", "rhea"));
+        assert!(sounds_like("tim", "tom"));
+        // Too far apart, a common word, or a word-like name: never a misheard name.
+        assert!(!sounds_like("ray", "rhea"));
+        assert!(!sounds_like("rio", "rhea"));
+        assert!(!sounds_like("ten", "tom"));
+        assert!(!sounds_like("then", "tom"));
+        assert!(!sounds_like("time", "tom"));
+        assert!(!sounds_like("rhea", "rhea"));
+    }
 }
