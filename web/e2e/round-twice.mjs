@@ -46,6 +46,10 @@ await waitReady();
 await go('/');
 await until('the home page', () => !!document.querySelector('[data-test="try-quick"]'));
 await setupTab();
+// One world on the page (the panels are pressed), and one capture before the headset session: the emulator's room
+// needs it to draw.
+await page(() => sessionStorage.setItem('ir_one_world', '1'));
+await shot('0-home');
 
 const first = await oneRound(1);
 // See full report: leaves the headset view; the room is destroyed with the page.
