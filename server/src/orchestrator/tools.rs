@@ -133,10 +133,17 @@ pub fn apply(state: &mut SessionState, call: &ToolCall) -> Vec<ServerEvent> {
                 return Vec::new();
             }
             // A second hand-over to the panelist who already holds the floor (two directors of the same speaker, one
-            // per reply) would replace the opening line they are about to say, or already said.
+            // per reply, or the app asking again) keeps the floor and the line prepared for them, which they are
+            // about to say or already said. The browser still gets the hand-over again, with that line: a page whose
+            // switch of voices failed tries it once more, and a page already there ignores it.
             if state.floor == to {
-                tracing::info!(session_id = %state.id, from = %call.panelist_id, to = %to, "hand_over to the panelist on the floor ignored");
-                return Vec::new();
+                tracing::info!(session_id = %state.id, from = %call.panelist_id, to = %to, "hand_over to the panelist on the floor sent again");
+                let opening_line = state.pending_handover.get(&to).cloned().unwrap_or(line);
+                return vec![ServerEvent::HandOver {
+                    from: call.panelist_id.clone(),
+                    to,
+                    opening_line,
+                }];
             }
             state.floor = to.clone();
             if !line.is_empty() {

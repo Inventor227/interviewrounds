@@ -1511,19 +1511,43 @@ async fn directors_show_question_and_hand_over_reach_the_browser_and_the_next_vo
     assert!(st.apply_tool_calls(&[call("p9")]).is_empty());
     assert_eq!(st.floor, "p2");
     // The first panelist's second director (one per reply) hands over again to the panelist already on the floor:
-    // ignored, so the line the new panelist is about to say stays.
+    // the floor and the line the new panelist is about to say stay, and the browser gets the hand-over again with
+    // that line (a page whose switch of voices failed tries it once more; one already there ignores it).
     st.pending_handover.insert("p2".into(), handover.into());
-    let again = ir_server::orchestrator::tools::ToolCall {
+    let again = |line: &str| ir_server::orchestrator::tools::ToolCall {
         id: "toolu_y".into(),
         name: "hand_over".into(),
-        input: json!({"to": "p2", "line": "A different first line."}),
+        input: json!({"to": "p2", "line": line}),
         panelist_id: "p1".into(),
     };
-    assert!(st.apply_tool_calls(&[again]).is_empty());
+    let sent_again = ServerEvent::HandOver {
+        from: "p1".into(),
+        to: "p2".into(),
+        opening_line: handover.into(),
+    };
+    for _ in 0..2 {
+        let events = st.apply_tool_calls(&[again("A different first line.")]);
+        assert_eq!(events, vec![sent_again.clone()]);
+        assert_eq!(st.floor, "p2");
+        assert_eq!(
+            st.pending_handover.get("p2").map(String::as_str),
+            Some(handover),
+            "the prepared line is never replaced"
+        );
+    }
+    // Once the line was said, a repeat carries its own line and still prepares nothing.
+    st.pending_handover.remove("p2");
+    let events = st.apply_tool_calls(&[again("Over to you again.")]);
     assert_eq!(
-        st.pending_handover.get("p2").map(String::as_str),
-        Some(handover)
+        events,
+        vec![ServerEvent::HandOver {
+            from: "p1".into(),
+            to: "p2".into(),
+            opening_line: "Over to you again.".into(),
+        }]
     );
+    assert!(st.pending_handover.get("p2").is_none());
+    assert_eq!(st.floor, "p2");
 }
 
 // ---------- dev voice spike page ----------
