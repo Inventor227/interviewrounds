@@ -88,9 +88,10 @@ export const DEFAULT_TIMING: RoundTiming = { silenceWaitSeconds: 20, interruptAf
  */
 export const TURN_GAP_MS = 3000;
 /**
- * The interviewer really took the turn only after speaking this long. The voice service starts a reply at short
- * pauses and the candidate's next words cut it off within a fraction of a second; such a start does not end the
- * candidate's turn.
+ * A reply ends the candidate's turn when it played to its end (its last words close a sentence and the candidate was
+ * not talking over it), whatever its length, or when one start of it played this long. The voice service starts a
+ * reply at short pauses and the candidate's next words cut it off within a fraction of a second; such starts do not
+ * end the turn, however many there are.
  */
 export const AGENT_REPLY_MS = 2000;
 /** Longest wait for the goodbye line before the round is closed anyway. */
@@ -117,8 +118,9 @@ export const SPOKEN_MAX_CHARS = 60;
 export const LONG_ANSWER_MUTE_MS = 2500;
 /**
  * Once the interviewer reacts to the marker (thinking), the mic stays closed until its cut-in has been audible this
- * long, and this long at most in all. With a real voice the cut-in came 3.7 s after the marker; a candidate still
- * talking when the mic reopened at `thinking` cut it off at its first word.
+ * long, and `LONG_ANSWER_MAX_MUTE_MS` at most in all, counted from the marker (however often the voice reports
+ * thinking or speaking again). With a real voice the cut-in came 3.7 s after the marker; a candidate still talking
+ * when the mic reopened at `thinking` cut it off at its first word.
  */
 export const LONG_ANSWER_CUT_IN_MS = 1500;
 export const LONG_ANSWER_MAX_MUTE_MS = 8000;
@@ -237,8 +239,15 @@ interface CandidateTurn {
   lastFinal: number;
   inSegment: boolean;
   sent: boolean;
-  /** How long the interviewer spoke since this turn began (starts the next words cut off add little). */
-  agentMs: number;
+  /** The longest single start of the interviewer's speech since this turn began (cut-off starts stay short). */
+  agentLongest: number;
+  /** A reply played to its end since this turn began: the candidate's next words are a new answer. */
+  answered: boolean;
+}
+
+/** True when a reply's played text closes a sentence (a reply cut off mid-sentence does not). */
+function endsSentence(text: string): boolean {
+  return /[.!?\u2026]["')\]\u201d\u2019]*$/.test(text.trim());
 }
 
 type VoiceStateMsg = ClientMsgMap['voice.state'] & { latency?: LatencySplit };
@@ -329,6 +338,10 @@ export class RoundController {
   private readonly spokenSent = new Set<string>();
   private spokenPending: { key: string; panelistId: string; text: string } | null = null;
   private longAnswerUnmute: ReturnType<typeof setTimeout> | null = null;
+  /** When the long-answer mute ends at the latest: the marker's time plus LONG_ANSWER_MAX_MUTE_MS (0 before the marker). */
+  private longAnswerDeadline = 0;
+  /** What the floor's current reply has played so far (cleared when the candidate speaks). */
+  private agentSaid = '';
   private lastAgentSegment: string | null = null;
   private lastActivitySent = -Infinity;
 
@@ -1441,7 +1454,11 @@ export class RoundController {
     // The reply is over: report a short one that never reached the usual length.
     if (m !== 'speaking' && this.spokenPending?.panelistId === t.panelistId) this.flushSpoken();
     if (m !== 'speaking' && this.agentSpeakingSince !== null) {
-      if (this.cand) this.cand.agentMs += now - this.agentSpeakingSince;
+      if (this.cand) {
+        this.cand.agentLongest = Math.max(this.cand.agentLongest, now - this.agentSpeakingSince);
+        // Played to its end, however short ("Why?"): the candidate's turn was answered.
+        if (t === this.floorT() && !this.userSpeaking && endsSentence(this.agentSaid)) this.cand.answered = true;
+      }
       this.agentSpeakingSince = null;
     }
     if (m === 'speaking') {
@@ -1519,6 +1536,7 @@ export class RoundController {
   private onAgentText(t: VoiceTransport, e: AgentText): void {
     this.sawAgent = true;
     this.lastAgentSegment = e.segmentId;
+    if (t === this.floorT()) this.agentSaid = e.text;
     const split = this.latency.agentText(Date.now(), e.segmentId);
     if (split) this.events.emit('latency', split);
     this.noteSpoken(t.panelistId, e);
@@ -1634,9 +1652,11 @@ export class RoundController {
 
   private trackTurn(now: number, final: boolean): void {
     let c = this.cand;
-    const agentMs = (c?.agentMs ?? 0) + (this.agentSpeakingSince !== null ? now - this.agentSpeakingSince : 0);
-    if (!c || (!c.inSegment && (now - c.lastFinal >= TURN_GAP_MS || agentMs >= AGENT_REPLY_MS))) {
-      c = { start: now, lastFinal: now, inSegment: false, sent: false, agentMs: 0 };
+    // Whatever the interviewer plays after these words belongs to its next reply.
+    this.agentSaid = '';
+    const longest = Math.max(c?.agentLongest ?? 0, this.agentSpeakingSince !== null ? now - this.agentSpeakingSince : 0);
+    if (!c || (!c.inSegment && (now - c.lastFinal >= TURN_GAP_MS || c.answered || longest >= AGENT_REPLY_MS))) {
+      c = { start: now, lastFinal: now, inSegment: false, sent: false, agentLongest: 0, answered: false };
       // A reply still playing as the candidate starts again counts toward this turn only from here.
       if (this.agentSpeakingSince !== null) this.agentSpeakingSince = now;
       this.cand = c;
@@ -1657,7 +1677,9 @@ export class RoundController {
     if (!c || c.sent || this.req?.mode !== 'interview' || this.st !== 'live' || this.handingOver) return;
     if (this.agentIs('speaking')) return;
     const now = Date.now();
-    const ongoing = c.inSegment || now - c.lastFinal < TURN_GAP_MS;
+    // A turn the interviewer answered is over, even within the gap that would otherwise join two segments.
+    const answered = c.answered || c.agentLongest >= AGENT_REPLY_MS;
+    const ongoing = !answered && (c.inSegment || now - c.lastFinal < TURN_GAP_MS);
     if (ongoing && now - c.start > this.timing.interruptAfterSeconds * 1000) {
       c.sent = true;
       void this.sendLongAnswer();
@@ -1683,6 +1705,8 @@ export class RoundController {
       if (still && !this.agentIs('speaking', 'thinking')) {
         t.sendEvent(VOICE_MARKERS.longAnswer);
         sent = true;
+        // From the marker on, the mic stays closed this long at most, whatever the voice reports.
+        this.longAnswerDeadline = Date.now() + LONG_ANSWER_MAX_MUTE_MS;
       }
     } catch {
       // the mute failed: no marker, and the mic is opened again below
@@ -1690,22 +1714,24 @@ export class RoundController {
       if (!this.longAnswerMuted) {
         // already opened again (the agent took the turn meanwhile)
       } else if (sent) {
-        if (this.longAnswerUnmute) clearTimeout(this.longAnswerUnmute);
-        this.longAnswerUnmute = setTimeout(() => this.endLongAnswerMute(), LONG_ANSWER_MUTE_MS);
+        this.holdLongAnswerMute(LONG_ANSWER_MUTE_MS);
       } else {
         this.endLongAnswerMute();
       }
     }
   }
 
+  /** Keeps the long-answer mute on for `ms` more, never past its deadline from the marker. */
   private holdLongAnswerMute(ms: number): void {
     if (this.longAnswerUnmute) clearTimeout(this.longAnswerUnmute);
-    this.longAnswerUnmute = setTimeout(() => this.endLongAnswerMute(), ms);
+    const left = this.longAnswerDeadline ? this.longAnswerDeadline - Date.now() : ms;
+    this.longAnswerUnmute = setTimeout(() => this.endLongAnswerMute(), Math.max(0, Math.min(ms, left)));
   }
 
   private endLongAnswerMute(): void {
     if (!this.longAnswerMuted) return;
     this.longAnswerMuted = false;
+    this.longAnswerDeadline = 0;
     if (this.longAnswerUnmute) clearTimeout(this.longAnswerUnmute);
     this.longAnswerUnmute = null;
     // Paused or ending keep their own mute (Resume opens the mic again).

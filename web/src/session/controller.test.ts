@@ -1655,17 +1655,126 @@ describe('RoundController in the room', () => {
     expect(t.muted).toBe(false);
   });
 
-  it('a_long_answer_marker_answered_by_thinking_alone_opens_the_mic_after_8_s', async () => {
+  /** Advances until the long-answer marker goes out; the time it was sent. */
+  async function untilMarker(t: ScriptedTransport): Promise<number> {
+    let at = 0;
+    const send = t.sendEvent.bind(t);
+    t.sendEvent = (m: string) => {
+      if (m === '[event: long_answer]') at = Date.now();
+      send(m);
+    };
+    for (let i = 0; i < 300 && !at; i++) await vi.advanceTimersByTimeAsync(10);
+    expect(count(t.sentEvents, '[event: long_answer]')).toBe(1);
+    return at;
+  }
+
+  it('a_long_answer_marker_answered_by_thinking_alone_opens_the_mic_8_s_after_the_marker', async () => {
     const h = harness();
     const t = await live(h);
     await talkTooLong(t);
-    await vi.advanceTimersByTimeAsync(800);
-    expect(count(t.sentEvents, '[event: long_answer]')).toBe(1);
+    const markerAt = await untilMarker(t);
+    await vi.advanceTimersByTimeAsync(300);
     t.mode('thinking');
-    await vi.advanceTimersByTimeAsync(7_999);
+    await vi.advanceTimersByTimeAsync(markerAt + 7_999 - Date.now());
     expect(t.muted).toBe(true);
     await vi.advanceTimersByTimeAsync(1);
     expect(t.muted).toBe(false);
+  });
+
+  it('the_long_answer_mute_never_runs_past_its_cap_from_the_marker', async () => {
+    // A voice that keeps reporting thinking (failed model calls in an outage) or speaking again cannot hold the
+    // mic closed: 8 s from the marker at most, in all.
+    const h = harness();
+    const t = await live(h);
+    await talkTooLong(t);
+    const markerAt = await untilMarker(t);
+    for (const m of ['thinking', 'listening', 'thinking', 'listening'] as const) {
+      await vi.advanceTimersByTimeAsync(1_800);
+      t.mode(m);
+    }
+    await vi.advanceTimersByTimeAsync(markerAt + 7_999 - Date.now());
+    expect(t.muted).toBe(true);
+    t.mode('thinking'); // asks for 8 s more: not granted
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(Date.now() - markerAt).toBeGreaterThan(8_000);
+    expect(t.muted).toBe(false);
+    // Once open, a later reaction does not close it again.
+    t.mode('speaking');
+    await vi.advanceTimersByTimeAsync(100);
+    expect(t.muted).toBe(false);
+
+    // The same with the cut-in starting just before the cap: it opens at the cap, not 1.5 s after the start.
+    const h2 = harness();
+    const t2 = await live(h2);
+    await talkTooLong(t2);
+    const at2 = await untilMarker(t2);
+    t2.mode('thinking');
+    await vi.advanceTimersByTimeAsync(at2 + 7_500 - Date.now());
+    t2.mode('speaking');
+    await vi.advanceTimersByTimeAsync(499);
+    expect(t2.muted).toBe(true);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(t2.muted).toBe(false);
+  });
+
+  it('a_short_reply_that_played_to_its_end_starts_a_new_turn', async () => {
+    // A 90 s answer, the interviewer's complete "Why?", and the candidate answers within a second: the new answer
+    // has its own clock (the harness asks after 10 s), so the marker does not cut in 1 s into it.
+    const h = harness();
+    const t = await live(h);
+    const LA = '[event: long_answer]';
+    t.user('s1', 'first', false);
+    await vi.advanceTimersByTimeAsync(9_000);
+    t.user('s1', 'first answer', true);
+    await vi.advanceTimersByTimeAsync(300);
+    t.mode('thinking');
+    t.mode('speaking');
+    t.agent('a1', 'Why?');
+    await vi.advanceTimersByTimeAsync(500);
+    t.mode('listening');
+    await vi.advanceTimersByTimeAsync(800);
+    t.user('s2', 'because', false);
+    await vi.advanceTimersByTimeAsync(2_000);
+    t.user('s2', 'because of the reads', false);
+    await vi.advanceTimersByTimeAsync(800);
+    expect(count(t.sentEvents, LA)).toBe(0);
+    // A start the candidate's words cut off mid-sentence does not end the turn: the same answer runs on.
+    const h2 = harness();
+    const t2 = await live(h2);
+    t2.user('s1', 'first', false);
+    await vi.advanceTimersByTimeAsync(5_000);
+    t2.user('s1', 'first part', true);
+    await vi.advanceTimersByTimeAsync(300);
+    t2.mode('speaking');
+    t2.agent('a1', 'And how would');
+    await vi.advanceTimersByTimeAsync(200);
+    t2.mode('listening'); // cut off
+    await vi.advanceTimersByTimeAsync(300);
+    t2.user('s2', 'and then', false);
+    await vi.advanceTimersByTimeAsync(5_000);
+    t2.user('s2', 'and then more', false);
+    await vi.advanceTimersByTimeAsync(800);
+    expect(count(t2.sentEvents, LA)).toBe(1);
+  });
+
+  it('many_cut_off_starts_in_one_answer_never_add_up_to_a_reply', async () => {
+    // Fifteen starts of 150 ms each (2.25 s in all, more than a real reply) inside one answer: still one turn.
+    const h = harness();
+    const t = await live(h);
+    const LA = '[event: long_answer]';
+    for (let i = 0; i < 15; i++) {
+      t.user(`s${i}`, 'part', false);
+      vi.advanceTimersByTime(300);
+      t.user(`s${i}`, 'part of it', true);
+      vi.advanceTimersByTime(100);
+      t.mode('speaking');
+      vi.advanceTimersByTime(150);
+      t.mode('listening');
+      vi.advanceTimersByTime(150);
+    }
+    t.user('s99', 'and so', false);
+    await vi.advanceTimersByTimeAsync(800);
+    expect(count(t.sentEvents, LA)).toBe(1);
   });
 
   it('the_mic_opens_again_after_a_long_answer_marker_with_no_reaction', async () => {
