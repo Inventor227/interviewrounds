@@ -2208,114 +2208,89 @@ fn is_scribe_id(t: &str) -> bool {
 }
 
 /// One string without the app's markers, the "do not read aloud" note or Scribe item ids. Unchanged when it has
-/// none of them.
+/// none of them. Only the text around a cut is tidied (a doubled space, a space before punctuation, brackets left
+/// empty by it); the rest of the string keeps its exact form.
 pub fn scrub_str(s: &str) -> String {
-    let lower = s.to_lowercase();
-    // Lower-casing can change byte offsets (a few non-ASCII letters): then only exact-case matches are looked for.
-    let same_len = lower.len() == s.len();
-    let find_ci = |hay: &str, needle: &str| -> bool {
-        if same_len {
-            lower.contains(needle)
-        } else {
-            hay.contains(needle)
-        }
-    };
-    let has_marker = APP_MARKERS.iter().any(|m| find_ci(s, m));
-    let has_note = find_ci(s, NOT_ALOUD);
-    let has_id = s
-        .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
-        .any(is_scribe_id);
-    if !has_marker && !has_note && !has_id {
-        return s.to_string();
-    }
     let chars: Vec<char> = s.chars().collect();
-    let mut out = String::with_capacity(s.len());
-    // Text with none of them cut (a plain "event:" in prose) is given back exactly as it was.
-    let mut removed = false;
-    let mut i = 0;
-    while i < chars.len() {
+    // Lower case char by char, so positions line up with `chars` whatever the letters.
+    let lower: Vec<char> = chars
+        .iter()
+        .map(|c| c.to_lowercase().next().unwrap_or(*c))
+        .collect();
+    let at = |i: usize, pat: &str| {
+        pat.chars()
+            .enumerate()
+            .all(|(k, p)| lower.get(i + k) == Some(&p))
+    };
+    let word = |c: Option<&char>| c.is_some_and(|c| c.is_ascii_alphanumeric() || *c == '_');
+    // Where a cut starting at `i` ends, if one does.
+    let cut_at = |i: usize| -> Option<usize> {
         let c = chars[i];
-        if c == '[' && has_marker {
-            let ahead: String = chars[i + 1..]
-                .iter()
-                .skip_while(|c| c.is_whitespace())
-                .take(16)
-                .flat_map(|c| c.to_lowercase())
-                .collect();
-            if APP_MARKERS.iter().any(|m| ahead.starts_with(m)) {
+        if c == '[' {
+            let mut j = i + 1;
+            while chars.get(j).is_some_and(|c| c.is_whitespace()) {
+                j += 1;
+            }
+            if APP_MARKERS.iter().any(|m| at(j, m)) {
                 // Up to the closing bracket, or the end of the line when there is none.
-                let end = chars[i..]
-                    .iter()
-                    .position(|&c| c == ']' || c == '\n')
-                    .map(|p| i + p)
-                    .unwrap_or(chars.len());
-                i = if chars.get(end) == Some(&']') {
-                    end + 1
-                } else {
-                    end
-                };
-                removed = true;
-                continue;
+                return Some(
+                    match chars[i..].iter().position(|&c| c == ']' || c == '\n') {
+                        Some(p) if chars[i + p] == ']' => i + p + 1,
+                        Some(p) => i + p,
+                        None => chars.len(),
+                    },
+                );
             }
         }
-        if c == 'x'
-            && has_id
-            && (i == 0 || !(chars[i - 1].is_ascii_alphanumeric() || chars[i - 1] == '_'))
-        {
+        if c == 'x' && (i == 0 || !word(chars.get(i - 1))) {
             let len = chars[i..]
                 .iter()
                 .take_while(|c| c.is_ascii_alphanumeric() || **c == '_')
                 .count();
             let token: String = chars[i..i + len].iter().collect();
             if is_scribe_id(&token) {
-                i += len;
-                removed = true;
-                continue;
+                return Some(i + len);
             }
         }
-        if has_note && (c == 'd' || c == 'D') {
-            let rest: String = chars[i..i + NOT_ALOUD.len().min(chars.len() - i)]
-                .iter()
-                .flat_map(|c| c.to_lowercase())
-                .collect();
-            if rest == NOT_ALOUD {
-                i += NOT_ALOUD.len();
-                removed = true;
-                continue;
+        if at(i, NOT_ALOUD) {
+            return Some(i + NOT_ALOUD.chars().count());
+        }
+        None
+    };
+    let mut out = String::with_capacity(s.len());
+    let mut removed = false;
+    let mut i = 0;
+    while i < chars.len() {
+        let Some(mut j) = cut_at(i) else {
+            out.push(chars[i]);
+            i += 1;
+            continue;
+        };
+        removed = true;
+        // Brackets the cut left empty go with it.
+        if out.ends_with('(') && chars.get(j) == Some(&')') {
+            out.pop();
+            j += 1;
+        }
+        let next = chars.get(j).copied();
+        // No space before what follows the cut when that is punctuation, a space or the end.
+        if next.is_none_or(|c| c == ' ' || c == '\n' || ",.;:!?)".contains(c)) {
+            while out.ends_with(' ') {
+                out.pop();
             }
         }
-        out.push(c);
-        i += 1;
+        // No leading space where the cut began a line.
+        if (out.is_empty() || out.ends_with('\n')) && next == Some(' ') {
+            while chars.get(j) == Some(&' ') {
+                j += 1;
+            }
+        }
+        i = j;
     }
     if !removed {
         return s.to_string();
     }
-    // What the cuts leave behind: doubled spaces, a space before punctuation, empty brackets.
-    let mut tidy = out
-        .split(' ')
-        .filter(|w| !w.is_empty())
-        .collect::<Vec<_>>()
-        .join(" ");
-    for (from, to) in [
-        ("()", ""),
-        ("( )", ""),
-        (" ,", ","),
-        (" .", "."),
-        (" ;", ";"),
-        (" :", ":"),
-        (",,", ","),
-    ] {
-        while tidy.contains(from) {
-            tidy = tidy.replace(from, to);
-        }
-    }
-    let tidy = tidy
-        .trim_matches(|c: char| c.is_whitespace() || c == ',' || c == ';')
-        .to_string();
-    tidy.lines()
-        .map(str::trim_start)
-        .collect::<Vec<_>>()
-        .join("\n")
+    out
 }
 
 /// Keys whose values are ids, links or times, never prose.

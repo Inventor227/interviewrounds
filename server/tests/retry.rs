@@ -1,5 +1,5 @@
 //! Retries: `POST /api/sessions/{id}/retry` (a two minute re-ask of the weakest moment), its scoring into the
-//! parent report, and its place in the guest limits. Needs Postgres (remote.sh --pg); the model is a fake.
+//! parent report, and its place in the guest limits. Needs Postgres (`DATABASE_URL`); the model is a fake.
 
 mod common;
 

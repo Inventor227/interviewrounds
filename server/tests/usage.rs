@@ -1,4 +1,4 @@
-//! Ledger, caps, streak, daily round and skills. Needs Postgres (remote.sh --pg).
+//! Ledger, caps, streak, daily round and skills. Needs Postgres (`DATABASE_URL`).
 
 mod common;
 

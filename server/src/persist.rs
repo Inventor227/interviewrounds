@@ -746,6 +746,48 @@ pub fn end_in_background(app: &AppState, id: Uuid, fish_ids: Vec<String>) {
     }
 }
 
+/// A swap hand-over's new panelist (`speaker`) has said its line, so the browser has switched voices. The other
+/// panelists' voices open at that moment are ended once `grace` has passed, unless the browser (or anything else)
+/// ended them first: the outgoing voice never bills alongside the new one for longer than that, even when the tab
+/// died at the switch. Joined panels keep every voice; voices made later (the next hand-over, a resume) are not
+/// touched.
+pub fn end_outgoing_voices_after(app: &AppState, session_id: &str, speaker: &str, grace: Duration) {
+    let Ok(id) = Uuid::parse_str(session_id) else {
+        return;
+    };
+    let app = app.clone();
+    let speaker = speaker.to_string();
+    tokio::spawn(async move {
+        let Ok(Some(row)) = fetch_session(&app.db, id).await else {
+            return;
+        };
+        if row.panel_mode != "swap" {
+            return;
+        }
+        let outgoing: Vec<String> = row
+            .fish_entries()
+            .into_iter()
+            .filter(|e| e.ended_at.is_none() && e.panelist_id != speaker)
+            .map(|e| e.fish_session_id)
+            .collect();
+        if outgoing.is_empty() {
+            return;
+        }
+        tokio::time::sleep(grace).await;
+        let Ok(Some(row)) = fetch_session(&app.db, id).await else {
+            return;
+        };
+        for e in row
+            .fish_entries()
+            .into_iter()
+            .filter(|e| e.ended_at.is_none() && outgoing.contains(&e.fish_session_id))
+        {
+            tracing::info!(session_id = %id, fish_session_id = %e.fish_session_id, panelist_id = %e.panelist_id, "outgoing voice still open after the hand-over; ending it");
+            end_and_mark(&app, id, &e.fish_session_id).await;
+        }
+    });
+}
+
 /// Ends one Fish session, retrying twice. A session Fish no longer knows counts as ended.
 pub async fn end_fish(app: &AppState, fish_session_id: &str) -> Result<(), FishError> {
     let mut last = None;

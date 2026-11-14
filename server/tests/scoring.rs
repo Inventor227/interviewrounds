@@ -1,6 +1,6 @@
 //! Scoring and the session report: delivery metrics, the verdict rule, the model call (scripted), the report
-//! checks and schema, storage and the report endpoints. Database tests need `DATABASE_URL` (remote.sh --pg);
-//! the live run needs the model API key (`--env-file .secrets/llm-anthropic.env`, `-- --ignored`).
+//! checks and schema, storage and the report endpoints. Database tests need `DATABASE_URL` (a scratch Postgres);
+//! the live run needs the model API key in the environment and `-- --ignored`.
 
 mod common;
 
@@ -1716,6 +1716,17 @@ fn scrub_takes_out_app_notes_and_board_ids_and_leaves_other_text_alone() {
         scrub_str("[event: handover] Hi, I am Priya."),
         "Hi, I am Priya."
     );
+    // Only the text around a cut is tidied: real brackets, colons and indentation elsewhere stay.
+    assert_eq!(scrub_str("Call cache() on x2_1"), "Call cache() on");
+    assert_eq!(
+        scrub_str("  Keep : this (and that)\n  and x2_1 here"),
+        "  Keep : this (and that)\n  and here"
+    );
+    // Markers are found whatever the case, also next to letters whose lower case is longer.
+    assert_eq!(
+        scrub_str("İstanbul [BOARD UPDATE r1, Do Not Read Aloud] fine"),
+        "İstanbul fine"
+    );
     // A report's ids, links and times are never touched.
     let mut r = json!({"id": "x2_1", "evidence_ids": ["x2_1"], "share": {"public_slug": "ab-x12_3-c"},
         "note": "On x2_1 [App note, x]."});
@@ -2382,8 +2393,8 @@ fn board_image_is_scaled_to_1568_px() {
 // ---------- live ----------
 
 /// A realistic recorded fake-voice session (full system design, mid level), scored by the real model, with the
-/// headset card timed. `remote.sh <wt> rust --env-file .secrets/llm-anthropic.env -- cargo test --test scoring
-/// live_ -- --ignored --nocapture`
+/// headset card timed. With the model API key in the environment: `cargo test --test scoring live_ -- --ignored
+/// --nocapture`
 #[tokio::test]
 #[ignore = "calls the real API"]
 async fn live_scoring_run() {

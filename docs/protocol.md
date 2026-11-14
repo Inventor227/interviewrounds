@@ -29,8 +29,9 @@ JSON; cookie `ir_id` identifies the device/user; all under same origin. A new gu
   `voice` as in `Panelist`). With `deferred: true` (what the web app sends) the new voice is joined ahead of time, while
   the outgoing panelist (`from`) still says its hand-off sentence: the Fish session is minted with no `first_message`,
   nothing is added to the history, the floor stays where `panel.hand_over` put it, and `from`'s open Fish session is
-  not ended (the browser ends it once the new voice has the floor; the next join, a voice release or the round's end
-  ends it otherwise). Every other open Fish session of the round is ended. The new panelist's opening line is then said
+  not ended (the browser ends it once the new voice has the floor; otherwise the server ends every other panelist's
+  voice that is still open 15 s after the new voice's `[event: handover]`, and the next join, a voice release or the
+  round's end ends it too). Every other open Fish session of the round is ended. The new panelist's opening line is then said
   through `[event: handover]` (see the hand-over below); `opening_line` is ignored. Without `deferred` (older pages) the
   server adds the opening line to the shared history as that panelist's turn, gives it to the new Fish session as
   `first_message`, moves the floor, and ends the previous panelist's Fish session. Joining a panelist that already has
@@ -204,13 +205,19 @@ Sequencing and acks:
   a page whose switch of voices failed tries again; a page already there ignores it. In joined mode the page waits
   for `from` to finish its sentence, moves the mic and sends `to` `[event: handover]`. In swap mode the page, on
   `panel.hand_over`: stops sending the user's speech to anyone (the outgoing voice only finishes its sentence), joins
-  `to` at once with `deferred: true` and connects it muted, in parallel with that sentence; once `from` is quiet
-  (at most 5 s), sends `to` `[event: handover]`, opens its mic and ends `from`'s voice. A pause holds the swap with the
+  `to` at once with `deferred: true` and connects it muted, in parallel with that sentence; once `from` is quiet,
+  sends `to` `[event: handover]`, opens its mic and ends `from`'s voice about 300 ms later (so its last word plays
+  out). A voice is never cut before it has spoken: while `from` is thinking, or is itself a panelist that was just
+  sent `[event: handover]` and has not started its line (a second hand-over during a swap queues behind the first),
+  the page waits for its speech to start (at most 4 s) and to end (at most 5 s once it speaks). The marker's turn
+  makes its panelist the floor unless a newer hand-over already moved the floor to a panelist whose line is still to
+  be said. A pause holds the swap with the
   new voice connected, muted and silent; on Resume its line is the welcome back (no `[event: resume]`). After a voice
   release the new voices are made for the server's floor and that voice gets `[event: handover]`. An end during a
   swap drops the joining voice: `from` says the goodbye. A swap that fails (join error, a voice that does not start or
   drops before it speaks) leaves `from` on the floor, hearing the user again; the server's next hand-over to `to` is
-  the retry.
+  the retry. The page reports it as `handover_failed`, never as a lost round; if the failed swap was held by a pause
+  and was to be the welcome back, `from` gets `[event: resume]` instead.
 - Playback. A reply to the candidate's speech is kept in the interviewer's memory, and its actions (brief card, phase,
   pointing, hand-over, end) run, only once it is known to have played: on `voice.spoken` for it, or when that panelist's
   next Fish request shows it. A reply never played is dropped with its actions; so are replies still unplayed when the

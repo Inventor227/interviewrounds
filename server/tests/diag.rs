@@ -1,4 +1,4 @@
-//! Device check routes: results store, read back, echo voice session. Needs Postgres (remote.sh --pg).
+//! Device check routes: results store, read back, echo voice session. Needs Postgres (`DATABASE_URL`).
 
 mod common;
 

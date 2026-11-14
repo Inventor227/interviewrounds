@@ -690,6 +690,11 @@ async fn retry_inner(
             .bind(parent.id)
             .fetch_optional(&app.db)
             .await?;
+    // An older report may carry the interviewer's notes the model copied (the retry prompt is spoken word for word).
+    let report = report.map(|mut r| {
+        crate::scoring::report::scrub_app_text(&mut r);
+        r
+    });
     let (Some(report), Some(base)) = (
         report,
         parent

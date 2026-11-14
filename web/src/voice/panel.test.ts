@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { Panelist } from '../shared/types';
-import { PanelController } from './panel';
+import { OLD_VOICE_TAIL_MS, PanelController } from './panel';
 import { panelist, ScriptedTransport, sessionRes } from './testkit';
 import type { TransportOptions, VoiceTransport } from './transport';
 
@@ -32,7 +32,7 @@ function sentence() {
 function setup(
   mode: 'swap' | 'joined',
   panel = [panelist('p1', 0), panelist('p2', 1)],
-  opts: { slow?: string[]; waitQuiet?: (t: VoiceTransport) => Promise<void>; ready?: () => Promise<void> } = {},
+  opts: { slow?: string[]; waitQuiet?: (t: VoiceTransport, expectSpeech?: boolean) => Promise<void>; ready?: () => Promise<void>; tailMs?: number } = {},
 ) {
   const log: string[] = [];
   const made: ScriptedTransport[] = [];
@@ -48,7 +48,7 @@ function setup(
     return { voice: { transport: 'fake' as const } };
   });
   const res = sessionRes({ panel_mode: mode, panel });
-  const pc = new PanelController(res, make, { api: { joinPanelist }, waitQuiet: opts.waitQuiet, ready: opts.ready });
+  const pc = new PanelController(res, make, { api: { joinPanelist }, waitQuiet: opts.waitQuiet, ready: opts.ready, tailMs: opts.tailMs ?? 0 });
   return { pc, log, made, joinPanelist };
 }
 
@@ -204,6 +204,49 @@ describe('PanelController', () => {
     expect(made[2]!.muted).toBe(false);
   });
 
+  it('the_outgoing_voice_stops_a_short_tail_after_the_switch_and_stop_all_still_stops_it', async () => {
+    vi.useFakeTimers();
+    try {
+      const { pc, made } = setup('swap', undefined, { tailMs: OLD_VOICE_TAIL_MS });
+      await pc.start();
+      await pc.handOver('p2');
+      expect(made[1]!.sentEvents).toEqual(['[event: handover]']);
+      expect(made[0]!.stopped).toBe(false); // the end of its last word still plays
+      await vi.advanceTimersByTimeAsync(OLD_VOICE_TAIL_MS - 1);
+      expect(made[0]!.stopped).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(made[0]!.stopped).toBe(true);
+
+      const second = setup('swap', undefined, { tailMs: OLD_VOICE_TAIL_MS });
+      await second.pc.start();
+      await second.pc.handOver('p2');
+      await second.pc.stopAll(); // the round ends inside the tail
+      expect(second.made[0]!.stopped).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('a_hand_over_after_a_swap_waits_for_the_new_voice_to_say_its_line', async () => {
+    const asked: [string, boolean][] = [];
+    const waitQuiet = vi.fn(async (t: VoiceTransport, expectSpeech?: boolean) => void asked.push([t.panelistId, !!expectSpeech]));
+    const { pc, made } = setup('swap', [panelist('p1', 0), panelist('p2', 1), panelist('p3', 2)], { waitQuiet });
+    await pc.start();
+    await pc.handOver('p2');
+    await pc.handOver('p3');
+    // p2 was asked for its line and had not started it: the wait expects its speech.
+    expect(asked).toContainEqual(['p2', true]);
+    // Once a voice has started speaking it owes nothing more.
+    const { pc: pc2, made: made2 } = setup('swap', [panelist('p1', 0), panelist('p2', 1), panelist('p3', 2)], { waitQuiet });
+    asked.length = 0;
+    await pc2.start();
+    await pc2.handOver('p2');
+    made2[1]!.mode('speaking');
+    await pc2.handOver('p3');
+    expect(asked).toContainEqual(['p2', false]);
+    expect(made.length).toBe(3);
+  });
+
   it('mute_all_never_reopens_the_outgoing_floor_mid_swap', async () => {
     const { waitQuiet, quiet } = sentence();
     const { pc, made } = setup('swap', undefined, { waitQuiet });
@@ -258,7 +301,7 @@ describe('PanelController lifecycle', () => {
     const swapping = pc.handOver('p2');
     await vi.waitFor(() => expect(made[1]?.started).toBe(true));
     // Joined and connected while the old panelist still speaks; it only stopped hearing the user.
-    expect(waitQuiet).toHaveBeenCalledWith(made[0]);
+    expect(waitQuiet).toHaveBeenCalledWith(made[0], false);
     expect(joinPanelist).toHaveBeenCalledTimes(1);
     expect(made[0]!.muted).toBe(true);
     expect(made[0]!.stopped).toBe(false);

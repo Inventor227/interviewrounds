@@ -1245,10 +1245,16 @@ impl SessionState {
         if handover_line_used {
             self.pending_handover.remove(&panelist);
         }
+        // The panelist saying its hand-over line holds the floor, unless a later hand-over already moved the floor
+        // to someone whose own line is still to be said (a second hand-over while this one was under way): the
+        // browser goes on to that panelist after this line, so the floor stays where the newer hand-over put it.
+        let newer_handover =
+            self.floor != panelist && self.pending_handover.contains_key(&self.floor);
         if matches!(
             draft.input,
             UserInput::Event(super::markers::EventKind::Handover)
-        ) {
+        ) && !newer_handover
+        {
             self.floor = panelist.clone();
         }
 

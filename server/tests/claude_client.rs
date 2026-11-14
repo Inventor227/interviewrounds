@@ -443,7 +443,7 @@ fn debug_output_hides_the_key() {
     assert!(!shown.contains("SECRET"), "{shown}");
 }
 
-/// One real call per model: `remote.sh ... --env-file .secrets/llm-anthropic.env -- cargo test --test claude_client -- --ignored`.
+/// One real call per model, with the model API key in the environment: `cargo test --test claude_client -- --ignored`.
 #[tokio::test]
 #[ignore = "calls the real API"]
 async fn live_smoke_three_models() {
