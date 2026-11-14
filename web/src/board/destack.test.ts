@@ -13,16 +13,18 @@ describe('suggestions never stack', () => {
   it('a_second_call_s_sticky_on_the_first_one_moves_to_a_free_spot', () => {
     // Two Scribe calls in a row, both placing their sticky at the first free position.
     const store = new BoardStore(emptyBoard({ kit: 'pm' }));
-    store.apply({ op_id: 'h1', src: 'hand', op: 'item.create', args: { id: 'n1', kind: 'sticky', lane: 'user', text: 'Students', votes: 0, quad: null, x: 20, y: 2 } });
+    store.apply({ op_id: 'h1', src: 'hand', op: 'item.create', args: { id: 'n1', kind: 'sticky', lane: 'user', text: 'Students', votes: 0, quad: null, x: 14.5, y: 3 } });
     store.setGhosts([sticky('sc1.1', 'x1_1', 'Deposits get lost', 2, 2)]);
     store.setGhosts([sticky('sc1.1', 'x1_1', 'Deposits get lost', 2, 2), sticky('sc2.1', 'x2_1', 'Scams', 2, 2)]);
     const [first, second] = store.board.ghosts;
     expect(first!.args).toMatchObject({ x: 2, y: 2 }); // the one already shown stays put
+    // A pain sticky moves down the pain lane's column (12 to 24 cm), under what is already there.
+    expect(second!.args).toMatchObject({ x: 14.5, y: 11 });
     const r1 = ghostRect(store.board, first!)!;
     const r2 = ghostRect(store.board, second!)!;
     expect(overlap(r1, r2)).toBe(false);
     // ... and clear of the sticky already on the board.
-    expect(overlap(r2, { x: 20, y: 2, w: 7, h: 7 })).toBe(false);
+    expect(overlap(r2, { x: 14.5, y: 3, w: 7, h: 7 })).toBe(false);
     // The same list again lands in the same places.
     store.setGhosts([sticky('sc1.1', 'x1_1', 'Deposits get lost', 2, 2), sticky('sc2.1', 'x2_1', 'Scams', 2, 2)]);
     expect(store.board.ghosts[1]!.args).toEqual(second!.args);

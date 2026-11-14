@@ -20,6 +20,22 @@ function freeSpot(board: Board, taken: Rect[], w: number, h: number): [number, n
   return null;
 }
 
+/** PM sheet: a sticky's lane column (12 cm lanes from the left, a 7 cm sticky centred), first row under the headers. */
+const PM_LANES = ['user', 'pain', 'idea', 'metric'] as const;
+const LANE_W = 12;
+const STICKY = 7;
+
+/** The first free spot down a PM sticky's own lane, 1 cm apart. */
+function laneSpot(board: Board, taken: Rect[], lane: string): [number, number] | null {
+  const i = PM_LANES.indexOf(lane as (typeof PM_LANES)[number]);
+  if (i < 0) return null;
+  const x = i * LANE_W + (LANE_W - STICKY) / 2;
+  for (let y = 3; y + STICKY <= board.size.h; y += STICKY + 1) {
+    if (!taken.some((t) => overlap({ x: x - 0.5, y: y - 0.5, w: STICKY + 1, h: STICKY + 1 }, t))) return [x, y];
+  }
+  return null;
+}
+
 /** The ghost list with every new item off the pending suggestions before it (and off the board's items when it moves). */
 export function destack(board: Board, ghosts: GhostOp[]): GhostOp[] {
   const items = board.items.map(itemRect);
@@ -31,7 +47,10 @@ export function destack(board: Board, ghosts: GhostOp[]): GhostOp[] {
       placed.push(r);
       return g;
     }
-    const spot = freeSpot(board, [...items, ...placed], r.w, r.h);
+    const taken = [...items, ...placed];
+    // A PM sticky stays in its own lane's column.
+    const lane = board.round.type === 'pm' && g.args.kind === 'sticky' ? g.args.lane : null;
+    const spot = (lane ? laneSpot(board, taken, lane) : null) ?? freeSpot(board, taken, r.w, r.h);
     if (!spot) {
       placed.push(r);
       return g;
