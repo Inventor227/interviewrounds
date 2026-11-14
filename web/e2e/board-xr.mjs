@@ -2,7 +2,7 @@
 // right hand pinch-draws a rough box, a second box and a line between them on the sheet,
 // both cards get voice labels through the dev typed turn, then a Scribe ghost is accepted
 // with a pinch. Screenshots of the sheet and of the wall board, and crisp board textures.
-//   plan/ops-tools/emu.sh <worktree> <worktree>/web/e2e/board-xr.mjs --out plan/shots/board-xr
+//   Emulator run (see README.md).
 import { execFile } from 'node:child_process';
 import { writeFileSync } from 'node:fs';
 import path from 'node:path';

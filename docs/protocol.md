@@ -30,7 +30,7 @@ JSON; cookie `ir_id` identifies the device/user; all under same origin. A new gu
   the outgoing panelist (`from`) still says its hand-off sentence: the Fish session is minted with no `first_message`,
   nothing is added to the history, the floor stays where `panel.hand_over` put it, and `from`'s open Fish session is
   not ended (the browser ends it once the new voice has the floor; otherwise the server ends every other panelist's
-  voice that is still open 15 s after the new voice's `[event: handover]`, and the next join, a voice release or the
+  voice made before the new one that is still open 15 s after the new voice's `[event: handover]`, and the next join, a voice release or the
   round's end ends it too). Every other open Fish session of the round is ended. The new panelist's opening line is then said
   through `[event: handover]` (see the hand-over below); `opening_line` is ignored. Without `deferred` (older pages) the
   server adds the opening line to the shared history as that panelist's turn, gives it to the new Fish session as

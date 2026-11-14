@@ -1,6 +1,6 @@
 // Emulator check for a hand's poke on the round bar in the room alone: a fingertip presses Pause, Mute and CC, and
 // holds End until its ring is full. Each press is traced frame by frame (the platform's touch pointer state).
-//   plan/ops-tools/emu.sh <worktree> <worktree>/web/e2e/xr-poke.mjs --timeout 20 --out plan/shots/t25/poke
+//   Emulator run (see README.md): allow up to 20 minutes.
 
 import { copyFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';

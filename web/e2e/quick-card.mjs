@@ -1,6 +1,6 @@
 // Emulator shot of the quick card (the one line, the top strength and the top fix) in the preview room, with a
 // sample card of full length, to check the wrapping. No server needed.
-//   plan/ops-tools/emu.sh <worktree> <worktree>/web/e2e/quick-card.mjs --size 1280x720 --out plan/shots/int-web/card
+//   Emulator run (see README.md): viewport 1280x720.
 import { copyFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';

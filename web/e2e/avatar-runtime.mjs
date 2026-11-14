@@ -1,6 +1,6 @@
 // Emulator run for the avatar runtime on /dev/avatar: listening face, mouth frames during the test voice, the
 // thinking look, a beat, pointing, the seated view, and per-avatar update cost. Writes PNGs and stats.json.
-//   plan/ops-tools/emu.sh <worktree> web/e2e/avatar-runtime.mjs --size 640x640 --out plan/shots/avatar-runtime
+//   Emulator run (see README.md): viewport 640x640.
 
 import { writeFileSync } from 'node:fs';
 import path from 'node:path';

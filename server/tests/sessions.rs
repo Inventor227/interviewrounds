@@ -1281,6 +1281,90 @@ async fn the_server_ends_the_outgoing_voice_when_the_browser_has_not_after_the_s
 }
 
 #[tokio::test]
+async fn the_server_never_ends_a_voice_made_after_the_speakers_own() {
+    // A queued second hand-over: the next panelist's voice is joined while the first new panelist says its line,
+    // and its entry is saved before the line's turn. The server ends only the voices older than the speaker's.
+    let app = live::test_app(Options {
+        timing: ir_server::ws::SessionTiming {
+            outgoing_voice_grace: Duration::from_millis(300),
+            ..Default::default()
+        },
+        ..Options::default()
+    })
+    .await;
+    let cookie = app.guest().await;
+    let res = app.create(&cookie, full_req("fish")).await;
+    let id = res.body["session_id"].as_str().unwrap().to_string();
+    app.set_status(&id, ir_server::orchestrator::SessionStatus::Live)
+        .await;
+    let handle = app.state.registry.get(&id).unwrap();
+    handle
+        .lock()
+        .await
+        .apply_tool_calls(&[ir_server::orchestrator::tools::ToolCall {
+            id: "toolu_h".into(),
+            name: "hand_over".into(),
+            input: json!({"to": "p2", "line": "Hi, I'm Ana."}),
+            panelist_id: "p1".into(),
+        }]);
+    let join = |pid: &'static str, from: &'static str| {
+        let app = &app;
+        let path = format!("/api/sessions/{id}/panelists/{pid}/join");
+        let cookie = cookie.clone();
+        async move {
+            app.call(
+                Method::POST,
+                &path,
+                Some(&cookie),
+                Some(json!({"deferred": true, "from": from})),
+            )
+            .await
+        }
+    };
+    // p2 joins (fish-2); then the next hand-over back to p1 joins a new voice for p1 (fish-3) before p2's line.
+    assert_eq!(join("p2", "p1").await.status, StatusCode::OK);
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    assert_eq!(join("p1", "p2").await.status, StatusCode::OK);
+    let body = json!({"model": "x", "stream": true,
+        "messages": [{"role": "user", "content": "[event: handover]"}],
+        "fishaudio_extra_body": {"session_id": id, "panelist_id": "p2"}});
+    let req = axum::http::Request::post("/v1/chat/completions")
+        .header(header::AUTHORIZATION, "Bearer test-llm-secret")
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(axum::body::Body::from(body.to_string()))
+        .unwrap();
+    use tower::ServiceExt;
+    let res = app.router.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let text = String::from_utf8(common::body_bytes(res).await).unwrap();
+    assert!(text.contains("Hi, I'm Ana."), "{text}");
+    // Well past the grace: p1's new voice (fish-3) and p2's (fish-2) are still open.
+    tokio::time::sleep(Duration::from_millis(1200)).await;
+    let ended = app.fish_paths("POST").await;
+    assert!(
+        !ended.iter().any(|p| p.ends_with("fish-3/end")),
+        "{ended:?}"
+    );
+    assert!(
+        !ended.iter().any(|p| p.ends_with("fish-2/end")),
+        "{ended:?}"
+    );
+    let uuid = Uuid::parse_str(&id).unwrap();
+    let row = persist::fetch_session(&app.state.db, uuid)
+        .await
+        .unwrap()
+        .unwrap();
+    let mut open: Vec<String> = row
+        .fish_entries()
+        .into_iter()
+        .filter(|e| e.ended_at.is_none())
+        .map(|e| e.fish_session_id)
+        .collect();
+    open.sort();
+    assert_eq!(open, ["fish-2", "fish-3"]);
+}
+
+#[tokio::test]
 async fn concurrent_creates_take_the_last_slot_once() {
     let app = live::test_app(Options {
         env: &[("USAGE_PHASE", "judging")],

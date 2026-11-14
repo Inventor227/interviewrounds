@@ -1,5 +1,5 @@
 // Emulator smoke test for the app shell: the home page renders, and a tile routes
-// client side to its page. Run with plan tooling: emu.sh <worktree> web/e2e/shell.mjs
+// client side to its page. Emulator run (see README.md).
 import { call, iwsdk, screenshot, sleep, waitReady } from './emu-lib.mjs';
 
 await waitReady();

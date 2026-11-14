@@ -3,7 +3,7 @@
 //   2. the system menu opens while the interviewer speaks (`visible-blurred`): cut mid-sentence, Resume;
 //   3. a long pause by the Pause button (past the server's 45 s voice release): Resume gets new voices;
 //   4. the system ends the headset session: the page says the round is paused, Resume round goes back in.
-//   plan/ops-tools/emu.sh <worktree> <worktree>/web/e2e/round-pause.mjs --env-file <dev key file> --timeout 40 --out plan/shots/t21/pause
+//   Emulator run (see README.md): env DEV_KEY and IR_API_ORIGIN; allow up to 40 minutes.
 import { copyFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';

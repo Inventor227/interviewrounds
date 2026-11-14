@@ -1,7 +1,7 @@
 // Emulator run for the frame budget: the conference room with three seated people, the sheet, the wall board with a
 // drawing on it and the round panels (bar, brief, captions). Logs renderer.info per view, a per-object breakdown of
 // draw calls and triangles, and a texture memory estimate, to <out>/perf.json.
-//   plan/ops-tools/emu.sh <worktree> <worktree>/web/e2e/perf-room.mjs --room conference_room --out plan/shots/t22/perf
+//   Emulator run (see README.md): room conference_room.
 // The emulator renders both eyes without multiview, so its calls and triangles are both eyes' worth; a Quest with
 // multiview draws each object once for both eyes.
 

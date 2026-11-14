@@ -4,7 +4,7 @@
 // round from the first tap to the report page. Home → Start a quick round → Enter the room → touch the desk →
 // greeting → three typed answers → two boxes and a connector drawn by hand → a suggestion accepted → End →
 // the quick card → the summary → See full report.
-//   plan/ops-tools/emu.sh <worktree> <worktree>/web/e2e/round-hands.mjs --env-file <env file> --timeout 50 --out plan/shots/t25/hands
+//   Emulator run (see README.md): env DEV_KEY and IR_API_ORIGIN; allow up to 50 minutes.
 import { copyFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';

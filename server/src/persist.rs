@@ -749,8 +749,9 @@ pub fn end_in_background(app: &AppState, id: Uuid, fish_ids: Vec<String>) {
 /// A swap hand-over's new panelist (`speaker`) has said its line, so the browser has switched voices. The other
 /// panelists' voices open at that moment are ended once `grace` has passed, unless the browser (or anything else)
 /// ended them first: the outgoing voice never bills alongside the new one for longer than that, even when the tab
-/// died at the switch. Joined panels keep every voice; voices made later (the next hand-over, a resume) are not
-/// touched.
+/// died at the switch. Joined panels keep every voice. Only voices made before the speaker's own are ended: one
+/// minted after it (the next hand-over's voice, joined while this line plays; a resume) is never touched, even when
+/// its entry is already saved when this runs.
 pub fn end_outgoing_voices_after(app: &AppState, session_id: &str, speaker: &str, grace: Duration) {
     let Ok(id) = Uuid::parse_str(session_id) else {
         return;
@@ -764,10 +765,19 @@ pub fn end_outgoing_voices_after(app: &AppState, session_id: &str, speaker: &str
         if row.panel_mode != "swap" {
             return;
         }
-        let outgoing: Vec<String> = row
-            .fish_entries()
+        let entries = row.fish_entries();
+        // The speaker's own voice: its newest open one. Without it there is nothing to order against.
+        let Some(own) = entries
+            .iter()
+            .filter(|e| e.ended_at.is_none() && e.panelist_id == speaker)
+            .map(|e| e.started_at)
+            .max()
+        else {
+            return;
+        };
+        let outgoing: Vec<String> = entries
             .into_iter()
-            .filter(|e| e.ended_at.is_none() && e.panelist_id != speaker)
+            .filter(|e| e.ended_at.is_none() && e.panelist_id != speaker && e.started_at <= own)
             .map(|e| e.fish_session_id)
             .collect();
         if outgoing.is_empty() {

@@ -6,7 +6,8 @@
 // speech). Audio: one webm/opus file per panelist voice stream as received (a new file when a panelist gets a new
 // stream), the candidate's microphone when a script hands it over, and a mono mix of all of them.
 //
-// Format: plan/video/raw/FORMAT.md (interview-rounds.recording.v1). Nothing here runs in a production build.
+// Format: `interview-rounds.recording.v1` (`RECORDING_FORMAT`); the timeline names every audio file. Nothing here runs
+// in a production build.
 
 export const RECORDING_FORMAT = 'interview-rounds.recording.v1';
 

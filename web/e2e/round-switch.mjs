@@ -2,7 +2,7 @@
 // tip and trigger, a box drawn by ray), the controllers go down in the middle of a stroke, and the round is
 // finished with hands alone (a box and a connector pinched, a suggestion accepted by pinch, the round ended).
 // Then the controllers come back for one more stroke, to show the change works both ways.
-//   plan/ops-tools/emu.sh <worktree> <worktree>/web/e2e/round-switch.mjs --env-file <dev key file> --timeout 50 --out plan/shots/t25/switch
+//   Emulator run (see README.md): env DEV_KEY and IR_API_ORIGIN; allow up to 50 minutes.
 import { copyFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';

@@ -1,7 +1,7 @@
 // The onboarding never holds a round, in the emulator against the deployed server with the fake voice: a new
 // guest's first design round; the headset view is lost while the ghost hand shows, the user comes back and the line
 // and Skip are there again; then nothing is drawn, and after 20 s the round starts by itself.
-//   plan/ops-tools/emu.sh <worktree> <worktree>/web/e2e/round-onboarding-exits.mjs --env-file <env file> --timeout 40 --out plan/shots/t21/onboarding-exits
+//   Emulator run (see README.md): env DEV_KEY and IR_API_ORIGIN; allow up to 40 minutes.
 import { copyFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';

@@ -1,7 +1,7 @@
 // Emulator check for the board sandbox (/dev/board): draw a rough box, a second box and a
 // line between them with the mouse, label one by a voice line, then add a card from the
 // tray and connect it. Screenshots after each stage, plus the final board as JSON.
-// Run with plan tooling: emu.sh <worktree> web/e2e/board.mjs
+// Emulator run (see README.md).
 import { writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { iwsdk, screenshot, sleep, waitReady } from './emu-lib.mjs';

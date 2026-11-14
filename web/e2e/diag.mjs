@@ -1,7 +1,7 @@
 // Emulator run for the device check (/diag): the page in 2D, then the headset test with scripted hands. Placement
 // by an index touch on the home office desk, a short frame test (?quick=1), then the right hand holds a pinch on the
 // dot, draws the 10 cm line, taps the five rings and pinches Done; the page then shows the numbers.
-//   plan/ops-tools/emu.sh <worktree> <worktree>/web/e2e/diag.mjs --out plan/shots/diag
+//   Emulator run (see README.md).
 // Frame times here are software rendering and mean nothing; the run checks the flow and the screens.
 
 import { execFile } from 'node:child_process';

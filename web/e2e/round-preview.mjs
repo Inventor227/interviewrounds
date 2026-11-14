@@ -1,6 +1,6 @@
 // End to end without WebXR (the 2D preview), against the deployed server with the typed-turn fake voice: a short
 // system design round on the page, with the sheet drawn on by mouse.
-//   plan/ops-tools/emu.sh <worktree> <worktree>/web/e2e/round-preview.mjs --size 1280x720 --env-file <dev key file> --timeout 30 --out plan/shots/int-web/preview
+//   Emulator run (see README.md): viewport 1280x720; env DEV_KEY and IR_API_ORIGIN; allow up to 30 minutes.
 import { copyFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';

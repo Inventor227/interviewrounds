@@ -3,8 +3,7 @@
 // the meeting sheet, the wall board and the round panels, with the typed-turn fake voice against the deployed server.
 // Logs renderer.info per view, a per-object breakdown of draw calls and triangles, and a texture memory estimate
 // (with three.js's morph target textures), to <out>/<label>-perf.json, then ends the round.
-//   plan/ops-tools/emu.sh <worktree> <worktree>/web/e2e/perf-meeting.mjs --room conference_room --env-file <dev key file> \
-//     --timeout 30 --out plan/shots/t22/perf
+//   Emulator run (see README.md): room conference_room; env DEV_KEY and IR_API_ORIGIN; allow up to 30 minutes.
 // The emulator draws both eyes without multiview, so its calls and triangles are both eyes' worth.
 import { copyFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';

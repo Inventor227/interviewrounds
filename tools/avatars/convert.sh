@@ -8,12 +8,12 @@
 # capped container (Blender 4.2 LTS headless, gltf-transform, KTX-Software); see Dockerfile.
 #
 # Environment:
-#   AVATAR_HOST   ssh host of the build server (default: ioflood)
-#   AVATAR_ROOT   work folder on the build server (default: /root/ir-avatar-work). Keep it outside
-#                 /root/ir-dev/: the dev sync scripts mirror worktrees there with rsync --delete.
+#   AVATAR_HOST   ssh host of the build server (required on the workstation)
+#   AVATAR_ROOT   work folder on the build server (default: /root/ir-avatar-work). Keep it outside any folder
+#                 another tool mirrors with rsync --delete, or the next sync wipes it.
 set -euo pipefail
 
-HOST="${AVATAR_HOST:-ioflood}"
+HOST="${AVATAR_HOST:-}"
 ROOT="${AVATAR_ROOT:-/root/ir-avatar-work}"
 # The image tag is a hash of the Dockerfile (set on the build server), so Dockerfile edits always rebuild.
 IMAGE=""
@@ -127,6 +127,10 @@ if [[ "${AVATAR_STAGE:-}" == "server" ]]; then
 fi
 
 # ---------------------------------------------------------------- on the workstation
+if [[ -z "$HOST" ]]; then
+  echo "set AVATAR_HOST to the ssh host of the build server" >&2
+  exit 2
+fi
 repo="$(cd "$here/../.." && pwd)"
 rsync -a --delete --exclude node_modules "$here/" "$HOST:$ROOT/tools/"
 ssh "$HOST" "AVATAR_STAGE=server AVATAR_ROOT=$ROOT bash $ROOT/tools/convert.sh $*"

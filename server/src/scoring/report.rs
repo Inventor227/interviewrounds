@@ -2279,9 +2279,9 @@ pub fn scrub_str(s: &str) -> String {
                 out.pop();
             }
         }
-        // No leading space where the cut began a line.
-        if (out.is_empty() || out.ends_with('\n')) && next == Some(' ') {
-            while chars.get(j) == Some(&' ') {
+        // Where the cut began the text or a line, no leading space, comma or semicolon is left behind.
+        if out.is_empty() || out.ends_with('\n') {
+            while chars.get(j).is_some_and(|c| matches!(c, ' ' | ',' | ';')) {
                 j += 1;
             }
         }
