@@ -14,9 +14,9 @@ Made by Mohammad Ibrahim for the Meta VR Start Developer Competition 2026 (Produ
 
 ## What a round is
 
-You pick a round, put on the headset and sit at your desk. Passthrough keeps your real room. You touch the desk once,
-a sheet lands on it, and the interviewer sits down across from you, looks at you and greets you by voice. You answer
-out loud. The interviewer follows up on what you actually said.
+You pick a round, put on the headset and sit at your desk. Passthrough keeps your real room. You touch the desk once
+and the interviewer sits down across from you, looks at you and greets you by voice. You answer out loud. The
+interviewer follows up on what you actually said.
 
 | Track | Rounds |
 |---|---|
@@ -48,8 +48,8 @@ clock stops, and when you are back a "Welcome back" card waits for you to resume
 10 minutes in total. If the connection drops, the page reconnects and the round carries on. If the AI models are
 overloaded, the round holds and the card says the interviewer is reconnecting.
 
-**The report.** When the round ends, a short card in the headset shows a verdict so far, four competency bars, your top
-strength and the thing to fix, with **Retry this answer** and **See full report**. The full report is a normal web
+**The report.** When the round ends, cards in the headset show the verdict, four competency bars, your top strength
+and the thing to fix, with **Retry this answer** and **See full report**. The full report is a normal web
 page:
 
 - a verdict on the hire / no-hire scale with a confidence (meetings show the outcome instead), set by a fixed rule
