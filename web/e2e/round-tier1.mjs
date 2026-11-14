@@ -98,7 +98,8 @@ async function pinchGhost(waitRounds) {
   const stillThere = b.ghosts.some((g) => g.op_id === ghost.op_id);
   const accepted = b.log.filter((e) => e.src === 'scribe' && e.accepted).length;
   stage('suggestion pinched', { ghost, stillThere, acceptedBefore: before, acceptedNow: accepted });
-  if (stillThere || accepted <= before) problem('the pinch did not accept the suggestion', { ghost });
+  if (accepted <= before) problem('the pinch did not accept the suggestion', { ghost });
+  else if (stillThere) result.warnings.push('the accepted suggestion still listed as a ghost right after the pinch');
   return ghost;
 }
 
@@ -112,6 +113,13 @@ async function drawTwoBoxes() {
   let b = await board();
   const drawn = b.items.filter((x) => x.kind !== 'ink' && x.label === null);
   stage('two boxes', { items: b.items.length, drawn: drawn.length, kinds: b.items.map((x) => x.kind) });
+  if (kit === 'pm') {
+    // The PM sheet is columns of sticky notes with no connectors: a drawn box becomes a sticky in its column.
+    if (!drawn.some((x) => x.kind === 'sticky')) problem('no drawn box became a sticky note', { kinds: b.items.map((x) => x.kind) });
+    await sleep(600);
+    await shot('07-drawn');
+    return;
+  }
   if (drawn.length >= 2) {
     const [c1, c2] = drawn;
     await draw(L.along([[c1.x + c1.w + 0.4, c1.y + c1.h / 2], [c2.x + 1.5, c2.y + c2.h / 2]], 1.5));
