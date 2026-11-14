@@ -2697,22 +2697,35 @@ async fn an_outage_backs_off_once_then_ends_in_try_again_not_a_hang() {
     let at = llm.main_at.lock().unwrap().clone();
     assert_eq!(at.len(), 2);
     let gap = at[1] - at[0];
-    assert!(gap >= Duration::from_millis(600), "the second call came {gap:?} after the first");
-    assert!(gap < Duration::from_millis(600) + Duration::from_secs(2), "{gap:?}");
+    assert!(
+        gap >= Duration::from_millis(600),
+        "the second call came {gap:?} after the first"
+    );
+    assert!(
+        gap < Duration::from_millis(600) + Duration::from_secs(2),
+        "{gap:?}"
+    );
     assert!(
         took < Duration::from_millis(600) + Duration::from_secs(5),
         "{took:?}"
     );
     // Without the backoff the two calls come straight one after the other (the gap above is the backoff's).
     let id_fast = insert_session(&db, &long_design_input()).await;
-    let fast = ScriptedLlm::new(vec![Err(ClaudeError::Overloaded), Err(ClaudeError::Overloaded)]);
+    let fast = ScriptedLlm::new(vec![
+        Err(ClaudeError::Overloaded),
+        Err(ClaudeError::Overloaded),
+    ]);
     let mut d0 = deps(&db, fast.clone(), &data);
     d0.retry_backoff = Duration::ZERO;
     d0.board_wait = Duration::ZERO;
     assert!(scoring::score_session(&d0, id_fast).await.is_err());
     let at = fast.main_at.lock().unwrap().clone();
     assert_eq!(at.len(), 2);
-    assert!(at[1] - at[0] < Duration::from_millis(400), "{:?}", at[1] - at[0]);
+    assert!(
+        at[1] - at[0] < Duration::from_millis(400),
+        "{:?}",
+        at[1] - at[0]
+    );
     assert_eq!(scoring::attempts_used(&db, id).await.unwrap(), 2);
     // The clear end state: failed, and the socket is told so (the page offers Try again).
     assert_eq!(status(&db, id).await, "failed");

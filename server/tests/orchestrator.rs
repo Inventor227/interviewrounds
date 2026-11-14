@@ -1546,7 +1546,7 @@ async fn directors_show_question_and_hand_over_reach_the_browser_and_the_next_vo
             opening_line: "Over to you again.".into(),
         }]
     );
-    assert!(st.pending_handover.get("p2").is_none());
+    assert!(!st.pending_handover.contains_key("p2"));
     assert_eq!(st.floor, "p2");
 }
 

@@ -1153,7 +1153,7 @@ async fn a_deferred_swap_join_is_silent_and_its_handover_marker_records_the_line
     {
         let st = handle.lock().await;
         assert_eq!(said(&st), 1, "the line is in the shared history once");
-        assert!(st.pending_handover.get("p2").is_none());
+        assert!(!st.pending_handover.contains_key("p2"));
         assert_eq!(st.floor, "p2");
         assert_eq!(st.turns.last().unwrap().speaker, "p2");
     }
