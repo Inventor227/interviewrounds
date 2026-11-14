@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { panelist } from '../voice/testkit';
-import { FADE_IN_S, People, type AvatarLike, type RoomSeat, type Vec3 } from './people';
+import { DETAIL_WAIT_MS, FADE_IN_S, People, type AvatarLike, type RoomSeat, type Vec3 } from './people';
 
 function fakeAvatar() {
   const calls: string[] = [];
@@ -25,11 +25,14 @@ function fakeAvatar() {
   return a satisfies AvatarLike;
 }
 
+/** Lets pending promises (a seat's level of detail) settle. */
+const settled = () => new Promise<void>((r) => setTimeout(r, 0));
+
 const seat = (n: 0 | 1 | 2, x: number): RoomSeat => ({ seat: n, pos: { x, y: 0.02, z: -1.4 }, yaw: 0.1 * n, eye: { x, y: 1.31, z: -1.4 } });
 const HEAD = { x: 0, y: 1.2, z: 0 };
 
 function setup(n = 2) {
-  const panel = [panelist('p1', 0), panelist('p2', 1)].slice(0, n);
+  const panel = [panelist('p1', 0), panelist('p2', 1), panelist('p3', 2)].slice(0, n);
   const avatars = new Map<string, ReturnType<typeof fakeAvatar>>();
   const gates = new Map<string, () => void>();
   const fades: [string, number][] = [];
@@ -88,6 +91,7 @@ describe('people in the room', () => {
     gates.get('p2')!();
     await loading;
     people.place([seat(0, 0), seat(1, -0.75)]);
+    await settled(); // the side seat's simplified body is in
     people.update(FADE_IN_S, HEAD);
     people.update(FADE_IN_S, HEAD);
     // Both in; let each take the time it skipped meanwhile.
@@ -122,6 +126,65 @@ describe('people in the room', () => {
     }
     expect(a1.update).toHaveBeenCalledTimes(4);
     expect(a2.update).toHaveBeenCalledTimes(2);
+  });
+
+  it('a_side_seat_shows_only_once_its_simplified_body_is_in', async () => {
+    // No pop from the full body to the simpler one: the side seat fades in after its level of detail is applied.
+    vi.useFakeTimers();
+    try {
+      const { people, avatars, gates } = setup(2);
+      const loading = people.load();
+      gates.get('p1')!();
+      gates.get('p2')!();
+      await loading;
+      let apply!: () => void;
+      avatars.get('p2')!.setDetail.mockImplementation(() => new Promise<void>((r) => (apply = r)) as unknown as void);
+      people.place([seat(0, 0), seat(1, -0.75)]);
+      await vi.advanceTimersByTimeAsync(0);
+      people.update(0.016, HEAD);
+      expect(avatars.get('p1')!.root.visible).toBe(true); // the lead seat shows at once
+      expect(avatars.get('p2')!.root.visible).toBe(false);
+      apply();
+      await vi.advanceTimersByTimeAsync(0);
+      people.update(0.016, HEAD);
+      expect(avatars.get('p2')!.root.visible).toBe(true);
+
+      // A simplifier that never answers keeps nobody out of the room for long.
+      const late = setup(2);
+      const loading2 = late.people.load();
+      late.gates.get('p1')!();
+      late.gates.get('p2')!();
+      await loading2;
+      late.avatars.get('p2')!.setDetail.mockImplementation(() => new Promise<void>(() => undefined) as unknown as void);
+      late.people.place([seat(0, 0), seat(1, -0.75)]);
+      await vi.advanceTimersByTimeAsync(DETAIL_WAIT_MS - 1);
+      late.people.update(0.016, HEAD);
+      expect(late.avatars.get('p2')!.root.visible).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      late.people.update(0.016, HEAD);
+      expect(late.avatars.get('p2')!.root.visible).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('three_people_with_one_speaking_never_animate_two_listeners_on_one_frame', async () => {
+    const { people, avatars, gates } = setup(3);
+    const loading = people.load();
+    for (const id of ['p1', 'p2', 'p3']) gates.get(id)!();
+    await loading;
+    people.place([seat(0, 0), seat(1, -0.75), seat(2, 0.75)]);
+    await settled();
+    people.update(FADE_IN_S, HEAD);
+    people.update(FADE_IN_S, HEAD);
+    people.port('p2')!.setMode('speaking');
+    const frames: string[][] = [];
+    for (const id of ['p1', 'p3']) avatars.get(id)!.update.mockImplementation(() => void frames.at(-1)!.push(id));
+    for (let i = 0; i < 8; i++) {
+      frames.push([]);
+      people.update(0.01, HEAD);
+    }
+    expect(frames.every((f) => f.length === 1)).toBe(true);
   });
 
   it('the_lead_seat_keeps_full_detail_and_the_others_are_simplified', async () => {
@@ -161,6 +224,7 @@ describe('people in the room', () => {
     const [a1, a2] = [avatars.get('p1')!, avatars.get('p2')!];
     expect(a1.placed!.position.x).toBe(0);
     expect(a2.placed!.position.x).toBe(-0.75);
+    await settled();
 
     people.update(0.016, HEAD);
     expect(a1.looks.at(-1)).toEqual(HEAD);

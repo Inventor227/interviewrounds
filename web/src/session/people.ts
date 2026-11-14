@@ -45,6 +45,8 @@ export const SEAT_DESK_ABOVE_ROOT = 0.74;
 export const FADE_IN_S = 0.5;
 /** A panelist who is not speaking animates every this many frames (half rate); the one speaking, every frame. */
 export const IDLE_FRAME_STRIDE = 2;
+/** Longest wait for a side seat's simplified body before that person fades in anyway (at full detail). */
+export const DETAIL_WAIT_MS = 2000;
 
 export interface PeopleOptions {
   panel: Panelist[];
@@ -68,6 +70,8 @@ interface Person {
   fade: number | null;
   /** Time not yet given to the avatar's animation (it skips frames while not speaking). */
   owed: number;
+  /** The seat's level of detail is applied: the avatar may show (never a full body that pops to a simpler one). */
+  detailReady: boolean;
 }
 
 export class People {
@@ -78,7 +82,7 @@ export class People {
   private loading: Promise<void> | null = null;
 
   constructor(private readonly opts: PeopleOptions) {
-    this.people = opts.panel.map((panelist) => ({ panelist, avatar: null, seat: null, mode: 'idle', voice: null, fade: null, owed: 0 }));
+    this.people = opts.panel.map((panelist) => ({ panelist, avatar: null, seat: null, mode: 'idle', voice: null, fade: null, owed: 0, detailReady: false }));
   }
 
   /** Loads every panelist's avatar. One that fails to load leaves its seat empty; the voice still works. */
@@ -117,9 +121,23 @@ export class People {
 
   private seat(p: Person): void {
     const s = p.seat!;
-    p.avatar!.place({ position: s.pos, yaw: s.yaw, deskY: s.pos.y + SEAT_DESK_ABOVE_ROOT });
-    // The lead seat, straight across, keeps the full body; the side seats are further away.
-    void Promise.resolve(p.avatar!.setDetail?.(s.seat === 0 ? 0 : 1)).catch(() => undefined);
+    const avatar = p.avatar!;
+    avatar.place({ position: s.pos, yaw: s.yaw, deskY: s.pos.y + SEAT_DESK_ABOVE_ROOT });
+    // The lead seat, straight across, keeps the full body; the side seats are further away and get a simplified
+    // one, applied before they first show (bounded, so a slow simplifier never keeps anyone out of the room).
+    const level = s.seat === 0 ? 0 : 1;
+    const applied = Promise.resolve(avatar.setDetail?.(level)).catch(() => undefined);
+    if (level === 0 || !avatar.setDetail || p.fade !== null) {
+      p.detailReady = true;
+      return;
+    }
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const ready = () => {
+      clearTimeout(timer);
+      if (p.avatar === avatar) p.detailReady = true;
+    };
+    timer = setTimeout(ready, DETAIL_WAIT_MS);
+    void applied.then(ready);
   }
 
   /** Every frame: gaze, fade and the avatars' own animation. `head` is the user's head. */
@@ -127,10 +145,12 @@ export class People {
     const speaker = this.people.find((p) => p.mode === 'speaking' && p.seat) ?? null;
     let appeared = false;
     this.frame++;
-    for (const [i, p] of this.people.entries()) {
+    let listeners = 0;
+    for (const p of this.people) {
       const a = p.avatar;
       if (!a || !p.seat) continue;
       if (p.fade === null) {
+        if (!p.detailReady) continue; // the side seat's simpler body is still being made
         p.fade = 0;
         a.root.visible = true;
         this.opts.fade?.(a, 0);
@@ -141,11 +161,12 @@ export class People {
       }
       // A panelist who is not talking looks at the one who is; everyone else looks at the user.
       a.lookAt(speaker && speaker !== p ? speaker.seat!.eye : head);
-      // Lip sync and beats need every frame; a listener's breathing and gaze do not. Staggered by seat, so two
-      // listeners never animate on the same frame.
+      // Lip sync and beats need every frame; a listener's breathing and gaze do not. Staggered by listener, so with
+      // one person speaking the two listeners never animate on the same frame (with nobody speaking, three
+      // listeners at half rate means two of them share frames).
       p.owed += dt;
       const everyFrame = p.mode === 'speaking' || p.fade < 1;
-      if (!everyFrame && (this.frame + i) % IDLE_FRAME_STRIDE !== 0) continue;
+      if (!everyFrame && (this.frame + listeners++) % IDLE_FRAME_STRIDE !== 0) continue;
       a.update(p.owed);
       p.owed = 0;
     }

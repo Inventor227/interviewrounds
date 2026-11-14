@@ -49,14 +49,11 @@ export function morphsAreStill(g: BufferGeometry, eps = 1e-5): boolean {
   return true;
 }
 
-/** Drops the morph targets of a mesh whose shapes never move it. */
-function dropStillMorphs(m: Mesh): boolean {
-  const g = m.geometry;
-  if (!g.morphAttributes.position?.length || !morphsAreStill(g)) return false;
-  g.morphAttributes = {};
+/** Drops the morph targets of a mesh (one whose shapes never move it). */
+function dropMorphs(m: Mesh): void {
+  m.geometry.morphAttributes = {};
   m.morphTargetInfluences = undefined;
   m.morphTargetDictionary = undefined;
-  return true;
 }
 
 /** The bone each vertex follows most. */
@@ -118,10 +115,16 @@ export function slimAvatar(model: Object3D): SlimStats {
   const meshes = meshesOf(model);
   const stats: SlimStats = { morphsDropped: 0, trianglesBefore: 0, trianglesAfter: 0 };
   for (const m of meshes) stats.trianglesBefore += tris(m.geometry);
+  // Each primitive's shapes are scanned once (the body carries every face shape: about a million deltas).
+  const still = new Map<Mesh, boolean>();
+  for (const m of meshes) if (m.geometry.morphAttributes.position?.length) still.set(m, morphsAreStill(m.geometry));
   // Only when some primitive's shapes do move (the face): a model with none moving is left to its owner.
-  const faces = meshes.some((m) => (m.geometry.morphAttributes.position?.length ?? 0) > 0 && !morphsAreStill(m.geometry));
+  const faces = [...still.values()].some((s) => !s);
   for (const m of meshes) {
-    if (faces && dropStillMorphs(m)) stats.morphsDropped++;
+    if (faces && still.get(m) === true) {
+      dropMorphs(m);
+      stats.morphsDropped++;
+    }
     if ((m as SkinnedMesh).isSkinnedMesh && !m.geometry.morphAttributes.position?.length) dropLegs(m as SkinnedMesh);
   }
   for (const m of meshes) stats.trianglesAfter += tris(m.geometry);
@@ -143,6 +146,18 @@ type Simplifier = {
   simplify(indices: Uint32Array, positions: Float32Array, stride: number, target: number, error: number, flags?: string[]): [Uint32Array, number];
 };
 let simplifier: Promise<Simplifier> | null = null;
+
+/**
+ * Loads the simplifier (a lazy chunk and its wasm) ahead of time, so the side seats' simplified bodies are ready
+ * before those people first show. Never rejects.
+ */
+export function warmSimplifier(): Promise<void> {
+  return loadSimplifier().then(
+    () => undefined,
+    () => undefined,
+  );
+}
+
 function loadSimplifier(): Promise<Simplifier> {
   simplifier ??= import('three/examples/jsm/libs/meshopt_simplifier.module.js').then(async (m) => {
     const s: Simplifier = m.MeshoptSimplifier;

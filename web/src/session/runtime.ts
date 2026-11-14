@@ -232,6 +232,8 @@ export function createRoundRuntime({ preview }: RuntimeOptions): RoundController
   async function loadPeople(a: XRApp, res: CreateSessionRes): Promise<void> {
     const [avatars, lip] = await Promise.all([import('../xr/avatar'), import('../xr/avatar/lipsync')]);
     if (disposed) return;
+    // The side seats get a simplified body: its simplifier loads while the avatars do, not when they first show.
+    if (res.panel.length > 1) void avatars.warmSimplifier();
     const fade = makeFader();
     const crowd = new People({
       panel: res.panel,
