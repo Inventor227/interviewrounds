@@ -1,6 +1,7 @@
 // Emulator run for the avatar runtime on /dev/avatar: listening face, mouth frames during the test voice, the
 // thinking look, a beat, pointing, the seated view, and per-avatar update cost. Writes PNGs and stats.json.
-//   Emulator run (see README.md): viewport 640x640.
+//   Emulator run (see README.md): viewport 640x640. Variables: AVATAR_ID (default f01), AVATAR_LIGHT=room (light the
+//   avatar as the passthrough room does).
 
 import { writeFileSync } from 'node:fs';
 import path from 'node:path';
@@ -72,7 +73,7 @@ async function freezeWhen(cond, maxMs = 15000) {
 const unfreeze = () => page(() => globalThis.__avatarDev.freeze(false));
 
 await waitReady();
-await go(`/dev/avatar?id=${ID}&view=face`);
+await go(`/dev/avatar?id=${ID}&view=face${process.env.AVATAR_LIGHT === 'room' ? '&light=room' : ''}`);
 for (let i = 0; ; i++) {
   const s = await status().catch(() => null);
   if (s && s.ready) break;
