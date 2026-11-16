@@ -22,17 +22,17 @@ import { useNow } from './Home';
 
 type Taken = NonNullable<ReturnType<typeof takeLaunch>>;
 
-/** What the page says for each state of the round (plain, one line). */
+/** What the page says for each state of the round: a few words in a status pill. */
 export const STATE_LINE: Record<ControllerState, string> = {
-  idle: 'Getting the room ready.',
-  placing: 'Touch your desk where the sheet should go.',
-  greeting: 'Your interviewer is saying hello.',
-  live: 'Your round is live.',
-  paused: "Paused. Resume when you're ready.",
-  ending: 'Wrapping up.',
-  scoring: 'Writing your scorecard.',
-  summary: 'Your scorecard is ready.',
-  failed: 'The round could not start.',
+  idle: 'Getting the room ready',
+  placing: 'Touch your desk to place the sheet',
+  greeting: 'Your interviewer is saying hello',
+  live: 'Live',
+  paused: 'Paused',
+  ending: 'Wrapping up',
+  scoring: 'Writing your scorecard',
+  summary: 'Your scorecard is ready',
+  failed: 'The round could not start',
 };
 
 /** A card of the room as one line of the page: title, then detail. */
@@ -159,9 +159,31 @@ function BoardCanvas(props: { room: LiveRoom }) {
     return props.room.attachBoardCanvas(c);
   }, [props.room]);
   return (
-    <section class="session-board" aria-label="Your sheet" data-test="session-board">
-      <h2>Your sheet</h2>
-      <p class="meta">Draw a box for a part of the system, or pull a card from the tray. Draw a line from one card to another to connect them.</p>
+    <section class="session-board" aria-labelledby="sheet-title" data-test="session-board">
+      <h2 id="sheet-title" class="sr-only">Your sheet</h2>
+      <ul class="sheet-hints" aria-label="How to draw">
+        <li>
+          <svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true">
+            <rect x="3" y="5" width="14" height="10" rx="2" fill="none" stroke="currentColor" stroke-width="1.8" />
+          </svg>
+          Drag to draw a box
+        </li>
+        <li>
+          <svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true">
+            <rect x="2" y="4" width="10" height="5" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.8" />
+            <path d="M12 6.5h4v9M13.5 13l2.5 2.5 2.5-2.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
+          </svg>
+          Or pull a card from the tray
+        </li>
+        <li>
+          <svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true">
+            <circle cx="4.5" cy="10" r="2.5" fill="none" stroke="currentColor" stroke-width="1.8" />
+            <circle cx="15.5" cy="10" r="2.5" fill="none" stroke="currentColor" stroke-width="1.8" />
+            <path d="M7 10h6" stroke="currentColor" stroke-width="1.8" />
+          </svg>
+          Draw a line between cards to link them
+        </li>
+      </ul>
       <div class="session-board-stage">
         <canvas ref={canvas} style={{ display: 'block', touchAction: 'none' }} />
       </div>
@@ -249,7 +271,7 @@ function LiveSession(props: { launch: Taken }) {
   // Before the first word there is no round to lose and no report to see: offer the start again.
   const neverBegan = failed && !began;
   const lostRound = failed && began;
-  const lede = preview ? 'No headset here, so this is a preview of the room on your screen.' : 'Your round runs in the headset. This page waits for you.';
+  const lede = preview ? 'A preview on your screen. On a Quest, the room is at your desk.' : 'Your round is in the headset.';
   const back = (tap: () => Promise<void>) => {
     setNote('');
     setError(null);
@@ -259,13 +281,14 @@ function LiveSession(props: { launch: Taken }) {
   return (
     <Page test="session" title={props.launch.title ?? session.round.title ?? 'Live round'} lede={lede} wide={preview}>
       {!failed && !lostPaused && !endedPaused && (
-        <p class="note" role="status" data-test="session-state" data-state={state}>
+        <p class={`state-pill${state === 'live' && !card ? ' is-live' : ''}`} role="status" data-test="session-state" data-state={state}>
+          <span class="state-dot" aria-hidden="true" />
           {card ? noticeLine(card) : STATE_LINE[state]}
         </p>
       )}
       {endedPaused && (
         <p class="note" role="status" data-test="ended-paused" data-state={state}>
-          The round ended while paused. Your report is being written.
+          The round ended while paused. Writing your report.
         </p>
       )}
       {retryEnter && (
@@ -305,7 +328,7 @@ function LiveSession(props: { launch: Taken }) {
         <div class="state state-error" role="alert" data-test="session-not-started" data-code={error?.code}>
           <h2>Couldn't start the round</h2>
           <p>
-            Your interviewer did not make it into the room. {controller.started ? 'Try it again.' : 'Nothing was used up. Try it again.'}
+            Your interviewer did not join. {controller.started ? 'Try again.' : 'Nothing was used up. Try again.'}
           </p>
           <div class="row">
             <a class="btn btn-primary" href={startHref({ input: props.launch.input, session })} data-test="try-again">
@@ -320,7 +343,7 @@ function LiveSession(props: { launch: Taken }) {
       {lostRound && (
         <div class="state state-error" role="alert" data-test="session-error" data-code={error?.code}>
           <h2>We lost the round</h2>
-          <p>The connection to your interviewer dropped. What you said so far is saved.</p>
+          <p>The connection dropped. What you said is saved.</p>
           <div class="row">
             <a class="btn btn-primary" href={`/report/${sid}`}>
               See the report
