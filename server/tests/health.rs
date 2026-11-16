@@ -5,8 +5,8 @@ use std::time::Duration;
 use axum::http::{StatusCode, header};
 use ir_server::{AppState, router};
 use serde_json::json;
-use tower::ServiceExt;
 use sqlx::postgres::PgPoolOptions;
+use tower::ServiceExt;
 
 #[tokio::test]
 async fn health_returns_ok_and_db_up() {
@@ -229,7 +229,10 @@ async fn only_the_transcoder_worker_may_eval() {
         assert_eq!(res.status(), StatusCode::OK, "{path}");
         let c = csp(&res);
         assert!(!c.contains("'unsafe-eval'"), "{path}: {c}");
-        assert!(c.contains("script-src 'self' 'wasm-unsafe-eval'"), "{path}: {c}");
+        assert!(
+            c.contains("script-src 'self' 'wasm-unsafe-eval'"),
+            "{path}: {c}"
+        );
     }
 }
 

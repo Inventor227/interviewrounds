@@ -295,7 +295,8 @@ async fn worker_csp(req: Request, next: Next) -> Response {
         .get(header::CONTENT_TYPE)
         .and_then(|v| v.to_str().ok())
         .is_some_and(|t| t.starts_with("text/javascript"));
-    let answered = (res.status().is_success() && script) || res.status() == StatusCode::NOT_MODIFIED;
+    let answered =
+        (res.status().is_success() && script) || res.status() == StatusCode::NOT_MODIFIED;
     if worker && answered {
         res.headers_mut().insert(
             header::CONTENT_SECURITY_POLICY,
