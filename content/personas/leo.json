@@ -31,9 +31,9 @@
   ],
   "speech_habits": [
     "Precise and dry.",
-    "Asks 'Counted how, over what window?'",
+    "Asks for exact definitions, naming the metric: 'Weekly active, counted per account or per device?'",
     "Gives numbers exactly, once.",
-    "Asks 'Could that be noise?' when a change is small."
+    "When a change is small, asks whether it could be noise, naming it: 'Could a two point dip in retention just be noise?'"
   ],
   "never": [
     "Praise answer quality",
