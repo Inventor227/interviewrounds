@@ -1,7 +1,10 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { resetBytes } from '../../net/bytes';
 import { KTX2_WORKER_URL, OwnWorkerKTX2Loader, ktx2WorkerSource } from './ktx2';
+
+const URLS = { js: '/vendor/basis/basis_transcoder.js?v=1', wasm: '/vendor/basis/basis_transcoder.wasm?v=2', worker: KTX2_WORKER_URL };
 
 const BOOT_FILE = path.join(__dirname, '..', '..', '..', 'public', 'vendor', 'basis', 'ktx2_worker.js');
 
@@ -20,6 +23,7 @@ class FakeWorker {
 
 afterEach(() => {
   FakeWorker.made = [];
+  resetBytes();
   vi.unstubAllGlobals();
 });
 
@@ -43,12 +47,12 @@ describe('ktx2', () => {
       vi.fn(async (req: Request | string) => {
         const url = typeof req === 'string' ? req : req.url;
         fetched.push(url);
-        return url.endsWith('.wasm') ? new Response(wasm) : new Response('var BASIS = function () {};');
+        return url.includes('.wasm') ? new Response(wasm) : new Response('var BASIS = function () {};');
       }),
     );
-    const loader = new OwnWorkerKTX2Loader().setTranscoderPath('http://localhost/vendor/basis/');
+    const loader = new OwnWorkerKTX2Loader(URLS);
     await loader.init();
-    expect(fetched.map((u) => u.replace('http://localhost', ''))).toEqual(['/vendor/basis/basis_transcoder.js', '/vendor/basis/basis_transcoder.wasm']);
+    expect(fetched).toEqual([URLS.js, URLS.wasm]);
 
     // The pool makes its workers on demand; make one the way it would.
     const create = (loader.workerPool as unknown as { workerCreator: () => Worker }).workerCreator;
@@ -68,7 +72,7 @@ describe('ktx2', () => {
       'fetch',
       vi.fn(async () => (fail ? new Response('no', { status: 503 }) : new Response('var BASIS;'))),
     );
-    const loader = new OwnWorkerKTX2Loader().setTranscoderPath('http://localhost/vendor/basis/');
+    const loader = new OwnWorkerKTX2Loader(URLS);
     await expect(loader.init()).rejects.toBeTruthy();
     fail = false;
     await expect(loader.init()).resolves.toBeUndefined();

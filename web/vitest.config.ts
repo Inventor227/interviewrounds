@@ -1,5 +1,6 @@
 import preact from '@preact/preset-vite';
 import { defineConfig } from 'vitest/config';
+import { staticVersions } from './staticVersions';
 
 // Tests run without the IWSDK dev plugin: no emulator, no managed browser. The project options that plugin
 // serves as a virtual module are an empty object here.
@@ -10,7 +11,7 @@ const iwsdkProject = {
 };
 
 export default defineConfig({
-  plugins: [preact(), iwsdkProject],
+  plugins: [preact(), iwsdkProject, staticVersions()],
   test: {
     environment: 'jsdom',
     include: ['src/**/*.test.{ts,tsx}'],

@@ -7,8 +7,8 @@
 // /vendor/basis/ktx2_worker.js a policy that allows eval inside that worker only. The page sends the worker the same
 // source three would have put in the blob (its own worker code plus the transcoder), so nothing of three is copied.
 
-import { FileLoader } from 'three';
 import { KTX2Loader } from 'three/examples/jsm/loaders/KTX2Loader.js';
+import { fetchBytes, takeBytes } from '../../net/bytes';
 
 export const KTX2_WORKER_URL = '/vendor/basis/ktx2_worker.js';
 
@@ -38,28 +38,30 @@ export function ktx2WorkerSource(transcoderJs: string): string {
 }
 
 export interface Ktx2Urls {
-  /** basis_transcoder.js, relative to the transcoder path (may carry a version query). */
+  /** basis_transcoder.js and .wasm (full paths; may carry a version query). */
   js: string;
   wasm: string;
   worker: string;
 }
 
 export class OwnWorkerKTX2Loader extends KTX2Loader {
-  constructor(private readonly urls: Ktx2Urls = { js: 'basis_transcoder.js', wasm: 'basis_transcoder.wasm', worker: KTX2_WORKER_URL }) {
+  private readonly urls: Ktx2Urls;
+
+  constructor(urls: Ktx2Urls) {
     super();
+    this.urls = urls;
   }
 
   override init(): Promise<void> {
     if (!this.transcoderPending) {
-      const js = new FileLoader(this.manager).setPath(this.transcoderPath).setWithCredentials(this.withCredentials).loadAsync(this.urls.js);
-      const wasm = new FileLoader(this.manager)
-        .setPath(this.transcoderPath)
-        .setWithCredentials(this.withCredentials)
-        .setResponseType('arraybuffer')
-        .loadAsync(this.urls.wasm);
-      const pending = Promise.all([js, wasm]).then(([jsContent, binary]) => {
-        const source = ktx2WorkerSource(String(jsContent));
-        this.transcoderBinary = binary as ArrayBuffer;
+      // Through the shared byte cache, so a page that fetched them ahead hands them over here.
+      const get = (url: string) => {
+        void fetchBytes(url).catch(() => undefined);
+        return takeBytes(url)!;
+      };
+      const pending = Promise.all([get(this.urls.js), get(this.urls.wasm)]).then(([js, binary]) => {
+        const source = ktx2WorkerSource(new TextDecoder().decode(js));
+        this.transcoderBinary = binary;
         this.workerPool.setWorkerCreator(() => {
           const worker = new Worker(this.urls.worker);
           // The first message is the code to run; three's own 'init' follows, as with its blob worker.

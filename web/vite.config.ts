@@ -1,6 +1,7 @@
 import { iwsdkDev } from '@iwsdk/vite-plugin-dev';
 import preact from '@preact/preset-vite';
 import { defineConfig, searchForWorkspaceRoot, type Plugin } from 'vite';
+import { staticVersions } from './staticVersions';
 
 // The Rust server owns /api, /ws, /v1, /auth and /s. In dev we proxy them so the
 // page stays same-origin, as it is in production.
@@ -28,6 +29,8 @@ export default defineConfig({
     // which this IWSDK version requires as the single source for them.
     iwsdkDev(),
     sharePreact(),
+    // Content versions of the avatars and the transcoder (`virtual:ir-static`).
+    staticVersions(),
   ],
   server: {
     host: '0.0.0.0',
