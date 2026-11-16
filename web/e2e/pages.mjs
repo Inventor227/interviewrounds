@@ -22,7 +22,7 @@ const launch = (status) => `await frame.waitForSelector('[data-launch="${status}
 
 const SHOTS = [
   { name: 'home', path: '/' },
-  { name: 'home-first-visit', path: '/', fake: 'first', act: tap('how-toggle') },
+  { name: 'home-first-visit', path: '/', fake: 'first' },
   { name: 'home-resume', path: '/', fake: 'resume' },
   { name: 'home-capped', path: '/', fake: 'capped' },
   { name: 'pick-role', path: '/start' },
