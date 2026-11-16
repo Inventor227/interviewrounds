@@ -21,7 +21,7 @@
         "two pointers",
         "sorting"
       ],
-      "prompt": "A courier bike can carry at most two packages per trip, and their combined weight can't go over a limit W. Given the package weights, what's the fewest trips needed to deliver all of them?",
+      "prompt": "A courier bike can carry at most two packages per trip, and their combined weight can't go over a limit W. Given the package weights, find the fewest trips needed to deliver all of them.",
       "brief_lines": [
         "Packages have weights",
         "At most two packages per trip",
