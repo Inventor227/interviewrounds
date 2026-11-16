@@ -171,6 +171,10 @@ pub struct OrchestratorOptions {
     /// Replies to speech wait for the voice platform to confirm them before they enter the history (speculative
     /// drafts are often thrown away). Off only in tests of the commit itself.
     pub confirm_speech_turns: bool,
+    /// Interviews: the opener is written when the session is created, while the user enters the room and places
+    /// the desk, so `[event: start]` is answered with no model call. On in the server, off in tests that script
+    /// every model call.
+    pub prepare_opener: bool,
 }
 
 impl Default for OrchestratorOptions {
@@ -182,6 +186,7 @@ impl Default for OrchestratorOptions {
             turn_deadline: Duration::from_millis(8500),
             hold_line: "Sorry, give me a second.".into(),
             confirm_speech_turns: true,
+            prepare_opener: false,
         }
     }
 }

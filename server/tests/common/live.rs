@@ -41,6 +41,8 @@ pub struct FakeLlm {
     pub creates: Mutex<Vec<MessagesRequest>>,
     /// Models that are overloaded: every call to them fails (prewarms too).
     pub down: Mutex<Vec<String>>,
+    /// The line a non-streamed live call (no tools, no schema) answers with: the opener written ahead.
+    pub opener: Mutex<Option<String>>,
 }
 
 impl FakeLlm {
@@ -118,6 +120,11 @@ impl LlmApi for FakeLlm {
                 .unwrap_or_else(|| r#"{"ops": [], "confidence": 0}"#.into())
                 .replace("{prefix}", &prefix);
             return Ok(created(&req.model, json!([{"type": "text", "text": text}])));
+        }
+        if req.tools.is_empty()
+            && let Some(line) = self.opener.lock().unwrap().clone()
+        {
+            return Ok(created(&req.model, json!([{"type": "text", "text": line}])));
         }
         if !req.tools.is_empty() {
             let blocks = self

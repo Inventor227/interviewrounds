@@ -70,7 +70,12 @@ async fn serve() -> anyhow::Result<()> {
     );
     let pool = connect_with_retry(&config).await?;
     let port = config.port;
-    let state = AppState::new(pool, config).with_catalog(catalog);
+    let state = AppState::new(pool, config)
+        .with_catalog(catalog)
+        .with_orchestrator_options(ir_server::orchestrator::OrchestratorOptions {
+            prepare_opener: true,
+            ..Default::default()
+        });
     // Rounds left open by the previous process: those offline past the resume window end now. Their Fish
     // settlement runs in the background (the janitor's first run starts at once).
     if let Err(err) = persist::sweep_stale(&state).await {

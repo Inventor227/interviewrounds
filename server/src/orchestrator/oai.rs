@@ -518,13 +518,19 @@ fn turn_stream(
             let spoken = format!("{}{}", filter.push(&line), filter.finish());
             if !spoken.trim().is_empty() {
                 // Only the marker goes into the history; notes wait for this panelist's next real turn.
+                let full_draft = draft.clone();
                 let mut draft = draft.clone();
                 draft.messages.truncate(1);
                 draft.notes_used = 0;
                 draft.warned_two_minutes = false;
-                {
+                let jobs = {
                     let mut st = session.lock().await;
                     let id = st.new_turn_id();
+                    // An interview's opener written ahead (`prepare_opener`) was the model's own line: its actions
+                    // (the question card) run as for any opener the model says live.
+                    let written_ahead = matches!(input, UserInput::Event(EventKind::Start))
+                        && std::mem::take(&mut st.opener_written_ahead);
+                    let director_req = written_ahead.then(|| director::build_request(&st, &panelist, &full_draft, &spoken, &live.fast_model));
                     st.commit_now(
                         id,
                         TurnCommit {
@@ -536,7 +542,15 @@ fn turn_stream(
                         },
                         Instant::now(),
                     );
-                }
+                    match director_req {
+                        Some(req) => {
+                            st.director_jobs.push(DirectorJob { turn_id: id, panelist_id: panelist.clone(), req });
+                            st.take_director_jobs()
+                        }
+                        None => Vec::new(),
+                    }
+                };
+                spawn_directors(&app, &session, &session_id, jobs);
                 guard.done = true;
                 // A hand-over line asked for with the marker: the browser has switched voices. The outgoing voice is
                 // ended here too if the browser has not ended it within the grace.

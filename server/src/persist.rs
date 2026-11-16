@@ -566,7 +566,7 @@ pub async fn end_session(app: &AppState, id: Uuid, reason: &str) -> anyhow::Resu
         Some(h) => Some(h.lock().await),
         None => None,
     };
-    let (spoke, paused_ms) = match guard.as_deref_mut() {
+    let (spoke, paused_ms, goodbye) = match guard.as_deref_mut() {
         Some(st) => {
             let now = Instant::now();
             crate::ws::Playback::settle_unplayed(st, fish_last.as_deref(), now);
@@ -575,6 +575,8 @@ pub async fn end_session(app: &AppState, id: Uuid, reason: &str) -> anyhow::Resu
             (
                 st.turns.iter().any(|t| t.speaker == "candidate"),
                 st.paused_total_ms as i64,
+                // The app's own timed close, or an end_round the director has already applied.
+                st.closing_line.is_some(),
             )
         }
         None => {
@@ -584,7 +586,7 @@ pub async fn end_session(app: &AppState, id: Uuid, reason: &str) -> anyhow::Resu
             .bind(id)
             .fetch_one(&app.db)
             .await?;
-            (spoke, 0)
+            (spoke, 0, false)
         }
     };
     let status = if spoke { "scoring" } else { "abandoned" };
@@ -614,13 +616,27 @@ pub async fn end_session(app: &AppState, id: Uuid, reason: &str) -> anyhow::Resu
     if spoke {
         app.scoring_kick.notify_one();
     }
+    // The closing line answering the user's end is said before the director marks it.
+    let goodbye = goodbye
+        || match app.hubs.get(&key) {
+            Some(hub) => hub.goodbye_said().await,
+            None => false,
+        };
     // The socket stays open through scoring (report.progress / report.ready); the hub closes itself after.
     if let Some(hub) = app.hubs.get(&key) {
         hub.finish(app, reason, spoke).await;
     }
     app.registry.remove(&key);
     let app = app.clone();
+    // The round ends soon after the goodbye's text, while the voice is still saying it: the browser stops the voice
+    // when the line has played. Ending the voices here as well waits for that, so the goodbye is never cut short.
+    let wait = if goodbye {
+        app.timing.goodbye_voice_grace
+    } else {
+        Duration::ZERO
+    };
     tokio::spawn(async move {
+        tokio::time::sleep(wait).await;
         if let Err(err) = settle_fish(&app, id).await {
             tracing::warn!(session_id = %id, error = %format!("{err:#}"), "could not settle Fish minutes; the janitor retries");
         }
