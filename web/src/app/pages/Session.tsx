@@ -389,7 +389,7 @@ function BareRoom(props: { id?: string }) {
   }, []);
 
   return (
-    <Page test="session" title="Live round" lede="This round is not running on this page. Start a new one from home, or look around the room.">
+    <Page test="session" title="Live round" lede="This round is not running here. Start one from home, or look around.">
       <p class="meta">
         Session <code>{props.id}</code>
       </p>
