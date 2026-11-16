@@ -42,6 +42,17 @@ const SHOTS = [
       tap('mic-allow') +
       launch('failed'),
   },
+  {
+    name: 'session-preview',
+    path: '/round/sde.system_design.short',
+    act:
+      micOn +
+      tap('mic-allow') +
+      launch('ready') +
+      `await frame.click('[data-test="start-preview"]');
+      await frame.waitForSelector('[data-test="page-session"]', { timeout: 20000 });
+      await page.waitForTimeout(6000);`,
+  },
   { name: 'resume', path: '/resume/s_resume', fake: 'resume' },
   { name: 'start-mic-denied', path: '/round/sde.system_design.short', act: micFails('NotAllowedError') + tap('mic-allow') },
   { name: 'start-no-mic', path: '/round/sde.system_design.short', act: micFails('NotFoundError') + tap('mic-allow') },
