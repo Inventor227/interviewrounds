@@ -28,6 +28,7 @@ describe('Report', () => {
     expect($(root, 'top-strength')!.textContent).toContain(r.strengths[0]!.title);
     expect($(root, 'top-fix')!.textContent).toContain(r.weaknesses[0]!.title);
     expect($$(root, 'retry-answer')).toHaveLength(1);
+    expect($(root, 'top-strength')!.querySelector('[data-test="quote"]')).not.toBeNull();
     expect(root.querySelector('.bar-why')).toBeNull();
     for (const name of ['strengths', 'weaknesses', 'weakest', 'drills', 'delivery']) {
       const el = $(root, `report-section-${name}`) as HTMLDetailsElement;
@@ -75,6 +76,9 @@ describe('Report', () => {
   it('report_shows_the_retries_line', async () => {
     useFakeServer();
     const root = await renderApp('/report/demo');
+    // At the top, next to Retry, not folded away with the weakest moment.
+    expect($(root, 'retries')!.closest('[data-test="highlights"]')).not.toBeNull();
+    expect($$(root, 'retries')).toHaveLength(1);
     const rows = $(root, 'retries')!.querySelectorAll('li');
     expect(rows).toHaveLength(1);
     expect(rows[0]!.querySelector('.retry-scores')?.textContent).toMatch(/^2\s*→\s*to\s*3$/);

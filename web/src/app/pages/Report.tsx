@@ -10,7 +10,7 @@ import type { Catalog, Delivery, Evidence, MeetingDetails, NextDrill, Report as 
 import { Bars } from '../components/Bars';
 import { loadCatalog, persona, toApiError, useAsync } from '../components/data';
 import { clock, LEVEL_NAMES, longDate, pct, plural } from '../components/format';
-import { QuoteRow, type Player } from '../components/QuoteRow';
+import { Quote, QuoteRow, type Player } from '../components/QuoteRow';
 import { Disclosure, ErrorState, Loading, Page } from '../components/Ui';
 import { MeetingOutcome, Verdict } from '../components/Verdict';
 import { fakeReady } from '../fake/mode';
@@ -253,20 +253,26 @@ function Weakest(props: { r: ReportData }) {
           <p class="model">{w.model_answer}</p>
         </div>
       </div>
-      {w.retries && w.retries.length > 0 && (
-        <ul class="retries" data-test="retries">
-          {w.retries.map((x) => (
-            <li key={x.session_id}>
-              <span class="retry-scores num">
-                {x.before_score ?? '?'} <span aria-hidden="true">→</span>
-                <span class="sr-only">to</span> {x.after_score ?? '?'}
-              </span>
-              <span>{x.note}</span>
-            </li>
-          ))}
-        </ul>
-      )}
     </div>
+  );
+}
+
+/** Before and after of each retry of the weakest answer. */
+function Retries(props: { w: NonNullable<ReportData['weakest_moment']> }) {
+  const list = props.w.retries;
+  if (!list || list.length === 0) return null;
+  return (
+    <ul class="retries" data-test="retries">
+      {list.map((x) => (
+        <li key={x.session_id}>
+          <span class="retry-scores num">
+            {x.before_score ?? '?'} <span aria-hidden="true">→</span>
+            <span class="sr-only">to</span> {x.after_score ?? '?'}
+          </span>
+          <span>{x.note}</span>
+        </li>
+      ))}
+    </ul>
   );
 }
 
@@ -576,8 +582,15 @@ function Share(props: { r: ReportData }) {
 }
 
 /** The top of the report in one look: the best thing, the one fix, and the next step. */
-function Highlights(props: { r: ReportData; meeting: boolean }) {
-  const { r, meeting } = props;
+function Highlights(props: { r: ReportData; meeting: boolean; player: Player | null }) {
+  const { r, meeting, player } = props;
+  // The first quote behind a point: the report quotes you from the top.
+  const quoteOf = (p: ReportData['strengths'][number] | undefined) => {
+    const id = p?.evidence_ids[0];
+    return id ? r.evidence.find((e) => e.id === id) : undefined;
+  };
+  const gq = quoteOf(r.strengths[0]);
+  const fq = quoteOf(r.weaknesses[0]);
   const good = r.strengths[0];
   const fix = r.weaknesses[0];
   const retry = canRetry(r);
@@ -594,6 +607,7 @@ function Highlights(props: { r: ReportData; meeting: boolean }) {
               </p>
               <p class="hl-title">{good.title}</p>
               <p class="hl-detail">{good.detail}</p>
+              {gq && <Quote q={gq} player={player} />}
             </div>
           )}
           {fix && (
@@ -603,10 +617,12 @@ function Highlights(props: { r: ReportData; meeting: boolean }) {
               </p>
               <p class="hl-title">{fix.title}</p>
               <p class="hl-detail">{fix.detail}</p>
+              {fq && <Quote q={fq} player={player} />}
             </div>
           )}
         </div>
       )}
+      {r.weakest_moment && <Retries w={r.weakest_moment} />}
       <div class="row hl-next">
         {retry ? (
           <>
@@ -689,7 +705,7 @@ function ReportBody(props: { r: ReportData }) {
 
         {r.headline.verdict || md ? (
           <Section name="highlights" title="In short" hideTitle>
-            <Highlights r={r} meeting={meeting} />
+            <Highlights r={r} meeting={meeting} player={player} />
           </Section>
         ) : null}
 
