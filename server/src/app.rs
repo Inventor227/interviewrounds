@@ -25,6 +25,7 @@ use crate::error::AppError;
 use crate::fish::FishClient;
 use crate::orchestrator::{LlmApi, OrchestratorOptions, Registry, SessionAuth, oai};
 use crate::persist::DbSessionAuth;
+use crate::static_files;
 use crate::usage::MeteredLlm;
 use crate::ws::{self, Hubs, SessionTiming};
 
@@ -133,7 +134,10 @@ pub fn router(state: AppState) -> Router {
     // Unknown paths fall back to index.html (status 200) so client routes work on reload.
     let static_files = Router::new()
         .fallback_service(ServeDir::new(&public_dir).fallback(ServeFile::new(index)))
-        .layer(middleware::from_fn(static_cache_headers))
+        .layer(middleware::from_fn_with_state(
+            Arc::new(public_dir.clone()),
+            static_cache_headers,
+        ))
         .layer(middleware::from_fn(worker_csp));
 
     Router::new()
@@ -294,12 +298,30 @@ async fn worker_csp(req: Request, next: Next) -> Response {
     res
 }
 
-/// Everything else (index.html and the web app routes) revalidates.
-async fn static_cache_headers(req: Request, next: Next) -> Response {
+/// A public file asked for with its own content version (`?v=`, see `static_files`) is cached for a year. Everything
+/// else (index.html, the web app routes, a file asked for with another build's version) revalidates.
+async fn static_cache_headers(
+    State(root): State<Arc<std::path::PathBuf>>,
+    req: Request,
+    next: Next,
+) -> Response {
+    let wanted = static_files::version_param(req.uri().query())
+        .map(|v| (req.uri().path().to_string(), v.to_string()));
     let mut res = next.run(req).await;
     if res.status().is_success() || res.status() == StatusCode::NOT_MODIFIED {
+        let current = match &wanted {
+            Some((path, v)) => static_files::file_version(&root, path)
+                .await
+                .is_some_and(|have| have == *v),
+            None => false,
+        };
+        let value = if current {
+            "public, max-age=31536000, immutable"
+        } else {
+            "no-cache"
+        };
         res.headers_mut()
-            .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
+            .insert(header::CACHE_CONTROL, HeaderValue::from_static(value));
     }
     res
 }

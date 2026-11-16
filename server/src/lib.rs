@@ -18,6 +18,7 @@ pub mod persist;
 pub mod retry;
 pub mod scoring;
 pub mod scribe;
+pub mod static_files;
 pub mod usage;
 pub mod ws;
 

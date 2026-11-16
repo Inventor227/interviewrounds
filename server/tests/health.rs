@@ -131,6 +131,57 @@ async fn missing_assets_are_404_not_the_web_app() {
 }
 
 #[tokio::test]
+async fn public_files_are_kept_a_year_only_under_their_own_version() {
+    let public = common::temp_dir("public");
+    std::fs::write(
+        public.join("index.html"),
+        "<!doctype html><title>IR</title>",
+    )
+    .unwrap();
+    std::fs::create_dir_all(public.join("avatars")).unwrap();
+    std::fs::write(public.join("avatars/m02.glb"), b"model bytes v1").unwrap();
+    let app = common::app_with_public(&public).await;
+    let cc = |res: &axum::response::Response| {
+        res.headers()
+            .get(header::CACHE_CONTROL)
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string()
+    };
+    let v1 = ir_server::static_files::version_of(b"model bytes v1");
+    let year = "public, max-age=31536000, immutable";
+
+    let res = common::get(app.clone(), &format!("/avatars/m02.glb?v={v1}")).await;
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(cc(&res), year);
+    assert_eq!(common::body_bytes(res).await, b"model bytes v1");
+
+    // No version, or one that is not this file's (a page from another build), revalidates.
+    let res = common::get(app.clone(), "/avatars/m02.glb").await;
+    assert_eq!(cc(&res), "no-cache");
+    let res = common::get(app.clone(), "/avatars/m02.glb?v=0123456789abcdef").await;
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(cc(&res), "no-cache");
+
+    // A deploy changes the file: the old version is no longer kept, the new one is.
+    std::fs::write(public.join("avatars/m02.glb"), b"model bytes, version two").unwrap();
+    let v2 = ir_server::static_files::version_of(b"model bytes, version two");
+    let res = common::get(app.clone(), &format!("/avatars/m02.glb?v={v1}")).await;
+    assert_eq!(cc(&res), "no-cache");
+    assert_eq!(common::body_bytes(res).await, b"model bytes, version two");
+    let res = common::get(app.clone(), &format!("/avatars/m02.glb?v={v2}")).await;
+    assert_eq!(cc(&res), year);
+
+    // A missing file falls back to the web app, which is never kept.
+    let res = common::get(app.clone(), &format!("/avatars/m99.glb?v={v1}")).await;
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(cc(&res), "no-cache");
+    let res = common::get(app, &format!("/?v={v1}")).await;
+    assert_eq!(cc(&res), "no-cache");
+}
+
+#[tokio::test]
 async fn only_the_transcoder_worker_may_eval() {
     let public = common::temp_dir("public");
     std::fs::write(
