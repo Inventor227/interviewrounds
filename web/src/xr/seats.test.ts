@@ -56,7 +56,7 @@ describe('seatLayout', () => {
         expect(p.y).toBe(desk.deskY);
         // Between the user and the panelist, and its centre on the slab (short of its far edge).
         expect(along(p)).toBeLessThan(along(s.pos));
-        expect(along(p)).toBeLessThan(SLAB_FAR - 0.1);
+        expect(along(p)).toBeLessThan(SLAB_FAR - 0.05);
         expect(along(p)).toBeGreaterThan(SLAB_FAR - 0.6);
       }
     }

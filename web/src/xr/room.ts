@@ -154,7 +154,7 @@ export class Room {
       o.position.set(p.x, desk.deskY, p.z);
       o.rotation.y = s.yaw;
       const e = this.world.createTransformEntity(o, this.rootEntity);
-      e.addComponent(ContactShadow, { size: [0.7, 0.3], opacity: 0.5, color: ARM_SHADOW_COLOR, height: 0.0015 });
+      e.addComponent(ContactShadow, { size: [0.66, 0.24], opacity: 0.45, color: ARM_SHADOW_COLOR, height: 0.0015 });
       this.shadows.push(e);
     }
 

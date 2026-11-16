@@ -81,7 +81,7 @@ export interface SlabFrame {
  * Where the soft shadow under a panelist's forearms lies on the table top: in front of the avatar's root toward the
  * user, past the avatar's own table edge (AVATAR_TO_TABLE_EDGE), where the clasped hands rest.
  */
-export const ARM_SHADOW_AHEAD = 0.38;
+export const ARM_SHADOW_AHEAD = 0.3;
 
 export function armShadowPoint(seat: Pick<SeatPose, 'pos' | 'yaw'>, deskY: number): Vec3 {
   // The avatar's front (local +Z turned by yaw) points at the user.
