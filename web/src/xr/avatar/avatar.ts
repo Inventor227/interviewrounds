@@ -30,6 +30,7 @@ import { Blinker } from './blink';
 import { DEG, GazeController, anglesTo, dirFromAngles, gazeTarget, type Angles } from './gaze';
 import { LipSync, type LipSyncEngine } from './lipsync';
 import { configureAvatarLoader, loadAvatarGltf, loadClips } from './loader';
+import { dressAvatar } from './look';
 import { FACE_KEYS, faceFor } from './moods';
 import { Rig } from './rig';
 import { BodyDetail, bodyMesh, slimAvatar, type SlimStats } from './slim';
@@ -199,6 +200,7 @@ export class Avatar {
       // Skinned bounds come from the bind pose; seated poses can leave them, so never cull.
       o.frustumCulled = false;
     });
+    dressAvatar(model);
     this.rig = new Rig(this.root, model, entry);
     // Before the morph weights are shared: the body keeps none once its still shapes are gone.
     this.slim = opts.seated === false ? null : slimAvatar(model);
