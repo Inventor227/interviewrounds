@@ -1,22 +1,130 @@
-# Interview Rounds
+<p align="center">
+  <a href="<VIDEO_URL>"><img src="docs/images/hero.jpg" width="100%" alt="An interviewer sits across your desk in a system design round, with the question card and the sheet you draw on (emulator capture, simulated room); click to watch the demo video"></a>
+</p>
 
-Rehearse job interviews and real meetings out loud, with people sitting across your own desk, on Meta Quest.
-After each round you get a scorecard that quotes what you said and tells you what to practise next.
+<h1 align="center">Interview Rounds</h1>
 
-**Try it:** https://rounds.dijmo.com. Open it in the Quest Browser on a Quest 3 or 3S. No sign-in and nothing to
-install. On a computer or phone the same link runs a 2D preview of the round with the same interviewer and voice.
+<p align="center">
+  <b>Practice interviews and real meetings out loud, with people across your own desk.</b><br>
+  Draw on your desk with a pinch, and get a scorecard that quotes your own words.
+</p>
 
-**Device testing:** built and tested in Meta's IWSDK emulator (Quest 3 profile) against the hosted server; not yet
-checked on a headset.
-<!-- DEVICE-CHECK: filled after the Nov 16 Quest test -->
+<p align="center"><sub>Meta VR Start Developer Competition 2026 · Productivity track · New</sub></p>
 
-Made by Mohammad Ibrahim for the Meta VR Start Developer Competition 2026 (Productivity track).
+<p align="center">
+  <a href="https://rounds.dijmo.com"><img alt="Try it in the Quest Browser" src="https://img.shields.io/badge/Try%20it-rounds.dijmo.com-1f4e79?style=for-the-badge"></a>
+  <a href="<VIDEO_URL>"><img alt="Watch the demo video" src="https://img.shields.io/badge/Demo-video-c4302b?style=for-the-badge&logo=youtube&logoColor=white"></a>
+</p>
+
+<p align="center">
+  <img alt="Meta Quest 3 and 3S" src="https://img.shields.io/badge/Meta%20Quest-3%20%C2%B7%203S-3b3936?style=flat-square">
+  <img alt="WebXR passthrough" src="https://img.shields.io/badge/WebXR-passthrough-3b3936?style=flat-square">
+  <img alt="Hand tracking first" src="https://img.shields.io/badge/hand%20tracking-first-3b3936?style=flat-square">
+  <img alt="Built with IWSDK, three.js, Rust" src="https://img.shields.io/badge/built%20with-IWSDK%20%C2%B7%20three.js%20%C2%B7%20Rust-3b3936?style=flat-square">
+  <img alt="Over 1,300 automated tests" src="https://img.shields.io/badge/tests-1%2C300%2B-3b3936?style=flat-square">
+</p>
+
+**Interview Rounds is a seated, hands-first practice room for Meta Quest.** In passthrough, an interviewer sits across
+your real desk, meets your eyes and asks a real question by voice. You answer out loud, and they follow up on what you
+actually said. In design rounds you pinch and draw on a sheet lying on your desk; the interviewer reads it, asks about
+it and points at it. In a meeting rehearsal each attendee has their own stance and concerns and questions you on your
+words. When the round ends you get a scorecard that quotes you, and a 2 minute retry of your weakest answer, scored
+before and after.
+
+### At a glance
+
+- **Try it:** [rounds.dijmo.com](https://rounds.dijmo.com) in the Quest Browser on a Quest 3 or 3S; no install, no
+  sign-in; on a computer or phone the same link runs a 2D preview with the same interviewer and voice
+- **Rounds:** software engineer (system design, coding, object design, behavioral), product manager (product sense,
+  metrics and execution, leadership), and meeting rehearsal (six templates or a meeting you describe); quick rounds
+  take 6 to 8 minutes, full rounds 20 to 30
+- **People:** eight interviewers and attendees, each with their own voice, seated across your desk with gaze, blinks,
+  nods and lip sync
+- **Input:** hands first, pinch and draw on your real desk; controllers do everything hands do
+- **Agents:** voice agents that hear you, read your board, point at it and hand the floor to each other, and a Scribe
+  that turns your speech into board suggestions
+- **The scorecard:** a verdict set by a fixed rule, four competencies, your own words with their times, how you
+  sounded, and a scored retry
+- **Coming back:** history, a streak, a skill chart and "vs last time" arrows, kept per headset with no account
+- **Stack:** WebXR on Meta's Immersive Web SDK (IWSDK) and three.js, a Rust server, Fish Audio voice agents, Claude
+  models through the Anthropic API
+
+<!-- DEVICE-CHECK: replace the next paragraph with the [DEVICE A] text if the Quest test happens. -->
+**Device testing:** built and tested in Meta's IWER emulator (Quest 3 profile) against the hosted server: whole rounds
+of every type with hands and with controllers, pause and resume, and test rounds with the real voices. It has not yet
+been run on a physical headset.
+
+Made by Mohammad Ibrahim.
+
+### How it fits the judging criteria
+
+| Criterion | Interview Rounds |
+|---|---|
+| Innovation and creativity | Life-size people across your real desk who follow up on your own words; a board you draw by hand that the interviewer reads and points at; meeting rehearsal with hidden stances ([What a round is](#what-a-round-is)) |
+| Experience design | Seated and hands first; passthrough on purpose, because your desk is the board; one button to a live question in about a minute; onboarding by doing; every state has a card with a next step ([The first five minutes](#the-first-five-minutes)) |
+| Technical implementation | A Rust server that owns the conversation, a director call that turns speech into actions, a fallback model then a calm hold, reconnect with replay, filtered hand input, 72 Hz with a 90 Hz raise ([How it is built](#how-it-is-built)) |
+| Polish and presentation | A distinct voice per person, avatars that blink and nod with the talk, dark glass panels, quiet sounds on every press, and a report that reads like a real debrief ([Features](#features)) |
+
+## Screenshots
+
+<table>
+  <tr>
+    <td width="33%"><img src="docs/images/shots/01-across-your-desk.jpg" alt="The interviewer seated across the desk, with the question card"><br><sub><b>People across your own desk</b></sub></td>
+    <td width="33%"><img src="docs/images/shots/02-pinch-and-draw.jpg" alt="A hand pinches and draws a connection between two cards on the sheet"><br><sub><b>Pinch and draw on your desk</b></sub></td>
+    <td width="33%"><img src="docs/images/shots/03-points-at-your-board.jpg" alt="The interviewer points at a card on the sheet"><br><sub><b>The interviewer reads your board</b></sub></td>
+  </tr>
+  <tr>
+    <td width="33%"><img src="docs/images/shots/04-meeting.jpg" alt="Three attendees across the table in a meeting rehearsal"><br><sub><b>Rehearse a real meeting</b></sub></td>
+    <td width="33%"><img src="docs/images/shots/05-scorecard.jpg" alt="The scorecard in the headset with Retry this answer and See full report"><br><sub><b>A scorecard in the headset</b></sub></td>
+    <td width="33%"><img src="docs/images/shots/06-report.jpg" alt="The report quotes the candidate's words with the time they said them"><br><sub><b>A report that quotes you</b></sub></td>
+  </tr>
+</table>
+
+<sub>Emulator captures of the app itself; the room shots use a photographed room in place of passthrough. Click the
+picture at the top for the demo video.</sub>
+
+<details>
+<summary><b>Contents</b></summary>
+
+- [Play it in two minutes](#play-it-in-two-minutes)
+- [What a round is](#what-a-round-is)
+- [The first five minutes](#the-first-five-minutes)
+- [Features](#features)
+- [Comfort and accessibility](#comfort-and-accessibility)
+- [Controls](#controls)
+- [Meta Quest capabilities used](#meta-quest-capabilities-used)
+- [How it is built](#how-it-is-built)
+- [Testing](#testing)
+- [Frame rate, speed and measurements](#frame-rate-speed-and-measurements)
+- [Built for real life: the edge cases it handles](#built-for-real-life-the-edge-cases-it-handles)
+- [Challenges and what we learned](#challenges-and-what-we-learned)
+- [Roadmap](#roadmap)
+- [Run it locally](#run-it-locally), [Repository layout](#repository-layout)
+- [Privacy](#privacy), [Licences and credits](#licences-and-credits)
+
+</details>
+
+## Play it in two minutes
+
+1. Use a Quest 3 or 3S and the Quest Browser. Sit at a desk or table. A quiet room helps: the interviewer hears
+   everything the microphone hears.
+2. Open [rounds.dijmo.com](https://rounds.dijmo.com) and tap **Start a quick round** (system design, 8 minutes).
+3. Allow the microphone when the browser asks, then tap **Enter the room**.
+4. Touch your desk with one finger where the sheet should go and hold still for a moment. With a controller, rest its
+   tip on the desk and pull the trigger. No desk? After a few seconds the app sets one up.
+5. First round only: a looping hand shows "Pinch and draw a box". Draw one, or press **Skip**.
+6. The interviewer greets you and asks the question. Answer out loud, and draw on the sheet as you would on paper.
+   Say "call that the booking service" to name the card you just drew.
+7. Hold **End** on the round bar when you are done, or let the clock run out. The scorecard appears in the headset.
+
+Other rounds and the meeting rehearsal are on the home page (**Choose another round**, **Rehearse a real meeting**).
+On a computer or phone the same link runs a 2D preview round.
 
 ## What a round is
 
 You pick a round, put on the headset and sit at your desk. Passthrough keeps your real room. You touch the desk once
-and the interviewer sits down across from you, looks at you and greets you by voice. You answer out loud. The
-interviewer follows up on what you actually said.
+and the interviewer sits down across from you, looks at you and greets you by voice with the problem. You answer out
+loud. The interviewer follows up on what you actually said, moves the round through its phases and keeps time.
 
 | Track | Rounds |
 |---|---|
@@ -26,31 +134,56 @@ interviewer follows up on what you actually said.
 
 Quick rounds take 6 to 8 minutes with one interviewer. Full rounds take 20 to 30 minutes, and some bring in a second
 interviewer. For a meeting rehearsal you pick a template (its attendees come filled in) or describe your own meeting:
-who is in the room, what they care about and what you want. The attendees then question you on what you say and
-pass the floor between them.
+who is in the room, what they care about and what you want. The app prepares the room, and the attendees question you
+on what you say and pass the floor between them.
 
-**Hands do the work.** In board rounds a sheet lies on your desk:
+## The first five minutes
+
+- **One button.** The home page has one main button, **Start a quick round**. It asks for the microphone on the page,
+  so the headset view never stops for a prompt.
+- **Two taps to the room.** Allow the microphone, then **Enter the room**. The interviewer's opening line is written
+  while you walk in.
+- **One touch to place.** A ring follows your fingertip; rest it on the desk and the sheet lands there. With no desk,
+  the app sets one up after 6 seconds and says "No desk? We set one up for you."
+- **Learn by doing.** On the first round a looping hand shows the one gesture, "Pinch and draw a box". Your first box
+  starts the round; **Skip** is always there.
+- **A live question in about a minute** from opening the link, and a scorecard within ten minutes from a quick round.
+
+## Features
+
+### People across your real desk
+
+The interviewers are life-size, seated people in your real room. They meet your eyes and follow your head, breathe,
+blink and nod with the conversation, and speak with lip sync from their voice. While they think, they show it. In a
+panel or a meeting, two or three people sit across the table and turn to whoever is speaking. Captions name who is
+speaking.
+
+### Your desk is the whiteboard
+
+In board rounds a sheet lies on your desk:
 
 - Pinch and draw, or pull a controller's trigger. A rough box becomes a card, a line from one card to another becomes
   a connection, a circle becomes a client. Anything else stays as ink.
-- Say "call that the booking service" to name the card you just drew or touched.
+- Say "call that the booking service" to name the card you just drew or touched. A drawn box named "seat table" becomes
+  a database card.
 - A tray of cards sits beside the sheet. Coding has a code panel, product rounds use sticky notes, object design uses
   class cards.
 - While you talk, a Scribe suggests board changes as faint cards. Pinch one to keep it; untouched, it settles after
   4 seconds.
 - The interviewer reads the board, asks about what is on it, and can point at a card.
 
-Hands and controllers both work, and you can switch at any time. Controllers draw by touching the sheet or from a
-distance with a ray and a cursor dot. Buttons take a poke, a pinch on the hand ray or the trigger.
+### Agents that run the room
 
-**Pausing.** Use Pause on the round bar, open the system menu, or take the headset off. The interviewer stops, the
-clock stops, and when you are back a "Welcome back" card waits for you to resume. A round can be paused for up to
-10 minutes in total. If the connection drops, the page reconnects and the round carries on. If the AI models are
-overloaded, the round holds and the card says the interviewer is reconnecting.
+Every spoken turn goes through our server, which rebuilds the prompt from the round, the persona, the phase, the time
+left, a text view of your board and the shared transcript. A director turns each spoken line into actions: show the
+question card, move to the next phase, point at a card, hand the floor to another person, end the round. In meetings,
+each attendee has a hidden stance that a separate model updates as you answer, and the floor moves when you address
+someone by name.
 
-**The report.** When the round ends, cards in the headset show the verdict, four competency bars, your top strength
-and the thing to fix, with **Retry this answer** and **See full report**. The full report is a normal web
-page:
+### The scorecard and the report
+
+When the round ends, cards in the headset show the verdict, four competency bars, your top strength and the thing to
+fix, with **Retry this answer** and **See full report**. The full report is a normal web page:
 
 - a verdict on the hire / no-hire scale with a confidence (meetings show the outcome instead), set by a fixed rule
   over the scores, not by the model;
@@ -63,9 +196,85 @@ page:
   (from head direction);
 - the transcript and the final board, and an optional public link to share the scorecard.
 
-A round too short to judge says so instead of guessing. History, a streak and a skill chart are kept per device.
+A round too short to judge says so instead of guessing.
 
-## How it works
+### A reason to come back
+
+History, a streak, a skill chart and a suggested round for today are kept per headset, with no account. The retry and
+the "vs last time" arrows turn each report into the next practice.
+
+## Comfort and accessibility
+
+- **Seated** at your own desk, everything within reach at desk height. No standing, no walking, no typing in the
+  headset.
+- **Passthrough** keeps your room, your notes and your coffee in view the whole time.
+- **One hand is enough.** The card tray sits on your other hand's side: Main hand in Settings, or the hand that
+  touched the desk.
+- **Captions** (CC on the round bar, or in Settings) show who is speaking and what they said.
+- **Your pace.** Pause from the round bar, the system menu or by taking the headset off, and the interviewer waits.
+- **Readable panels:** dark glass with large type over a bright room, and calm 2D pages with large targets.
+- **Settings:** role, level (junior to staff), interviewer style (warm, neutral or tough), captions, sound effects and
+  main hand; and Delete my data.
+
+## Controls
+
+| Action | Hands | Controllers |
+|---|---|---|
+| Place the sheet | Rest a fingertip on the desk for a moment | Rest the controller's tip on the desk, then pull the trigger |
+| Draw a card, a connection or ink | Pinch and draw on the sheet | Hold the trigger with the tip on the sheet, or aim the ray with its cursor dot |
+| Move a card or keep a suggestion | Pinch it and drag | Trigger on it and drag |
+| Name a card | Draw or touch it, then say "call that ..." | The same |
+| Delete | Drag it to the bin | The same |
+| Undo the last change | Drag the mistake to the bin | A or X |
+| Press a button | Poke it, or pinch with the hand's ray | Trigger with the ray |
+| Move the sheet | Pinch its "Hold to move" bar | Trigger on the bar |
+| Pause, captions, mute, end | Poke the round bar (End needs a one second hold) | The same with the ray |
+
+Hands and controllers share one input path, and you can switch at any time; the cards switch their wording. On
+controllers the thumbstick scrolls the code panel and short haptic pulses mark presses and snaps; with hands, every pinch, snap and drop has a visual change and a
+quiet sound.
+
+<details>
+<summary><b>How hand input works: thresholds and timings</b></summary>
+
+- **Placing:** a fingertip that rests nearly still (under 2 cm a second) for 0.6 s, 25 to 75 cm below the eyes, places
+  the sheet; a hand in the lap does not count. A controller must point down and rest for 0.3 s before the trigger
+  places. With no touch in 6 s, a desk is set up at a seated height.
+- **Pinch:** from the system's select event. The pinch point is smoothed with a One Euro filter; for the first 0.1 s
+  the slide of the closing fingers (up to 2.5 cm) is held so a tap stays a tap, and the last 80 ms of a release is
+  trimmed. A pinch that drops for under 150 ms within 6 cm of the hand carries on as one stroke or drag.
+- **Strokes:** under 1.5 cm a stroke makes no mark. A connection may start up to 1.4 cm outside a card (a 2.2 cm band
+  with the card's rim), end 1.5 cm outside its target, and snaps to a card within 4 cm.
+- **Targets:** card tabs 2 cm, edge chips and edge labels 2.2 cm. Ink is picked up only after a still 0.3 s pinch.
+- **Suggestions:** a pinch keeps one; a one second hold or a drag to the bin dismisses it; untouched, it settles after
+  4 s.
+- **Tracking loss:** a hand that leaves tracking keeps its gesture for 0.3 s, then lets go. A pinch starts only within
+  12 cm above the sheet, and a hand highlights what is under it within 4 cm.
+- **Tested** with replays of noisy hands: jitter, tremor, uneven and missing frames, pinch drops and tracking dropouts.
+
+</details>
+
+## Meta Quest capabilities used
+
+- **Meta Immersive Web SDK (IWSDK):** the room, spatial UI panels, poke and ray pointers and the session run on IWSDK
+  and three.js.
+- **Passthrough mixed reality:** a WebXR `immersive-ar` session keeps your real room and desk in view; the interviewer
+  sits across your own desk.
+- **Hand tracking:** pinch to draw, pick, drag and connect; a fingertip places the sheet and pokes buttons. Asked for,
+  not required.
+- **Controllers:** trigger as the pinch, tip drawing, a ray with a cursor dot, A or X to undo, the thumbstick to
+  scroll, haptic pulses.
+- **Anchors:** the room is anchored at your desk when the headset grants an anchor.
+- **Head pose:** the interviewers meet your eyes; your head direction, sampled 5 times a second, becomes "Facing who
+  spoke" in the report.
+- **Session visibility and end events:** the system menu and taking the headset off pause the round.
+- **Frame rate and foveation:** 72 Hz, raised to 90 Hz only with headroom; fixed foveation.
+- **Microphone and WebRTC voice:** the microphone is asked for once on the 2D page, before the headset view.
+- **Compressed assets:** KTX2 textures and meshopt geometry.
+- **Immersive Web Emulator (IWER):** scripted rounds and the demo video run in Meta's headset emulator.
+- No plane or mesh detection, so the only permission prompt is the microphone.
+
+## How it is built
 
 ```mermaid
 flowchart LR
@@ -80,27 +289,129 @@ flowchart LR
   server <-->|"Messages API"| claude
 ```
 
+One turn:
+
+```mermaid
+sequenceDiagram
+  participant You
+  participant Fish as Fish voice agent
+  participant Server as Rust server
+  participant Claude
+  participant Page as Headset page
+  You->>Fish: speech
+  Fish->>Server: POST /v1/chat/completions (transcript)
+  Server->>Claude: prompt from round, board, panel, time left
+  Claude-->>Server: streamed reply
+  Server-->>Fish: streamed text
+  Fish-->>You: interviewer's voice
+  Server->>Claude: director call on the spoken line
+  Server-->>Page: question card, phase, pointing, hand-over (WebSocket)
+```
+
 - **The page** (`web/`) has the 2D pages (Preact) and the room, built with Meta's Immersive Web SDK (IWSDK) on
   three.js. The session is WebXR `immersive-ar` with passthrough. Hand tracking, hit testing and anchors are asked for
-  but none is required; the room is anchored at the desk when the headset grants anchors. People are Microsoft
-  Rocketbox avatars converted to compressed glTF, with seated animation, gaze that meets your head, blinks, nods and
-  lip sync from the voice.
+  but none is required; the desk is placed by touch, and the room is anchored there when the headset grants anchors.
+  People are Microsoft Rocketbox avatars converted to compressed glTF, with seated animation, gaze that meets your
+  head, blinks, nods and lip sync from the voice.
 - **The voice** runs on Fish Audio Agents through their web client: speech recognition, turn taking, barge-in and the
-  voices, one voice per interviewer. On every turn Fish calls our server's model endpoint
-  (`POST /v1/chat/completions`, OpenAI format, streamed).
+  voices, one voice per person. On every turn Fish calls our server's model endpoint (`POST /v1/chat/completions`,
+  OpenAI format, streamed).
 - **The server** (`server/`) is Rust with Axum, Tokio and sqlx on Postgres. It owns the conversation: each turn it
   rebuilds the prompt from the session (persona, round script, phase, time left, a text summary of the board, the
   panel's shared transcript, hidden meeting state), streams the model's reply back to the voice, and pushes round
-  state, board changes and gestures to the page over a WebSocket. It also serves the built web app, the reports and
-  the public scorecard pages from one origin.
-- **The models** (defaults in `server/src/config.rs`): live turns on Claude Sonnet 5.5 at low effort, with Claude
-  Haiku 5.5 as the fallback when a model is overloaded. After each spoken line a director call turns it into actions
-  (question card, next phase, pointing, hand-over, end). The Scribe turns speech into board suggestions. Claude Opus
-  5.5 prepares meeting plans and writes the report with structured output. Delivery numbers (pace, fillers, pauses,
-  head direction) are computed in code, not by a model.
+  state, board changes and gestures to the page over a WebSocket with sequence numbers, acks and replay. It also
+  serves the built web app, the reports and the public scorecard pages from one origin.
 - **The content** (`content/`) is data: rounds, personas, meeting templates, rubrics, question banks and prompts,
   checked against JSON Schemas.
 - **The contract** between page and server is `docs/protocol.md`.
+
+The models by role (defaults in `server/src/config.rs` and `server/src/scoring/mod.rs`):
+
+| Role | What it does | Model |
+|---|---|---|
+| Live turns | The spoken reply, streamed to the voice | Claude Sonnet 5.5, low effort, no thinking; Claude Haiku 5.5 when overloaded |
+| Director | Turns each spoken line into actions | Claude Sonnet 5.5 |
+| Scribe | Turns what you say into board suggestions | Claude Sonnet 5.5 |
+| Meeting state | Updates each attendee's hidden stance and concerns | Claude Sonnet 5.5 |
+| Meeting prepare | Fills in likely objections and concerns for your meeting | Claude Opus 5.5 |
+| Headset card, retry score | The short card after the round; the 2 minute retry | Claude Sonnet 5.5 |
+| Report | Evidence, scores, strengths, fixes, model answer (structured output) | Claude Opus 5.5, medium effort; Sonnet 5.5 as fallback |
+| Verdict | Hire / no-hire from the scores | A fixed rule, no model |
+| Delivery | Pace, fillers, pauses, talk share, facing the speaker | Our code, no model |
+
+## Testing
+
+- **Server:** Rust unit and integration tests, the database tests on Postgres (`cd server && cargo test`).
+- **Web:** Vitest unit tests for the board rules, the input filters, the round controller, the room UI and the pages
+  (`cd web && npm test`), including replays of noisy hand input through the whole board path.
+- **Together:** over 1,300 automated tests.
+- **Shared fixtures:** the board rules run the same fixtures in TypeScript and Rust (`content/fixtures/`).
+- **Emulator runs:** `web/e2e/` drives whole rounds in Meta's IWER emulator against a running server: every round
+  type, hands and controllers, onboarding, pause and resume, switching input, two rounds in a row, and a meeting.
+- **Smoke:** `tools/smoke/round.mjs` runs one round end to end with the fake voice and real model calls.
+- **Copy and content checks:** `tools/check-copy.mjs` (no em or en dashes in user-facing text) and
+  `tools/content-check.mjs` (content against its schemas).
+
+## Frame rate, speed and measurements
+
+- **Frame rate:** the session asks for 72 Hz and raises to 90 Hz only when frames show headroom; fixed foveation is
+  on. Budgets the room is built to: under 60 draw calls, under 60,000 triangles, under 64 MB of textures, KTX2
+  textures, no post-processing.
+- **Measured in the emulator** (both eyes, Nov 14): one interviewer with the sheet and the panels, at most 60 draw
+  calls and about 35,000 triangles; three people in a meeting room with the sheet and the wall board, 58 draw calls,
+  53,636 triangles and about 35 MB of textures. Avatars are slimmed at load: morphs that never move are dropped and the
+  legs under the desk are removed. Frame time on a headset has not been measured yet; the emulator renders in
+  software. <!-- DEVICE-CHECK: the frame rate seen on the Quest, if measured. -->
+- **Reply time:** about 3 seconds from the end of your speech to the interviewer's first word (median 2.7 to 3.2 s in
+  test rounds with the real voice, emulator, Nov 14). The voice service decides your turn is over, our server streams
+  the model's first words, and speech starts as they arrive; the interviewer shows a thinking look while you wait.
+  <!-- PHASE2: remeasure on the final build. -->
+- **Scorecard:** the short card comes first; the full report was ready about a minute after ending a round in emulator
+  runs (Nov 14). Scoring now starts while the goodbye plays. <!-- PHASE2: remeasure on the final build. -->
+- **How the frame numbers were taken:** `web/e2e/perf-room.mjs` and `web/e2e/perf-meeting.mjs` read the renderer's
+  counters in the emulator.
+
+## Built for real life: the edge cases it handles
+
+- **Pause, system menu, headset off:** the interviewer and the clock stop; a "Welcome back" card waits for Resume. A
+  round can be paused for up to 10 minutes in total.
+- **Dropped connection:** the page reconnects by itself, the server replays the messages that were missed, and the
+  round carries on; progress is saved on the server. A lost voice comes back on Resume.
+- **Model overload:** a turn retries on a second model within its deadline. If both fail, the round holds and the card
+  says "Your interviewer is reconnecting…", then the round carries on.
+- **No desk:** after 6 seconds the app sets up a desk at a seated height; the sheet's "Hold to move" bar moves it.
+- **Hands lost:** a hand that leaves tracking keeps its gesture for 0.3 s, then lets go cleanly; a short pinch drop
+  mid stroke carries on.
+- **Hands or controllers, any time:** pick up a controller and the cards switch to controller wording; put it down
+  and hands take over.
+- **Microphone blocked:** the round page says how to allow it, in the browser and in the Quest's settings, with a
+  **Check again** button.
+- **Report trouble:** a report that fails is scored again; a round too short to judge says so; a slow report goes to
+  History.
+- **Fair limits:** each headset gets a few quick rounds a day, so the hosted app stays open for everyone.
+
+## Challenges and what we learned
+
+- **Talking speed.** A spoken conversation feels broken past a few seconds of silence. The reply path is split: the
+  first words stream as soon as the model has them, and the actions, board suggestions and meeting state run beside
+  the reply. The greeting is written while you walk into the room.
+- **Many voices, one conversation.** Panels and meetings need several people who share one transcript and hand the
+  floor over. Speech recognition writes names in surprising ways, so the floor moves on the forms it really writes.
+- **Drawing with a pinch.** The system pinch can drop for a frame and the pinch point slides as the fingers close.
+  Filtering, a held closing slide, pinch rejoining and fingertip-sized targets made strokes reliable.
+- **Models that fail.** Overloads happen mid round. A second model and then a calm hold keep the round alive.
+- **What we learned:** the person across the table matters more than any feature; the first second after you stop
+  talking decides how a voice app feels; hands on a real desk need generous targets; and scores feel fair only when
+  they quote you.
+
+## Roadmap
+
+- Tune drawing, placement and timing on more headsets and real desks.
+- Meta VR Glasses: gaze plus pinch on the board.
+- Faster hand-overs between people in panels and meetings.
+- Optional sign-in, so history follows you across devices.
+- More rounds as content: estimation, strategy, a recruiter screen, language practice.
+- An interview-date plan with a weekly recap.
 
 ## Run it locally
 
@@ -213,6 +524,13 @@ The server allows the fake voice only with the `X-Dev-Key` header, so the hosted
 | `tools/` | Avatar conversion (Blender in Docker), Fish agent setup, smoke round, copy and content checks |
 
 The hosted app runs as one Docker container next to a Postgres database on a single server.
+
+## Privacy
+
+There is no account. A device cookie ties your rounds, reports, recordings, history and settings to your headset, and
+**Delete my data** in Settings removes them all. Your speech goes to Fish Audio for recognition and the voices, and the
+conversation text goes to Anthropic's API for the interviewers and scoring. A scorecard is public only if you make a
+share link, and you can take the link down.
 
 ## Licences and credits
 
