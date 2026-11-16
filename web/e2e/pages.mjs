@@ -45,6 +45,7 @@ const SHOTS = [
   {
     name: 'session-preview',
     path: '/round/sde.system_design.short',
+    query: 'preview=1',
     act:
       micOn +
       tap('mic-allow') +

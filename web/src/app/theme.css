@@ -900,9 +900,8 @@ h4 {
   font-size: 0.95rem;
 }
 .today-line a {
-  display: inline-flex;
-  align-items: center;
-  min-height: var(--tap);
+  display: inline-block;
+  padding: 12px 0;
 }
 .today-when {
   color: var(--muted);
