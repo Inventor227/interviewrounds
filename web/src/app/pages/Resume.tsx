@@ -36,7 +36,7 @@ function ResumeBody(props: { id: string; me: Me }) {
   return (
     <>
       <p class="note" data-test="resume-note">
-        The interviewer picks up where you left off. You have <span class="num">{clock(left)}</span> to come back.
+        Picks up where you left off. <span class="num">{clock(left)}</span> left.
       </p>
       <ReadyPanel
         mic={mic}

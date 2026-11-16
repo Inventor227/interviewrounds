@@ -168,10 +168,10 @@ export function useMic(): Mic {
 }
 
 const MIC_TEXT: Record<MicState, { title: string; body?: string }> = {
-  unknown: { title: 'Allow your microphone', body: 'You answer out loud. The browser asks once.' },
-  asking: { title: 'Waiting for your answer', body: 'Allow the microphone in the browser prompt.' },
-  on: { title: 'Mic is on', body: 'Say something. The bar should move.' },
-  allowed: { title: 'Mic is allowed', body: 'You are set to answer out loud.' },
+  unknown: { title: 'Turn on your mic', body: 'You answer out loud.' },
+  asking: { title: 'Allow the mic', body: 'Use the browser prompt.' },
+  on: { title: 'Mic is on', body: 'Say something. The bar moves.' },
+  allowed: { title: 'Mic is allowed' },
   denied: { title: 'The microphone is blocked' },
   none: { title: 'No microphone found' },
   busy: { title: 'The microphone is busy' },
@@ -194,7 +194,7 @@ export function MicStep(props: { mic: Mic; action?: ComponentChildren; handedOve
       <div class="step-body" ref={ref} tabIndex={-1} aria-live="polite">
         <h3 class="step-title">{t.title}</h3>
         {s === 'on' && !mic.live ? (
-          <p class="step-text">{props.handedOver ? 'The round has your mic now.' : 'The microphone is allowed.'}</p>
+          <p class="step-text">{props.handedOver ? 'The round has your mic.' : 'The mic is allowed.'}</p>
         ) : (
           t.body && <p class="step-text">{t.body}</p>
         )}
@@ -237,7 +237,7 @@ export function MicStep(props: { mic: Mic; action?: ComponentChildren; handedOve
 function MicDenied(props: { onRetry: () => void }) {
   return (
     <div class="help help-denied" data-test="mic-denied">
-      <p>Rounds are spoken, so the mic has to be on. To turn it back on:</p>
+      <p>Rounds are spoken. To turn the mic back on:</p>
       <div class="howto">
         <div>
           <h4>In the Quest Browser</h4>
@@ -337,25 +337,22 @@ export function HeadsetStep(props: { xr: XrState; questUrl: string; questNote?: 
         {xr === 'ready' && (
           <>
             <h3 class="step-title">Headset ready</h3>
-            <p class="step-text">The room opens in passthrough. Sit at your desk with some space in front of you.</p>
             <p class="step-text hands" data-test="hands-note">
-              Use your hands or your controllers.
+              Sit at your desk. Hands or controllers both work.
             </p>
           </>
         )}
         {xr === 'none' && (
           <div data-test="headset-none">
             <h3 class="step-title">No headset on this device</h3>
-            <p class="step-text">
-              You can preview the round here with the same interviewer and voice. For the full room, open this page on your Quest.
-            </p>
+            <p class="step-text">Preview it here, or open it on a Quest for the full room.</p>
             <div class="quest">
               <Qr text={props.questUrl} label="QR code with the link to this round" />
               <div class="quest-text">
                 <p>
                   <strong>Open on Quest</strong>
                 </p>
-                <p class="fine">Scan with your phone and send it to your Quest, or type this address in the Quest Browser:</p>
+                <p class="fine">Or type this in the Quest Browser:</p>
                 <p class="url" data-test="quest-url">
                   {props.questUrl.replace(/^https?:\/\//, '')}
                 </p>
@@ -443,7 +440,7 @@ export function ReadyPanel(props: {
       disabled={!input || props.busy || xr === 'checking'}
       data-test="mic-allow"
     >
-      {failed ? 'Try again' : micReady ? 'Get the room ready' : 'Allow microphone'}
+      {failed ? 'Try again' : micReady ? 'Get the room ready' : 'Turn on mic'}
     </button>
   ) : null;
 
@@ -476,14 +473,14 @@ export function ReadyPanel(props: {
             </button>
             <p class="fine" id="enter-note" aria-live="polite" data-test="enter-note">
               {blocked
-                ? 'Turn the microphone on first. Everything else is ready.'
+                ? 'Turn the mic on first.'
                 : failed
-                  ? 'Set up did not finish. Use Try again above.'
+                  ? 'Use Try again above.'
                   : preparing
                   ? 'Getting the room ready.'
                   : ready
-                    ? (props.hint ?? (preview ? 'Ready.' : 'Ready. Put on your headset if it is not on yet.'))
-                    : 'Allow the microphone first. The room gets ready in a few seconds.'}
+                    ? (props.hint ?? (preview ? 'Ready.' : 'Ready. Put on your headset.'))
+                    : 'Turn on your mic first.'}
             </p>
           </div>
         ))}

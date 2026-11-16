@@ -69,7 +69,7 @@ function StartBody(props: { round: RoundPublic; catalog: Catalog; me?: Me }) {
         {round.summary && <p class="start-summary">{round.summary}</p>}
         {retryOf ? (
           <p class="note" data-test="retry-note">
-            This is a two minute retry of your weakest answer. It is scored again, and your report shows before and after.
+            Two minutes on your weakest answer. Scored again, with before and after.
           </p>
         ) : (
           <ol class="phases" aria-label="What happens">
