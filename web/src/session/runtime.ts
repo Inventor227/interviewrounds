@@ -34,6 +34,7 @@ import { clearLiveRoom, setLiveRoom, type LiveRoom } from './room';
 import { describeSession, recordTransport, recorder } from './recorder';
 import { createRoundClock, itemCentre } from './roundClock';
 import { StageTimings } from './timings';
+import { speakGate } from '../voice/speakGate';
 
 /** Longest the mic tap waits for the avatars; slower ones appear when they are loaded. */
 export const AVATAR_WAIT_MS = 12_000;
@@ -687,8 +688,8 @@ export function createRoundRuntime({ preview }: RuntimeOptions): RoundController
       Object.assign(rec.meta, describeSession(res));
       recordTransport(rec, t);
     }
-    // Captions follow the words as they play; the board hears what the user said.
-    t.on('agentText', (e) => app?.ui.setCaption(p.display_name, e.text));
+    // Captions follow the words as they play, once the reply is audible; the board hears what the user said.
+    speakGate(t).on('text', (e) => app?.ui.setCaption(p.display_name, e.text));
     t.on('userTranscript', (e) => {
       if (e.final && !isMarker(e.text) && !paused) board?.say(e.text);
     });

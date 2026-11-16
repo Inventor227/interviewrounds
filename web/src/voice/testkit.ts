@@ -14,6 +14,8 @@ export class ScriptedTransport implements VoiceTransport {
   activity = 0;
   audioStarts = 0;
   stream: MediaStream | null = null;
+  /** The agent's output loudness the test sets (0..1). */
+  level = 0;
 
   constructor(
     readonly panelistId: string,
@@ -43,6 +45,9 @@ export class ScriptedTransport implements VoiceTransport {
   }
   outputStream(): MediaStream | null {
     return this.stream;
+  }
+  outputLevel(): number {
+    return this.level;
   }
   on<K extends keyof TransportEvents>(event: K, cb: TransportEvents[K]): () => void {
     return this.events.on(event, cb);
