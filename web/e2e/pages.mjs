@@ -72,6 +72,13 @@ const SHOTS = [
   },
   { name: 'report', path: '/report/demo' },
   { name: 'report-explainer', path: '/report/demo', act: tap('verdict-explain-toggle') },
+  {
+    name: 'report-open',
+    path: '/report/demo',
+    act: ['bar-reasons', 'report-section-strengths', 'report-section-weakest', 'report-section-delivery']
+      .map((t) => `await frame.click('[data-test="${t}"] > summary'); await page.waitForTimeout(300);`)
+      .join(''),
+  },
   { name: 'report-share-on', path: '/report/demo', act: tap('share-toggle') },
   { name: 'report-meeting', path: '/report/meeting' },
   { name: 'report-not-enough-signal', path: '/report/nosignal' },
