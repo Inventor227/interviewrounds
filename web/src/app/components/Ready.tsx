@@ -10,6 +10,7 @@ import { useEffect, useRef, useState } from 'preact/hooks';
 import { useLocation } from 'preact-iso';
 import type { Me } from '../../shared/types';
 import { discardLaunch, enterLaunch, launchKey, launchPendingKey, launchState, prepareLaunch, useLaunch, type PrepareInput } from '../launch';
+import { onReady, readyState, readyView, type ReadyView } from '../../session/readyProgress';
 import { CapNotice } from './CapNotice';
 import { capFromError } from './data';
 import { getAudioContext } from '../../voice/audio';
@@ -366,6 +367,49 @@ export function HeadsetStep(props: { xr: XrState; questUrl: string; questNote?: 
   );
 }
 
+// ---------- Progress ----------
+
+/** The room's loading progress, live (null while nothing is being prepared). */
+export function useReadyView(): ReadyView | null {
+  const read = () => (readyState() ? readyView() : null);
+  const [view, setView] = useState(read);
+  useEffect(() => {
+    const update = () =>
+      setView((old) => {
+        const v = read();
+        // Byte ticks arrive often: re-render only when something shown changes.
+        return old && v && old.label === v.label && old.step === v.step && Math.round((old.fraction ?? -1) * 100) === Math.round((v.fraction ?? -1) * 100) ? old : v;
+      });
+    update();
+    return onReady(update);
+  }, []);
+  return view;
+}
+
+/**
+ * The bar: a percentage when it is known, else a sliding segment. The line naming the step is the panel's own note
+ * (one live region that stays mounted, so the step and then "Ready" are both announced).
+ */
+export function ReadyBar(props: { view: ReadyView }) {
+  const { view } = props;
+  const pct = view.fraction == null ? null : Math.round(view.fraction * 100);
+  return (
+    <div class="ready-progress" data-test="ready-progress" data-step={view.step}>
+      <div
+        class={`progress${pct == null ? ' progress-indeterminate' : ''}`}
+        role="progressbar"
+        aria-label="Getting the room ready"
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={pct ?? undefined}
+        data-test="ready-bar"
+      >
+        <span style={pct == null ? undefined : { transform: `scaleX(${pct / 100})` }} />
+      </div>
+    </div>
+  );
+}
+
 // ---------- Panel ----------
 
 export function ReadyPanel(props: {
@@ -425,7 +469,9 @@ export function ReadyPanel(props: {
     if (mine?.status === 'ready') enterLaunch(route);
   };
 
-  const preparing = mine?.status === 'preparing';
+  const progress = useReadyView();
+  // Preparing, or still loading the round's code for this input (the launch is idle until the controller exists).
+  const preparing = mine?.status === 'preparing' || (!mine && !!key && !!progress && launchPendingKey() === key);
   const ready = mine?.status === 'ready';
   const failed = mine?.status === 'failed' ? mine.error : null;
   const cap = failed ? capFromError(failed) : null;
@@ -471,16 +517,17 @@ export function ReadyPanel(props: {
             >
               {props.enterLabel ?? (preview ? 'Preview on this screen' : 'Enter the room')}
             </button>
-            <p class="fine" id="enter-note" aria-live="polite" data-test="enter-note">
+            {preparing && <ReadyBar view={progress ?? readyView(null)} />}
+            <p class={`fine${preparing ? ' ready-step' : ''}`} id="enter-note" aria-live="polite" data-test="enter-note">
               {blocked
                 ? 'Turn the mic on first.'
                 : failed
                   ? 'Use Try again above.'
                   : preparing
-                  ? 'Getting the room ready.'
-                  : ready
-                    ? (props.hint ?? (preview ? 'Ready.' : 'Ready. Put on your headset.'))
-                    : 'Turn on your mic first.'}
+                    ? (progress ?? readyView(null)).label
+                    : ready
+                      ? (props.hint ?? (preview ? 'Ready.' : 'Ready. Put on your headset.'))
+                      : 'Turn on your mic first.'}
             </p>
           </div>
         ))}

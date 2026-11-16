@@ -3,6 +3,8 @@ import { act } from 'preact/test-utils';
 import type { CreateSessionReq } from '../../shared/types';
 import { fakeMe, sessionResFor } from '../fake/server';
 import { $, cleanup, click, renderApp, settle, stubNavigator, testRuntime, useFakeServer, waitFor } from '../test-utils';
+import { versioned } from '../../net/bytes';
+import { readyPeople, readyStep } from '../../session/readyProgress';
 
 const restores: (() => void)[] = [];
 const stub = (k: string, v: unknown) => restores.push(stubNavigator(k, v));
@@ -77,6 +79,65 @@ describe('Start', () => {
     expect(enterBtn(root).disabled).toBe(false);
     expect($(root, 'hands-note')).not.toBeNull();
     expect($(root, 'mic-meter')).toBeNull();
+  });
+
+  it('getting_the_room_ready_shows_a_progress_bar_and_the_step', async () => {
+    useFakeServer({ scenario: '1' });
+    micThat('grant');
+    withHeadset(true);
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    testRuntime.xrPreload.mockImplementation(async () => {
+      readyStep('room');
+      await settle();
+      readyPeople(['Daniel'], []);
+      await gate;
+    });
+    const root = await renderApp('/round/sde.system_design.short');
+    expect($(root, 'ready-progress')).toBeNull();
+    await click($(root, 'mic-allow'));
+    await waitFor(() => $(root, 'ready-progress')?.dataset.step === 'people');
+
+    const bar = root.querySelector('[role=progressbar]') as HTMLElement;
+    expect(bar.getAttribute('aria-label')).toBe('Getting the room ready');
+    // No percentage known: an indeterminate bar (no aria-valuenow).
+    expect(bar.hasAttribute('aria-valuenow')).toBe(false);
+    expect(bar.classList.contains('progress-indeterminate')).toBe(true);
+    const line = $(root, 'enter-note')!;
+    expect(line.textContent).toBe('Bringing in Daniel');
+    expect(line.getAttribute('aria-live')).toBe('polite');
+    // The Enter button is described by the step line, and the mic tap button is gone while it loads.
+    expect(enterBtn(root).getAttribute('aria-describedby')).toBe(line.id);
+    expect(enterBtn(root).disabled).toBe(true);
+    expect($(root, 'mic-allow')).toBeNull();
+
+    release();
+    await settled(root);
+    expect($(root, 'ready-progress')).toBeNull();
+    // The same live region (never remounted) now says it is ready.
+    expect($(root, 'enter-note')).toBe(line);
+    expect(line.textContent).toBe('Ready. Put on your headset.');
+  });
+
+  it('the_bar_shows_a_percentage_once_the_sizes_are_known', async () => {
+    useFakeServer({ scenario: '1' });
+    micThat('grant');
+    withHeadset(true);
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    testRuntime.xrPreload.mockImplementation(async () => {
+      readyPeople(['Daniel'], [versioned('/avatars/m02.glb')]);
+      await gate;
+    });
+    const root = await renderApp('/round/sde.system_design.short');
+    await click($(root, 'mic-allow'));
+    await waitFor(() => $(root, 'ready-progress')?.dataset.step === 'people');
+    const bar = root.querySelector('[role=progressbar]') as HTMLElement;
+    const now = Number(bar.getAttribute('aria-valuenow'));
+    expect(now).toBeGreaterThan(0);
+    expect(now).toBeLessThan(100);
+    release();
+    await settled(root);
   });
 
   it('phase_b_requests_xr_inside_the_enter_tap', async () => {

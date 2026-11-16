@@ -11,7 +11,7 @@ import { askMic, checkHeadset, holdMic, useHeadset } from '../components/Ready';
 import { Streak } from '../components/Streak';
 import { voiceChoice } from '../voiceChoice';
 import { prepareLaunch, type PrepareInput } from '../launch';
-import { prefetchRoom } from '../prefetch';
+import { prefetchRoom, prefetchRound } from '../prefetch';
 import { HowItWorks } from './Onboarding';
 
 export function useNow(everyMs = 1000): number {
@@ -85,6 +85,11 @@ export function Home() {
   const m = me.data;
   const cap = capFromMe(m, 'short');
   const href = `/round/${PRESET_ROUND}`;
+  // The quick round's interviewer too, once the page is idle, so the room is ready soon after the tap.
+  const canStart = me.status === 'ready' && !cap;
+  useEffect(() => {
+    if (canStart) prefetchRound(catalog.data, PRESET_ROUND);
+  }, [canStart, catalog.data]);
 
   // Phase A rides on this tap (the mic prompt, then the session and the room load), so the Start
   // page needs only one more: Enter the room.

@@ -3,7 +3,7 @@
 // screen and a QR code to open the round on a Quest.
 
 import { useLocation } from 'preact-iso';
-import { useState } from 'preact/hooks';
+import { useEffect, useState } from 'preact/hooks';
 import type { Catalog, Level, Me, RoundPublic, Style } from '../../shared/types';
 import { LEVELS, STYLES } from '../../shared/types';
 import { CapNotice } from '../components/CapNotice';
@@ -13,6 +13,7 @@ import { ReadyPanel, useHeadset, useMic } from '../components/Ready';
 import { Disclosure, ErrorState, Loading, Monogram, Page, Segmented } from '../components/Ui';
 import { voiceChoice } from '../voiceChoice';
 import type { PrepareInput } from '../launch';
+import { prefetchRoom, prefetchRound } from '../prefetch';
 
 const pick = <T extends string>(v: string | undefined, all: readonly T[], fallback: T): T =>
   v && (all as readonly string[]).includes(v) ? (v as T) : fallback;
@@ -29,6 +30,12 @@ function StartBody(props: { round: RoundPublic; catalog: Catalog; me?: Me }) {
   const lead = persona(catalog, round.panel.lead);
   const second = persona(catalog, round.panel.second);
   const cap = capFromMe(me, round.length);
+  // This round's room code and people load while the page is read, so "Get the room ready" is quick.
+  useEffect(() => {
+    if (cap) return;
+    prefetchRoom();
+    prefetchRound(catalog, round.id);
+  }, [round.id, !!cap]);
 
   const params = new URLSearchParams();
   if (level !== 'mid') params.set('level', level);

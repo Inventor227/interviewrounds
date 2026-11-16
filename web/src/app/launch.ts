@@ -21,7 +21,10 @@ import type { RoundController, RoundControllerDeps, PrepareInput } from '../sess
 import type { XRPort } from '../session/ports';
 import type { CreateSessionRes } from '../shared/types';
 import { getAudioContext } from '../voice/audio';
+import { clearReady, startReady } from '../session/readyProgress';
+import { loadCatalog } from './components/data';
 import { isFake } from './fake/mode';
+import { prefetchRound } from './prefetch';
 
 export type { PrepareInput };
 
@@ -95,18 +98,39 @@ export async function prepareLaunch(input: PrepareInput, opts: { mic: MediaStrea
   // Inside the tap: unlock audio now, while the activation is fresh.
   void getAudioContext()?.resume().catch(() => undefined);
   const key = launchKey(input);
+  // The round's people start downloading now, alongside the code and the session (a page may have started already).
+  if (input.kind === 'new' && input.req.round_id) {
+    const roundId = input.req.round_id;
+    void loadCatalog().then((c) => prefetchRound(c, roundId, { now: true }), () => undefined);
+  }
 
   // Try again after a failed prepare: same controller, same session.
   if (state.status === 'failed' && state.key === key && !state.controller.prepared) {
     const { status: _s, error: _e, ...base } = state;
+    startReady();
     return runPrepare({ ...base, title: opts.title ?? base.title }, opts.mic, ++prepareSeq);
   }
 
   discardLaunch();
   const seq = ++prepareSeq;
   pendingKey = key;
-  const { RoundController } = await import('../session/controller');
-  const deps = await (runtime ?? defaultRuntime)({ preview: opts.preview });
+  // The page shows progress from here, also while the round's code loads.
+  startReady();
+  let Controller: typeof import('../session/controller').RoundController;
+  let deps: RoundControllerDeps;
+  try {
+    Controller = (await import('../session/controller')).RoundController;
+    deps = await (runtime ?? defaultRuntime)({ preview: opts.preview });
+  } catch (err) {
+    // The round's code did not load (offline, or a page from before a deploy asking for old chunks): back to the
+    // tap button, so another tap can try again.
+    if (seq === prepareSeq) {
+      pendingKey = null;
+      clearReady();
+    }
+    opts.mic?.getTracks().forEach((t) => t.stop());
+    throw err;
+  }
   if (seq !== prepareSeq) {
     // Dropped (page left) or replaced by a newer tap meanwhile.
     opts.mic?.getTracks().forEach((t) => t.stop());
@@ -114,7 +138,7 @@ export async function prepareLaunch(input: PrepareInput, opts: { mic: MediaStrea
     return;
   }
   pendingKey = null;
-  const controller = new RoundController(deps);
+  const controller = new Controller(deps);
   return runPrepare({ key, input, preview: opts.preview, title: opts.title, controller }, opts.mic, seq);
 }
 
@@ -173,6 +197,7 @@ export function takeLaunch(): (Launch & { session: CreateSessionRes }) | null {
 export function discardLaunch(): void {
   prepareSeq++;
   pendingKey = null;
+  clearReady();
   if (state.status === 'idle') return;
   const c = state.controller;
   set({ status: 'idle' });

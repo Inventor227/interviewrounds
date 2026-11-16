@@ -34,6 +34,8 @@ import { clearLiveRoom, setLiveRoom, type LiveRoom } from './room';
 import { describeSession, recordTransport, recorder } from './recorder';
 import { createRoundClock, itemCentre } from './roundClock';
 import { StageTimings } from './timings';
+import { readyPeople, readyStep } from './readyProgress';
+import { roomFiles } from '../xr/avatar/files';
 import { speakGate } from '../voice/speakGate';
 
 /** Longest the mic tap waits for the avatars; slower ones appear when they are loaded. */
@@ -537,6 +539,7 @@ export function createRoundRuntime({ preview }: RuntimeOptions): RoundController
     {
       // In dev the managed emulator browser keeps a small tooling world on 2D pages; a script can ask to drop it.
       if (devFlag('one_world') === '1') await import('../xr/devtools').then((m) => m.stopToolingWorld()).catch(() => undefined);
+      readyStep('room');
       timings.begin('chunk');
       const [world, project, portMod, loaded] = await Promise.all([
         import('../xr/world'),
@@ -642,6 +645,14 @@ export function createRoundRuntime({ preview }: RuntimeOptions): RoundController
       );
 
       timings.begin('avatars');
+      // The bar follows the people's downloads (which a page may have started before the tap); until their list is
+      // known it has no percentage.
+      const names = res.panel.map((p) => p.display_name);
+      readyPeople(names, []);
+      void roomFiles(res.panel.map((p) => p.avatar_id)).then(
+        (files) => !disposed && app === a && readyPeople(names, files),
+        () => undefined,
+      );
       const peopleReady = loadPeople(a, res).then(() => {
         timings.mark('avatars_loaded');
         const desk = a.desk();

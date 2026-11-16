@@ -6,6 +6,7 @@ use axum::http::{StatusCode, header};
 use ir_server::{AppState, router};
 use serde_json::json;
 use sqlx::postgres::PgPoolOptions;
+use tower::ServiceExt;
 
 #[tokio::test]
 async fn health_returns_ok_and_db_up() {
@@ -131,11 +132,115 @@ async fn missing_assets_are_404_not_the_web_app() {
 }
 
 #[tokio::test]
+async fn public_files_are_kept_a_year_only_under_their_own_version() {
+    let public = common::temp_dir("public");
+    std::fs::write(
+        public.join("index.html"),
+        "<!doctype html><title>IR</title>",
+    )
+    .unwrap();
+    std::fs::create_dir_all(public.join("avatars")).unwrap();
+    std::fs::write(public.join("avatars/m02.glb"), b"model bytes v1").unwrap();
+    let app = common::app_with_public(&public).await;
+    let cc = |res: &axum::response::Response| {
+        res.headers()
+            .get(header::CACHE_CONTROL)
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string()
+    };
+    let v1 = ir_server::static_files::version_of(b"model bytes v1");
+    let year = "public, max-age=31536000, immutable";
+
+    let res = common::get(app.clone(), &format!("/avatars/m02.glb?v={v1}")).await;
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(cc(&res), year);
+    assert_eq!(common::body_bytes(res).await, b"model bytes v1");
+
+    // No version, or one that is not this file's (a page from another build), revalidates.
+    let res = common::get(app.clone(), "/avatars/m02.glb").await;
+    assert_eq!(cc(&res), "no-cache");
+    let res = common::get(app.clone(), "/avatars/m02.glb?v=0123456789abcdef").await;
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(cc(&res), "no-cache");
+
+    // A deploy changes the file: the old version is no longer kept, the new one is.
+    std::fs::write(public.join("avatars/m02.glb"), b"model bytes, version two").unwrap();
+    let v2 = ir_server::static_files::version_of(b"model bytes, version two");
+    let res = common::get(app.clone(), &format!("/avatars/m02.glb?v={v1}")).await;
+    assert_eq!(cc(&res), "no-cache");
+    assert_eq!(common::body_bytes(res).await, b"model bytes, version two");
+    let res = common::get(app.clone(), &format!("/avatars/m02.glb?v={v2}")).await;
+    assert_eq!(cc(&res), year);
+
+    // A missing file falls back to the web app, which is never kept.
+    let res = common::get(app.clone(), &format!("/avatars/m99.glb?v={v1}")).await;
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(cc(&res), "no-cache");
+    let res = common::get(app, &format!("/?v={v1}")).await;
+    assert_eq!(cc(&res), "no-cache");
+}
+
+#[tokio::test]
+async fn only_the_transcoder_worker_may_eval() {
+    let public = common::temp_dir("public");
+    std::fs::write(
+        public.join("index.html"),
+        "<!doctype html><title>IR</title>",
+    )
+    .unwrap();
+    std::fs::create_dir_all(public.join("vendor/basis")).unwrap();
+    std::fs::write(public.join("vendor/basis/ktx2_worker.js"), "self.x = 1").unwrap();
+    std::fs::write(public.join("vendor/basis/basis_transcoder.js"), "var BASIS").unwrap();
+    let app = common::app_with_public(&public).await;
+    let csp = |res: &axum::response::Response| {
+        res.headers()
+            .get(header::CONTENT_SECURITY_POLICY)
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string()
+    };
+
+    let res = common::get(app.clone(), ir_server::app::KTX2_WORKER_PATH).await;
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(csp(&res), ir_server::app::KTX2_WORKER_CSP);
+    assert!(csp(&res).contains("'unsafe-eval'"));
+
+    // A worker that revalidates its script (304) must get the same policy, or it runs under the page's.
+    let last_modified = res.headers().get(header::LAST_MODIFIED).unwrap().clone();
+    let res = app
+        .clone()
+        .oneshot(
+            axum::http::Request::get(ir_server::app::KTX2_WORKER_PATH)
+                .header(header::IF_MODIFIED_SINCE, last_modified)
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::NOT_MODIFIED);
+    assert_eq!(csp(&res), ir_server::app::KTX2_WORKER_CSP);
+
+    // The page and every other file keep the strict policy.
+    for path in ["/", "/round/x", "/vendor/basis/basis_transcoder.js"] {
+        let res = common::get(app.clone(), path).await;
+        assert_eq!(res.status(), StatusCode::OK, "{path}");
+        let c = csp(&res);
+        assert!(!c.contains("'unsafe-eval'"), "{path}: {c}");
+        assert!(
+            c.contains("script-src 'self' 'wasm-unsafe-eval'"),
+            "{path}: {c}"
+        );
+    }
+}
+
+#[tokio::test]
 async fn a_panicking_handler_answers_500_and_the_server_keeps_serving() {
     use axum::Router;
     use axum::body::Body;
     use axum::routing::get;
-    use tower::ServiceExt;
 
     async fn boom() -> &'static str {
         panic!("user text broke a parser")

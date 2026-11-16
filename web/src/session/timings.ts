@@ -57,6 +57,12 @@ export class StageTimings {
   mark(name: StageMark, at: number = now()): void {
     if (this.marks.has(name)) return;
     this.marks.set(name, at);
+    // Also on the page's performance timeline, where measurement tools read it.
+    try {
+      performance.mark(`ir:${name}`, { startTime: at });
+    } catch {
+      // No User Timing here (tests, old browsers).
+    }
     for (const l of [...this.listeners]) l(this.spans());
     if (name === 'first_audio' && !this.logged) {
       this.logged = true;

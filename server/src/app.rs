@@ -25,6 +25,7 @@ use crate::error::AppError;
 use crate::fish::FishClient;
 use crate::orchestrator::{LlmApi, OrchestratorOptions, Registry, SessionAuth, oai};
 use crate::persist::DbSessionAuth;
+use crate::static_files;
 use crate::usage::MeteredLlm;
 use crate::ws::{self, Hubs, SessionTiming};
 
@@ -133,7 +134,11 @@ pub fn router(state: AppState) -> Router {
     // Unknown paths fall back to index.html (status 200) so client routes work on reload.
     let static_files = Router::new()
         .fallback_service(ServeDir::new(&public_dir).fallback(ServeFile::new(index)))
-        .layer(middleware::from_fn(static_cache_headers));
+        .layer(middleware::from_fn_with_state(
+            Arc::new(public_dir.clone()),
+            static_cache_headers,
+        ))
+        .layer(middleware::from_fn(worker_csp));
 
     Router::new()
         .merge(api::routes(&state))
@@ -274,12 +279,57 @@ async fn immutable_cache_headers(req: Request, next: Next) -> Response {
     res
 }
 
-/// Everything else (index.html and the web app routes) revalidates.
-async fn static_cache_headers(req: Request, next: Next) -> Response {
+/// The KTX2 (Basis) transcoder worker script. The transcoder's bindings build functions from strings when they start;
+/// a worker loaded from a URL runs under that response's own CSP (not the page's), so only this worker may do that.
+pub const KTX2_WORKER_PATH: &str = "/vendor/basis/ktx2_worker.js";
+pub const KTX2_WORKER_CSP: &str =
+    "default-src 'none'; script-src 'self' 'unsafe-eval' 'wasm-unsafe-eval'";
+
+/// Gives the transcoder worker its own CSP (the app-wide one is only set when a response has none). Also on a 304:
+/// a worker that revalidates its script runs under the policy of that answer, so a 304 without it gets the page's.
+async fn worker_csp(req: Request, next: Next) -> Response {
+    let worker = req.uri().path() == KTX2_WORKER_PATH;
+    let mut res = next.run(req).await;
+    let script = res
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|t| t.starts_with("text/javascript"));
+    let answered =
+        (res.status().is_success() && script) || res.status() == StatusCode::NOT_MODIFIED;
+    if worker && answered {
+        res.headers_mut().insert(
+            header::CONTENT_SECURITY_POLICY,
+            HeaderValue::from_static(KTX2_WORKER_CSP),
+        );
+    }
+    res
+}
+
+/// A public file asked for with its own content version (`?v=`, see `static_files`) is cached for a year. Everything
+/// else (index.html, the web app routes, a file asked for with another build's version) revalidates.
+async fn static_cache_headers(
+    State(root): State<Arc<std::path::PathBuf>>,
+    req: Request,
+    next: Next,
+) -> Response {
+    let wanted = static_files::version_param(req.uri().query())
+        .map(|v| (req.uri().path().to_string(), v.to_string()));
     let mut res = next.run(req).await;
     if res.status().is_success() || res.status() == StatusCode::NOT_MODIFIED {
+        let current = match &wanted {
+            Some((path, v)) => static_files::file_version(&root, path)
+                .await
+                .is_some_and(|have| have == *v),
+            None => false,
+        };
+        let value = if current {
+            "public, max-age=31536000, immutable"
+        } else {
+            "no-cache"
+        };
         res.headers_mut()
-            .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
+            .insert(header::CACHE_CONTROL, HeaderValue::from_static(value));
     }
     res
 }
