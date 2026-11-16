@@ -21,7 +21,10 @@ import type { RoundController, RoundControllerDeps, PrepareInput } from '../sess
 import type { XRPort } from '../session/ports';
 import type { CreateSessionRes } from '../shared/types';
 import { getAudioContext } from '../voice/audio';
+import { clearReady, startReady } from '../session/readyProgress';
+import { loadCatalog } from './components/data';
 import { isFake } from './fake/mode';
+import { prefetchRound } from './prefetch';
 
 export type { PrepareInput };
 
@@ -95,16 +98,24 @@ export async function prepareLaunch(input: PrepareInput, opts: { mic: MediaStrea
   // Inside the tap: unlock audio now, while the activation is fresh.
   void getAudioContext()?.resume().catch(() => undefined);
   const key = launchKey(input);
+  // The round's people start downloading now, alongside the code and the session (a page may have started already).
+  if (input.kind === 'new' && input.req.round_id) {
+    const roundId = input.req.round_id;
+    void loadCatalog().then((c) => prefetchRound(c, roundId, { now: true }), () => undefined);
+  }
 
   // Try again after a failed prepare: same controller, same session.
   if (state.status === 'failed' && state.key === key && !state.controller.prepared) {
     const { status: _s, error: _e, ...base } = state;
+    startReady();
     return runPrepare({ ...base, title: opts.title ?? base.title }, opts.mic, ++prepareSeq);
   }
 
   discardLaunch();
   const seq = ++prepareSeq;
   pendingKey = key;
+  // The page shows progress from here, also while the round's code loads.
+  startReady();
   const { RoundController } = await import('../session/controller');
   const deps = await (runtime ?? defaultRuntime)({ preview: opts.preview });
   if (seq !== prepareSeq) {
@@ -173,6 +184,7 @@ export function takeLaunch(): (Launch & { session: CreateSessionRes }) | null {
 export function discardLaunch(): void {
   prepareSeq++;
   pendingKey = null;
+  clearReady();
   if (state.status === 'idle') return;
   const c = state.controller;
   set({ status: 'idle' });
