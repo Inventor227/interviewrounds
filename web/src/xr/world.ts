@@ -38,6 +38,7 @@ import { MoveBarView, onMoveBar, SheetMove, type MoveStatus } from './moveSheet'
 import { DeskPlacement, type DeskPose, type HandState, type HeadPose } from './placement';
 import { PlacementView } from './placementView';
 import { forgetPointers } from './pointers';
+import { gpuResourcesOf, releaseGpuResources, type UniformsOf } from './release';
 import { buildPreviewRoom, MouseLook, PREVIEW_DESK, PREVIEW_FOV, previewPixelRatio } from './preview';
 import { Room } from './room';
 import type { SeatPose } from './seats';
@@ -890,6 +891,9 @@ export async function createXRApp(root: HTMLElement, opts: XRAppOptions): Promis
     destroy() {
       if (destroyed) return;
       destroyed = true;
+      // Everything the renderer drew, gathered before the panels and people are taken apart (see release.ts).
+      const uniformsOf: UniformsOf = (mat) => (renderer.properties.get(mat) as { uniforms?: ReturnType<UniformsOf> }).uniforms;
+      const held = gpuResourcesOf([scene, camera, ...Object.values(ui.groups), ui.hint.group], uniformsOf);
       if (enterWaiter?.poll) clearInterval(enterWaiter.poll);
       enterWaiter?.reject(new Error('The room was closed.'));
       enterWaiter = null;
@@ -924,6 +928,7 @@ export async function createXRApp(root: HTMLElement, opts: XRAppOptions): Promis
       standins = [];
       if (previewGroup) disposeTree(previewGroup);
       room.dispose();
+      releaseGpuResources(held);
       world.destroy();
       renderer.dispose();
       renderer.forceContextLoss();
