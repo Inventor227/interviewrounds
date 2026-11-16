@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { seatLayout, tableSlab, userPoint, wallboardPose, AVATAR_DESK_Y, REAL_DESK_FAR } from './seats';
+import { armShadowPoint, seatLayout, tableSlab, userPoint, wallboardPose, AVATAR_DESK_Y, REAL_DESK_FAR, SLAB_FAR } from './seats';
 
 const DEG = Math.PI / 180;
 
@@ -45,6 +45,22 @@ describe('seatLayout', () => {
       }
     });
   }
+
+  it('arm_shadows_lie_on_the_slab_in_front_of_each_panelist', () => {
+    for (const yaw of [0, 0.7, -2.4]) {
+      const desk = { origin: { x: 0.3, y: 0.74, z: -0.5 }, yaw, deskY: 0.74 };
+      const f = { x: -Math.sin(yaw), z: -Math.cos(yaw) };
+      const along = (p: { x: number; z: number }) => (p.x - desk.origin.x) * f.x + (p.z - desk.origin.z) * f.z;
+      for (const s of seatLayout(3, desk)) {
+        const p = armShadowPoint(s, desk.deskY);
+        expect(p.y).toBe(desk.deskY);
+        // Between the user and the panelist, and its centre on the slab (short of its far edge).
+        expect(along(p)).toBeLessThan(along(s.pos));
+        expect(along(p)).toBeLessThan(SLAB_FAR - 0.1);
+        expect(along(p)).toBeGreaterThan(SLAB_FAR - 0.6);
+      }
+    }
+  });
 
   it('two_seats_keep_the_lead_in_the_middle', () => {
     const desk = { origin: { x: 0, y: 0.7, z: -0.4 }, yaw: 0, deskY: 0.7 };
