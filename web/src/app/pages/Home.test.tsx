@@ -47,17 +47,17 @@ describe('Home', () => {
     const root = await renderApp('/');
     const cta = $(root, 'try-quick') as HTMLAnchorElement;
     expect(cta.getAttribute('href')).toBe('/round/sde.system_design.short');
-    expect($(root, 'sign-in')).not.toBeNull();
     await click(cta);
     expect($(root, 'page-start')?.dataset.round).toBe('sde.system_design.short');
   });
 
-  it('home_shows_no_intro_on_first_visit_only_a_how_it_works_link', async () => {
+  it('home_shows_three_short_icon_steps_and_one_primary_button', async () => {
     useFakeServer({ scenario: 'first' });
     const root = await renderApp('/');
-    expect($(root, 'how-cards')).toBeNull();
-    await click($(root, 'how-toggle'));
-    expect($(root, 'how-cards')).not.toBeNull();
+    const steps = $(root, 'how-it-works')!.querySelectorAll('li');
+    expect(steps.length).toBe(3);
+    steps.forEach((li) => expect(li.textContent!.length).toBeLessThan(80));
+    expect(root.querySelectorAll('.btn-primary').length).toBe(1);
   });
 
   it('home_links_today_round_and_streak', async () => {
@@ -86,12 +86,13 @@ describe('Home', () => {
     }
   });
 
-  it('home_hides_sign_in_when_unavailable', async () => {
+  it('home_never_offers_sign_in', async () => {
     const me = fakeMe('1');
-    me.sign_in_available = false;
+    me.sign_in_available = true;
     useFakeServer({ me });
     const root = await renderApp('/');
     expect($(root, 'sign-in')).toBeNull();
+    expect(root.textContent).not.toMatch(/sign in/i);
   });
 
   it('home_shows_cap_instead_of_start_when_capped', async () => {

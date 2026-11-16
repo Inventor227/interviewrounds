@@ -7,7 +7,7 @@ import { Page } from '../components/Ui';
 export function NotSupported() {
   const url = typeof location === 'undefined' ? 'https://rounds.dijmo.com' : location.origin;
   return (
-    <Page test="not-supported" title="This browser cannot run a round" lede="Rounds need a microphone, and this browser does not give pages access to one.">
+    <Page test="not-supported" title="This browser cannot run a round" lede="Rounds need a microphone, and this browser does not allow one here.">
       <div class="ns">
         <div>
           <h2 class="section-title">What works</h2>
@@ -15,7 +15,7 @@ export function NotSupported() {
             <li>The Quest Browser on Meta Quest 3 or 3S, for the full room</li>
             <li>Chrome, Edge or Safari on a laptop or phone, for a preview on the screen</li>
           </ul>
-          <p>Make sure the address starts with https. Your reports and history open in any browser.</p>
+          <p>Use an https address. Reports open in any browser.</p>
           <div class="row">
             <a class="btn" href="/history">
               Your reports

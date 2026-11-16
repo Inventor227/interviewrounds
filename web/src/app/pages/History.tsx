@@ -37,7 +37,7 @@ export function History() {
   const skills = useAsync(() => api.skills(role), [filter]);
 
   return (
-    <Page test="history" title="Your rounds" lede="Progress over time, and every report, newest first.">
+    <Page test="history" title="Your rounds" lede="Your progress and every report.">
       <Segmented
         name="role"
         legend="Show"
@@ -56,7 +56,7 @@ export function History() {
       {items.status === 'ready' && items.data.length === 0 && (
         <div class="state state-empty" data-test="history-empty">
           <h2>No rounds yet</h2>
-          <p>Your reports and progress show up here after your first round.</p>
+          <p>Your reports show up here.</p>
           <a class="btn btn-primary" href="/start">
             Try a quick round
           </a>

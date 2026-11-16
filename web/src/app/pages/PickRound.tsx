@@ -57,7 +57,7 @@ export function PickRound(props: { role?: string }) {
     <Page
       test="pick-round"
       title={name ? `${name} rounds` : 'Pick a round'}
-      lede="Each one starts in about a minute. Quick rounds are one on one."
+      lede="Quick rounds are one on one."
       back={{ href: '/start', label: 'All roles' }}
     >
       {catalog.status === 'loading' && <Loading rows={4} />}

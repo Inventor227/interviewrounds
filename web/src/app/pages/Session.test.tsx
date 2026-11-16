@@ -227,7 +227,7 @@ describe('session page', () => {
     controller.go('ending');
     await settle();
     expect($(root, 'resume-offer')).toBeNull();
-    expect($(root, 'ended-paused')!.textContent).toBe('The round ended while paused. Your report is being written.');
+    expect($(root, 'ended-paused')!.textContent).toBe('The round ended while paused. Writing your report.');
     expect($(root, 'see-report')!.getAttribute('href')).toBe('/report/sess1');
     controller.go('scoring');
     await settle();

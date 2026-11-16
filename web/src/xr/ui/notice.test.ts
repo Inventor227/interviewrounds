@@ -36,11 +36,11 @@ describe('interruption cards', () => {
     expect(NOTICES.reconnecting.title).toBe('Reconnecting your interviewer…');
     expect(NOTICES.degraded).toEqual({ title: 'Your interviewer is reconnecting…', detail: '', actions: [] });
     expect(NOTICES.socket.title).toBe('Reconnecting…');
-    expect(NOTICES.lost.title).toBe('We lost the connection');
+    expect(NOTICES.lost.title).toBe('Connection lost');
     expect(NOTICES.lost.actions).toEqual(['resume', 'end']);
     expect(NOTICES.scoring_slow.title).toBe('Your report will be in History');
     expect(NOTICES.scoring_slow.actions.map((a) => ACTION_LABELS[a])).toEqual(['See history', 'Stay']);
-    expect(`${NOTICES.ended_paused.title}. ${NOTICES.ended_paused.detail}`).toBe('The round ended while paused. Your report is being written.');
+    expect(`${NOTICES.ended_paused.title}. ${NOTICES.ended_paused.detail}`).toBe('The round ended while paused. Writing your report.');
   });
 
   it('a_controller_driven_ui_never_picks_the_paused_card_by_itself_and_brings_its_card_back_after_placement', () => {

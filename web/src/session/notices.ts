@@ -30,14 +30,14 @@ export interface Notice {
 }
 
 export const NOTICES: Record<NoticeKind, Notice> = {
-  paused: { title: 'Paused', detail: "Your interviewer will wait. Resume when you're ready.", actions: ['resume', 'end'] },
+  paused: { title: 'Paused', detail: 'Your interviewer will wait.', actions: ['resume', 'end'] },
   welcome_back: { title: 'Welcome back', detail: "Resume when you're ready.", actions: ['resume', 'end'] },
   reconnecting: { title: 'Reconnecting your interviewer…', detail: '', actions: [] },
   degraded: { title: 'Your interviewer is reconnecting…', detail: '', actions: [] },
-  socket: { title: 'Reconnecting…', detail: 'Your progress is saved.', actions: [] },
-  lost: { title: 'We lost the connection', detail: 'Your progress is saved. Resume to carry on.', actions: ['resume', 'end'] },
-  scoring_slow: { title: 'Your report will be in History', detail: 'It is taking longer than usual. You can wait here or pick it up later.', actions: ['history', 'stay'] },
-  ended_paused: { title: 'The round ended while paused', detail: 'Your report is being written.', actions: ['report'] },
+  socket: { title: 'Reconnecting…', detail: 'Progress saved.', actions: [] },
+  lost: { title: 'Connection lost', detail: 'Progress saved. Resume to carry on.', actions: ['resume', 'end'] },
+  scoring_slow: { title: 'Your report will be in History', detail: 'Taking longer than usual.', actions: ['history', 'stay'] },
+  ended_paused: { title: 'The round ended while paused', detail: 'Writing your report.', actions: ['report'] },
 };
 
 /** Button labels on the cards. */

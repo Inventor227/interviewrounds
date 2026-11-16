@@ -40,7 +40,7 @@ export function Verdict(props: { verdict: VerdictData; summary: string }) {
       </div>
 
       <p class="scale-caption">
-        On the hire / no-hire scale used at top tech companies.{' '}
+        The hire scale used at top tech companies.{' '}
         <button
           type="button"
           class="linklike"

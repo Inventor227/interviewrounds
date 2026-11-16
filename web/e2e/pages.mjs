@@ -22,7 +22,7 @@ const launch = (status) => `await frame.waitForSelector('[data-launch="${status}
 
 const SHOTS = [
   { name: 'home', path: '/' },
-  { name: 'home-first-visit', path: '/', fake: 'first', act: tap('how-toggle') },
+  { name: 'home-first-visit', path: '/', fake: 'first' },
   { name: 'home-resume', path: '/', fake: 'resume' },
   { name: 'home-capped', path: '/', fake: 'capped' },
   { name: 'pick-role', path: '/start' },
@@ -42,6 +42,18 @@ const SHOTS = [
       tap('mic-allow') +
       launch('failed'),
   },
+  {
+    name: 'session-preview',
+    path: '/round/sde.system_design.short',
+    query: 'preview=1',
+    act:
+      micOn +
+      tap('mic-allow') +
+      launch('ready') +
+      `await frame.click('[data-test="start-preview"]');
+      await frame.waitForSelector('[data-test="page-session"]', { timeout: 20000 });
+      await page.waitForTimeout(6000);`,
+  },
   { name: 'resume', path: '/resume/s_resume', fake: 'resume' },
   { name: 'start-mic-denied', path: '/round/sde.system_design.short', act: micFails('NotAllowedError') + tap('mic-allow') },
   { name: 'start-no-mic', path: '/round/sde.system_design.short', act: micFails('NotFoundError') + tap('mic-allow') },
@@ -60,6 +72,13 @@ const SHOTS = [
   },
   { name: 'report', path: '/report/demo' },
   { name: 'report-explainer', path: '/report/demo', act: tap('verdict-explain-toggle') },
+  {
+    name: 'report-open',
+    path: '/report/demo',
+    act: ['bar-reasons', 'report-section-strengths', 'report-section-weakest', 'report-section-delivery']
+      .map((t) => `await frame.click('[data-test="${t}"] > summary'); await page.waitForTimeout(300);`)
+      .join(''),
+  },
   { name: 'report-share-on', path: '/report/demo', act: tap('share-toggle') },
   { name: 'report-meeting', path: '/report/meeting' },
   { name: 'report-not-enough-signal', path: '/report/nosignal' },
@@ -72,8 +91,6 @@ const SHOTS = [
   { name: 'history-empty', path: '/history', fake: 'empty' },
   { name: 'settings', path: '/settings' },
   { name: 'settings-delete-confirm', path: '/settings', act: tap('delete-data') },
-  { name: 'pricing', path: '/pricing' },
-  { name: 'pricing-pro', path: '/pricing', fake: 'user' },
   { name: 'not-supported', path: '/not-supported' },
   { name: 'not-found', path: '/nope' },
 ];
