@@ -1909,3 +1909,90 @@ async fn a_session_whose_hello_is_landing_is_never_replaced() {
     assert_eq!(reason, None);
     assert!(app.state.registry.get(&id).is_some(), "still in memory");
 }
+
+#[tokio::test]
+async fn an_interview_opener_is_written_ahead_and_said_without_a_model_call() {
+    let mut app = live::test_app(Options::default()).await;
+    *app.llm.opener.lock().unwrap() =
+        Some("Hi, I'm Daniel. Eight minutes of system design. Where would you start?".into());
+    app.state =
+        app.state
+            .clone()
+            .with_orchestrator_options(ir_server::orchestrator::OrchestratorOptions {
+                prepare_opener: true,
+                ..Default::default()
+            });
+    app.router = ir_server::router(app.state.clone());
+    let cookie = app.guest().await;
+    let res = app.create(&cookie, short_req("fake")).await;
+    assert_eq!(res.status, StatusCode::OK, "{}", res.body);
+    let id = res.body["session_id"].as_str().unwrap().to_string();
+    let token = res.body["client_token"].as_str().unwrap().to_string();
+
+    // Written while the user enters the room: kept as the floor's first line, the start prompt read once.
+    let handle = app.state.registry.get(&id).expect("in memory");
+    live::eventually("opener kept", Duration::from_secs(3), || async {
+        handle.lock().await.pending_handover.contains_key("p1")
+    })
+    .await;
+    assert_eq!(
+        app.llm.prewarms.load(Ordering::SeqCst),
+        0,
+        "the opener call writes the cache"
+    );
+
+    app.set_status(&id, ir_server::orchestrator::SessionStatus::Live)
+        .await;
+    let (status, said) = common::scored::turn_text(&app, &token, &id, "[event: start]").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        said,
+        "Hi, I'm Daniel. Eight minutes of system design. Where would you start?"
+    );
+    assert!(
+        app.llm.requests.lock().unwrap().is_empty(),
+        "no live model call on the start marker"
+    );
+    let st = handle.lock().await;
+    assert!(st.pending_handover.is_empty(), "the line is used once");
+    assert_eq!(st.history.len(), 2, "the marker and the opener");
+    assert_eq!(st.history[0].role, Role::User);
+    assert_eq!(st.history[1].role, Role::Assistant);
+    drop(st);
+    // The opener's actions run as for an opener said live.
+    live::eventually("director ran", Duration::from_secs(3), || async {
+        app.llm.director_calls() == 1
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn without_an_opener_written_ahead_the_start_asks_the_model() {
+    let mut app = live::test_app(Options::default()).await;
+    app.state =
+        app.state
+            .clone()
+            .with_orchestrator_options(ir_server::orchestrator::OrchestratorOptions {
+                prepare_opener: true,
+                ..Default::default()
+            });
+    app.router = ir_server::router(app.state.clone());
+    let cookie = app.guest().await;
+    // The fake model has no opener scripted: that call fails, nothing is kept.
+    let res = app.create(&cookie, short_req("fake")).await;
+    let id = res.body["session_id"].as_str().unwrap().to_string();
+    let token = res.body["client_token"].as_str().unwrap().to_string();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let handle = app.state.registry.get(&id).expect("in memory");
+    assert!(handle.lock().await.pending_handover.is_empty());
+    app.set_status(&id, ir_server::orchestrator::SessionStatus::Live)
+        .await;
+    let (status, said) = common::scored::turn_text(&app, &token, &id, "[event: start]").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(said, "Hello there.");
+    assert_eq!(
+        app.llm.requests.lock().unwrap().len(),
+        1,
+        "the start turn's own call"
+    );
+}

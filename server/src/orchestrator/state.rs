@@ -324,6 +324,9 @@ pub struct SessionState {
     pub question: serde_json::Value,
     /// Pre-drafted first lines for panelists who were handed the floor.
     pub pending_handover: HashMap<String, String>,
+    /// The floor's line in `pending_handover` is an interview opener the model wrote ahead (not a fixed line): its
+    /// actions run through the director like any opener. Not saved: after a reload the opener is said without them.
+    pub opener_written_ahead: bool,
     /// Server notes for the next turn (resume, meeting changes); consumed when that turn commits.
     pub pending_notes: Vec<String>,
     /// Per panelist: what the candidate heard of the last line, recomputed from Fish's transcript each request.
@@ -534,6 +537,7 @@ impl SessionState {
             live,
             question,
             pending_handover,
+            opener_written_ahead: false,
             pending_notes: Vec::new(),
             heard_note: HashMap::new(),
             two_minute_warned: false,
