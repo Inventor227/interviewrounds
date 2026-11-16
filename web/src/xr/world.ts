@@ -37,6 +37,7 @@ import { yawPitchFromQuat } from './math';
 import { MoveBarView, onMoveBar, SheetMove, type MoveStatus } from './moveSheet';
 import { DeskPlacement, type DeskPose, type HandState, type HeadPose } from './placement';
 import { PlacementView } from './placementView';
+import { forgetPointers } from './pointers';
 import { buildPreviewRoom, MouseLook, PREVIEW_DESK, PREVIEW_FOV, previewPixelRatio } from './preview';
 import { Room } from './room';
 import type { SeatPose } from './seats';
@@ -927,6 +928,8 @@ export async function createXRApp(root: HTMLElement, opts: XRAppOptions): Promis
       renderer.dispose();
       renderer.forceContextLoss();
       renderer.domElement.remove();
+      // The pointer library keeps every pointer in a global map; this room's would keep all of it reachable.
+      forgetPointers(camera);
     },
     onFrame(cb) {
       frameCbs.add(cb);
