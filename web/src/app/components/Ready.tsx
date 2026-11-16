@@ -386,8 +386,11 @@ export function useReadyView(): ReadyView | null {
   return view;
 }
 
-/** A bar (with a percentage when it is known) and one line naming the step. */
-export function ReadyProgress(props: { view: ReadyView; noteId?: string }) {
+/**
+ * The bar: a percentage when it is known, else a sliding segment. The line naming the step is the panel's own note
+ * (one live region that stays mounted, so the step and then "Ready" are both announced).
+ */
+export function ReadyBar(props: { view: ReadyView }) {
   const { view } = props;
   const pct = view.fraction == null ? null : Math.round(view.fraction * 100);
   return (
@@ -403,9 +406,6 @@ export function ReadyProgress(props: { view: ReadyView; noteId?: string }) {
       >
         <span style={pct == null ? undefined : { transform: `scaleX(${pct / 100})` }} />
       </div>
-      <p class="fine ready-step" id={props.noteId} aria-live="polite" data-test="ready-step">
-        {view.label}
-      </p>
     </div>
   );
 }
@@ -517,19 +517,18 @@ export function ReadyPanel(props: {
             >
               {props.enterLabel ?? (preview ? 'Preview on this screen' : 'Enter the room')}
             </button>
-            {preparing ? (
-              <ReadyProgress view={progress ?? readyView(null)} noteId="enter-note" />
-            ) : (
-              <p class="fine" id="enter-note" aria-live="polite" data-test="enter-note">
-                {blocked
-                  ? 'Turn the mic on first.'
-                  : failed
-                    ? 'Use Try again above.'
+            {preparing && <ReadyBar view={progress ?? readyView(null)} />}
+            <p class={`fine${preparing ? ' ready-step' : ''}`} id="enter-note" aria-live="polite" data-test="enter-note">
+              {blocked
+                ? 'Turn the mic on first.'
+                : failed
+                  ? 'Use Try again above.'
+                  : preparing
+                    ? (progress ?? readyView(null)).label
                     : ready
                       ? (props.hint ?? (preview ? 'Ready.' : 'Ready. Put on your headset.'))
                       : 'Turn on your mic first.'}
-              </p>
-            )}
+            </p>
           </div>
         ))}
     </div>

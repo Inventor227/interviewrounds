@@ -103,7 +103,7 @@ describe('Start', () => {
     // No percentage known: an indeterminate bar (no aria-valuenow).
     expect(bar.hasAttribute('aria-valuenow')).toBe(false);
     expect(bar.classList.contains('progress-indeterminate')).toBe(true);
-    const line = $(root, 'ready-step')!;
+    const line = $(root, 'enter-note')!;
     expect(line.textContent).toBe('Bringing in Daniel');
     expect(line.getAttribute('aria-live')).toBe('polite');
     // The Enter button is described by the step line, and the mic tap button is gone while it loads.
@@ -114,7 +114,9 @@ describe('Start', () => {
     release();
     await settled(root);
     expect($(root, 'ready-progress')).toBeNull();
-    expect($(root, 'enter-note')?.textContent).toBe('Ready. Put on your headset.');
+    // The same live region (never remounted) now says it is ready.
+    expect($(root, 'enter-note')).toBe(line);
+    expect(line.textContent).toBe('Ready. Put on your headset.');
   });
 
   it('the_bar_shows_a_percentage_once_the_sizes_are_known', async () => {
