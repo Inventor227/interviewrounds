@@ -132,7 +132,7 @@ function StartBody(props: { round: RoundPublic; catalog: Catalog; me?: Me }) {
         enterLabel={retryOf ? (xr === 'none' ? 'Retry on this screen' : 'Enter the room for the retry') : undefined}
         blocked={
           cap ? (
-            <CapNotice reason={cap.reason} resetsAt={cap.resetsAt} isGuest={me?.identity.kind !== 'user'} signInAvailable={me?.sign_in_available} />
+            <CapNotice reason={cap.reason} resetsAt={cap.resetsAt} />
           ) : undefined
         }
       />

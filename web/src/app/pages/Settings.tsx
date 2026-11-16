@@ -2,7 +2,7 @@
 // (PUT /api/me/settings with the whole object). Also the account and "Delete my data".
 
 import { useEffect, useRef, useState } from 'preact/hooks';
-import { api, links } from '../../net/api';
+import { api } from '../../net/api';
 import type { Level, Me, Role, Settings as SettingsData, Style } from '../../shared/types';
 import { LEVELS, STYLES } from '../../shared/types';
 import { loadMe, resetDataCache, setMe, useAsync } from '../components/data';
@@ -91,12 +91,7 @@ function Account(props: { me: Me }) {
   }
   return (
     <div class="account" data-test="account">
-      <p>You are using a guest pass on this device. Your rounds and settings are saved here.</p>
-      {me.sign_in_available && (
-        <a class="btn btn-small" href={links.googleSignIn} data-test="sign-in">
-          Sign in with Google to keep them on every device
-        </a>
-      )}
+      <p>Guest pass. Your rounds and settings are saved on this device.</p>
     </div>
   );
 }

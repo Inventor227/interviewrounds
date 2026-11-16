@@ -335,7 +335,7 @@ function Prepared(props: {
         me={props.me}
         title="Meeting rehearsal"
         enterLabel={xr === 'none' ? 'Preview on this screen' : 'Enter the meeting room'}
-        blocked={cap ? <CapNotice reason={cap.reason} resetsAt={cap.resetsAt} isGuest={props.me?.identity.kind !== 'user'} signInAvailable={props.me?.sign_in_available} /> : undefined}
+        blocked={cap ? <CapNotice reason={cap.reason} resetsAt={cap.resetsAt} /> : undefined}
         input={{
           kind: 'new',
           req: {
@@ -404,7 +404,7 @@ function SetupForm(props: { catalog: Catalog; me?: Me }) {
   const cap = failure ? capFromError(failure) : null;
   const failureView = failure ? (
     cap ? (
-      <CapNotice reason={cap.reason} resetsAt={cap.resetsAt} isGuest={props.me?.identity.kind !== 'user'} signInAvailable={props.me?.sign_in_available} />
+      <CapNotice reason={cap.reason} resetsAt={cap.resetsAt} />
     ) : (
       <ErrorState error={toApiError(failure)} onRetry={() => setFailure(null)} />
     )

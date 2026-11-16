@@ -455,7 +455,7 @@ export function ReadyPanel(props: {
       </ol>
       {props.error}
       {cap ? (
-        <CapNotice reason={cap.reason} resetsAt={cap.resetsAt} isGuest={props.me?.identity.kind !== 'user'} signInAvailable={props.me?.sign_in_available} />
+        <CapNotice reason={cap.reason} resetsAt={cap.resetsAt} />
       ) : failed ? (
         <p class="note-warn" role="alert" data-test="prepare-failed">
           {prepareFailText(failed)}
