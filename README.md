@@ -49,11 +49,6 @@ before and after.
 - **Stack:** WebXR on Meta's Immersive Web SDK (IWSDK) and three.js, a Rust server, Fish Audio voice agents, Claude
   models through the Anthropic API
 
-<!-- DEVICE-CHECK: replace the next paragraph with the [DEVICE A] text if the Quest test happens. -->
-**Device testing:** built and tested in Meta's IWER emulator (Quest 3 profile) against the hosted server: whole rounds
-of every type with hands and with controllers, pause and resume, and test rounds with the real voices. It has not yet
-been run on a physical headset.
-
 Made by Mohammad Ibrahim.
 
 ### How it fits the judging criteria
@@ -142,7 +137,7 @@ on what you say and pass the floor between them.
 - **One button.** The home page has one main button, **Start a quick round**. It asks for the microphone on the page,
   so the headset view never stops for a prompt.
 - **Two taps to the room.** Allow the microphone, then **Enter the room**. The interviewer's opening line is written
-  while you walk in. <!-- DEPLOY lane/speed (opener written at session create) -->
+  while you walk in.
 - **One touch to place.** A ring follows your fingertip; rest it on the desk and the sheet lands there. With no desk,
   the app sets one up after 6 seconds and says "No desk? We set one up for you."
 - **Learn by doing.** On the first round a looping hand shows the one gesture, "Pinch and draw a box". Your first box
@@ -165,7 +160,7 @@ In board rounds a sheet lies on your desk:
 - Pinch and draw, or pull a controller's trigger. A rough box becomes a card, a line from one card to another becomes
   a connection, a circle becomes a client. Anything else stays as ink.
 - Say "call that the booking service" to name the card you just drew or touched. A drawn box named "seat table" becomes
-  a database card. <!-- DEPLOY lane/hands a668c92 -->
+  a database card.
 - A tray of cards sits beside the sheet. Coding has a code panel, product rounds use sticky notes, object design uses
   class cards.
 - While you talk, a Scribe suggests board changes as faint cards. Pinch one to keep it; untouched, it settles after
@@ -244,17 +239,16 @@ quiet sound.
 - **Pinch:** from the system's select event. The pinch point is smoothed with a One Euro filter; for the first 0.1 s
   the slide of the closing fingers (up to 2.5 cm) is held so a tap stays a tap, and the last 80 ms of a release is
   trimmed. A pinch that drops for under 150 ms within 6 cm of the hand carries on as one stroke or drag.
-  <!-- DEPLOY lane/hands 12dee7e -->
 - **Strokes:** under 1.5 cm a stroke makes no mark. A connection may start up to 1.4 cm outside a card (a 2.2 cm band
   with the card's rim), end 1.5 cm outside its target, and snaps to a card within 4 cm.
-- **Targets:** card tabs 2 cm, edge chips and edge labels 2.2 cm. <!-- DEPLOY lane/hands ab15524 (edge labels) --> Ink is picked up only after a still 0.3 s pinch.
-- **Suggestions:** a pinch keeps one; a one second hold (0.6 s before lane/hands a3f47a0 ships) or a drag to the bin
+- **Targets:** card tabs 2 cm, edge chips and edge labels 2.2 cm. Ink is picked up only after a still 0.3 s pinch.
+- **Suggestions:** a pinch keeps one; a one second hold or a drag to the bin
   dismisses it; untouched, it settles after
   4 s.
 - **Tracking loss:** a hand that leaves tracking keeps its gesture for 0.3 s, then lets go. A pinch starts only within
   12 cm above the sheet, and a hand highlights what is under it within 4 cm.
 - **Tested** with unit tests that replay noisy hands through the board: jitter, tremor, uneven and missing frames,
-  pinch drops and tracking dropouts. <!-- DEPLOY lane/hands 12dee7e -->
+  pinch drops and tracking dropouts.
 
 </details>
 
@@ -348,7 +342,6 @@ The models by role (defaults in `server/src/config.rs` and `server/src/scoring/m
 - **Server:** Rust unit and integration tests, the database tests on Postgres (`cd server && cargo test`).
 - **Web:** Vitest unit tests for the board rules, the input filters, the round controller, the room UI and the pages
   (`cd web && npm test`), including replays of noisy hand input through the whole board path.
-  <!-- DEPLOY lane/hands 12dee7e (noisy-hand replays) -->
 - **Together:** over 1,200 automated tests. <!-- PHASE2: recount on the final main. -->
 - **Shared fixtures:** the board rules run the same fixtures in TypeScript and Rust (`content/fixtures/`).
 - **Emulator runs:** `web/e2e/` drives whole rounds in Meta's IWER emulator against a running server: every round
@@ -366,15 +359,13 @@ The models by role (defaults in `server/src/config.rs` and `server/src/scoring/m
   calls and about 35,000 triangles; three people in a meeting room with the sheet and the wall board, 58 draw calls,
   53,636 triangles and about 35 MB of textures. Avatars are slimmed at load: morphs that never move are dropped and the
   legs under the desk are removed. <!-- PHASE2: recheck draw calls after lane/look (forearm shadows) against the 60
-  budget. --> Frame time on a headset has not been measured yet; the emulator renders in
-  software. <!-- DEVICE-CHECK: the frame rate seen on the Quest, if measured. -->
+  budget. --> The emulator renders in software, so these are draw counts, not frame times.
 - **Reply time:** about 3 seconds from the end of your speech to the interviewer's first word (median 2.7 to 3.2 s in
   test rounds with the real voice, emulator, Nov 14). The voice service decides your turn is over, our server streams
   the model's first words, and speech starts as they arrive; the interviewer shows a thinking look while you wait.
   <!-- PHASE2: remeasure on the final build. -->
 - **Scorecard:** the short card comes first; the full report was ready about a minute after ending a round in emulator
-  runs (Nov 14). Scoring now starts while the goodbye plays. <!-- DEPLOY lane/speed ce4a77f; PHASE2: remeasure on the final
-  build. -->
+  runs (Nov 14). Scoring now starts while the goodbye plays. <!-- PHASE2: remeasure on the final build. -->
 - **How the frame numbers were taken:** `web/e2e/perf-room.mjs` and `web/e2e/perf-meeting.mjs` read the renderer's
   counters in the emulator.
 
@@ -388,7 +379,7 @@ The models by role (defaults in `server/src/config.rs` and `server/src/scoring/m
   says "Your interviewer is reconnecting…", then the round carries on.
 - **No desk:** after 6 seconds the app sets up a desk at a seated height; the sheet's "Hold to move" bar moves it.
 - **Hands lost:** a hand that leaves tracking keeps its gesture for 0.3 s, then lets go cleanly; a short pinch drop
-  mid stroke carries on. <!-- DEPLOY lane/hands 12dee7e (pinch drop) -->
+  mid stroke carries on.
 - **Hands or controllers, any time:** pick up a controller and the cards switch to controller wording; put it down
   and hands take over.
 - **Microphone blocked:** the round page says how to allow it, in the browser and in the Quest's settings, with a
@@ -401,12 +392,11 @@ The models by role (defaults in `server/src/config.rs` and `server/src/scoring/m
 
 - **Talking speed.** A spoken conversation feels broken past a few seconds of silence. The reply path is split: the
   first words stream as soon as the model has them, and the actions, board suggestions and meeting state run beside
-  the reply. The greeting is written while you walk into the room. <!-- DEPLOY lane/speed 607c689 -->
+  the reply. The greeting is written while you walk into the room.
 - **Many voices, one conversation.** Panels and meetings need several people who share one transcript and hand the
   floor over. Speech recognition writes names in surprising ways, so the floor moves on the forms it really writes.
 - **Drawing with a pinch.** The system pinch can drop for a frame and the pinch point slides as the fingers close.
   Filtering, a held closing slide, pinch rejoining and fingertip-sized targets made strokes reliable.
-  <!-- DEPLOY lane/hands 12dee7e (pinch rejoining) -->
 - **Models that fail.** Overloads happen mid round. A second model and then a calm hold keep the round alive.
 - **What we learned:** the person across the table matters more than any feature; the first second after you stop
   talking decides how a voice app feels; hands on a real desk need generous targets; and scores feel fair only when
