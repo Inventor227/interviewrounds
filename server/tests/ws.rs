@@ -251,6 +251,7 @@ fn quick() -> SessionTiming {
         janitor: Duration::from_secs(60),
         voice_release: Duration::from_secs(45),
         outgoing_voice_grace: Duration::from_secs(15),
+        goodbye_voice_grace: Duration::ZERO,
     }
 }
 
@@ -821,4 +822,43 @@ async fn an_abandoned_round_closes_without_the_report_hold() {
         .await
         .expect("round.ended");
     assert_eq!(live::close_code(&mut ws, WAIT).await, Some(4409));
+}
+
+#[tokio::test]
+async fn a_round_ended_on_a_goodbye_leaves_the_voice_to_finish_it() {
+    let app = live::test_app(Options {
+        timing: SessionTiming {
+            goodbye_voice_grace: Duration::from_millis(1500),
+            ..quick()
+        },
+        ..Options::default()
+    })
+    .await;
+    let base = app.serve().await;
+    let (_, id, token) = new_session(&app, "fish").await;
+    let mut ws = hello(&base, &id, &token, 0).await;
+    frame_of(&mut ws, "round.state", WAIT).await.unwrap();
+    assert_eq!(
+        app.turn("test-llm-secret", &id, "I would cache the reads.")
+            .await
+            .status,
+        StatusCode::OK
+    );
+    send(&mut ws, "ui.event", 1, json!({"kind": "end"})).await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    // The goodbye, before the director has marked it as the closing line (the fake director never does).
+    let res = app.turn("test-llm-secret", &id, "[event: ending]").await;
+    assert_eq!(res.status, StatusCode::OK, "{}", res.body);
+    frame_of(&mut ws, "round.ended", WAIT)
+        .await
+        .expect("round.ended");
+    // The round has ended while the line is still being said: its voice is not ended with it ...
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let ended = |paths: Vec<String>| paths.iter().any(|p| p.ends_with("fish-1/end"));
+    assert!(!ended(app.fish_paths("POST").await), "the goodbye was cut");
+    // ... but once the line has had time to play.
+    live::eventually("voice ended", Duration::from_secs(5), || async {
+        ended(app.fish_paths("POST").await)
+    })
+    .await;
 }

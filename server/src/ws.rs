@@ -150,7 +150,8 @@ pub struct SessionTiming {
     pub start_limit: Duration,
     /// Time allowed for the first frame (`hello`).
     pub hello_timeout: Duration,
-    /// After an end is requested, the round ends this long after the closing line ...
+    /// After an end is requested, the round ends this long after the closing line's text (scoring, and with it the
+    /// headset card, starts while the voice is still saying the line) ...
     pub closing_grace: Duration,
     /// ... or this long after the request, whichever comes first.
     pub ending_limit: Duration,
@@ -168,6 +169,9 @@ pub struct SessionTiming {
     /// After a swap hand-over's new voice says its line, the outgoing voice still open this long later is ended by
     /// the server (the browser normally ends it a moment after the switch).
     pub outgoing_voice_grace: Duration,
+    /// A round that ended on a goodbye has its voices ended by the server this long after the end; the browser
+    /// ends them itself once the line has played (or 6 s after the end at most).
+    pub goodbye_voice_grace: Duration,
 }
 
 impl Default for SessionTiming {
@@ -177,7 +181,7 @@ impl Default for SessionTiming {
             offline_limit: Duration::from_secs(180),
             start_limit: Duration::from_secs(600),
             hello_timeout: Duration::from_secs(10),
-            closing_grace: Duration::from_secs(3),
+            closing_grace: Duration::from_secs(1),
             ending_limit: Duration::from_secs(20),
             pause_limit: Duration::from_secs(600),
             scoring_hold: Duration::from_secs(120),
@@ -185,6 +189,7 @@ impl Default for SessionTiming {
             janitor: Duration::from_secs(30),
             voice_release: Duration::from_secs(45),
             outgoing_voice_grace: Duration::from_secs(15),
+            goodbye_voice_grace: Duration::from_secs(7),
         }
     }
 }
@@ -393,6 +398,12 @@ impl Hub {
     pub async fn is_ending(&self) -> bool {
         let h = self.inner.lock().await;
         h.ending.is_some() && !h.ended
+    }
+
+    /// The round is ending on a closing line that has been said (its voice may still be saying it).
+    pub async fn goodbye_said(&self) -> bool {
+        let h = self.inner.lock().await;
+        h.ending.as_ref().is_some_and(|e| e.closing_done.is_some())
     }
 
     /// Asks for the end: the round ends after the closing line (or `ending_limit`). Kept: the first reason.
