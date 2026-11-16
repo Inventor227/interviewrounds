@@ -140,7 +140,7 @@ export class SummaryCard {
     this.fix = f.t;
     this.fixBox = f.box;
     this.fixQuote = f.q;
-    this.pending = text('Your full scorecard is almost ready.', { fontSize: SMALL_CM, color: INK_MUTED });
+    this.pending = text('Full scorecard almost ready.', { fontSize: SMALL_CM, color: INK_MUTED });
     root.add(this.pending);
     show(this.pending, false);
 

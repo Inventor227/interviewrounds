@@ -2026,8 +2026,8 @@ export class RoundController {
       this.cardShown = true;
       this.syncNotice(); // this card replaces any notice that was up
       ui.setStatus(null);
-      if (ui.showCard) ui.showCard({ one_line: 'Your scorecard is taking longer than usual. Open the full report to see it.', top_strength: null, top_fix: null }, { pending: false });
-      else ui.setStatus('Your scorecard is taking longer than usual');
+      if (ui.showCard) ui.showCard({ one_line: 'Taking longer than usual. See the full report.', top_strength: null, top_fix: null }, { pending: false });
+      else ui.setStatus('Scorecard taking longer than usual');
     }
     this.setState('summary');
   }
