@@ -7,6 +7,9 @@
 // 300 ms; if the pointer comes back still pressed it carries on, otherwise it is cancelled
 // (no op). A side that changes from a hand to a controller (or back) mid gesture ends it the
 // same way at once: the new pointer starts idle and needs its own press.
+// The system's pinch can let go for a frame or two while a hand draws or drags (a fast or turned
+// hand): a hand's drag that is released and pinched again within PINCH_REJOIN_MS, near where it
+// let go, carries on as one gesture. Taps and controllers release at once.
 import { OneEuroFilter } from './ink';
 import { DRAG_THRESHOLD_CM, type BoardPoint, type CancelReason, type PointerAdapter } from './input';
 import { SHEET, type Rect } from './model';
@@ -31,6 +34,13 @@ export const MAX_HEIGHT_CM = 12;
 export const HOVER_MAX_CM = 4;
 /** Once a gesture is a drag, the closing-drift correction fades to zero over this long. */
 export const DRIFT_FADE_MS = 150;
+/**
+ * A hand's drag (a stroke, a card, a connector) whose pinch lets go and closes again within this long carries on:
+ * the system's pinch drops for a frame or two on a fast or turned hand. Its release lands this much later.
+ */
+export const PINCH_REJOIN_MS = 150;
+/** ...when the pinch closes again within this of where the hand was as it let go (board cm; 30 cm/s for 150 ms is 4.5 cm). */
+export const PINCH_REJOIN_CM = 6;
 const MIN_HEIGHT_CM = -3;
 
 type Side = 'left' | 'right';
@@ -99,6 +109,11 @@ interface HandTrack {
   /** When the gesture left tap range (the drift correction then fades out). */
   dragSince: number | null;
   sent: { t: number; p: Projected }[];
+  /**
+   * A hand's drag whose pinch let go (or the system cancelled it) a moment ago: it ends at `p` (released) or is lost
+   * once `until` passes, unless the pinch closes again near `from` (where the hand was as it let go) first.
+   */
+  held: { t: number; until: number; p: Projected | null; from: Projected | null; lost: boolean } | null;
 }
 
 const track = (): HandTrack => ({
@@ -126,6 +141,7 @@ const track = (): HandTrack => ({
   drift: null,
   dragSince: null,
   sent: [],
+  held: null,
 });
 
 export class HandAdapter implements PointerAdapter {
@@ -224,6 +240,7 @@ export class HandAdapter implements PointerAdapter {
     const now = typeof performance !== 'undefined' ? performance.now() : 0;
     for (const hand of ['left', 'right'] as const) {
       const t = this.hands[hand];
+      if (t.held) this.settle(t, hand);
       if (t.active) this.lose(t, hand, now);
       this.leave(t, hand);
       t.visible = false;
@@ -239,6 +256,7 @@ export class HandAdapter implements PointerAdapter {
   private lose(t: HandTrack, hand: Side, now: number): void {
     t.active = false;
     t.lostAt = null;
+    t.held = null;
     const at = t.sent[t.sent.length - 1]?.p ?? t.downPoint ?? t.last;
     if (at) this.emit(this.subs.cancel, hand, at, now, 'lost');
   }
@@ -313,10 +331,13 @@ export class HandAdapter implements PointerAdapter {
     const ctrls = this.port.controllers?.() ?? [];
     for (const hand of ['left', 'right'] as const) {
       const t = this.hands[hand];
+      // A pinch that let go mid drag and did not close again in time: the release (or the loss) stands.
+      if (t.held && now >= t.held.until) this.settle(t, hand);
       const src = this.source(hand, t, all, ctrls);
       if (src && (src.kind !== t.kind || src.far !== t.far)) {
         // The side changed hands for a controller (or back): whatever the old pointer held ends here.
         if (t.kind !== null && src.kind !== t.kind) {
+          if (t.held) this.settle(t, hand);
           if (t.active) this.lose(t, hand, now);
           this.leave(t, hand);
           t.visible = false;
@@ -340,8 +361,10 @@ export class HandAdapter implements PointerAdapter {
         t.world = f;
         t.visible = true;
         t.lostAt = null;
-        if (t.active) this.emit(this.subs.move, hand, this.gesturePoint(t, t.last, now), now);
-        else if (src.far && !t.awake) this.leave(t, hand);
+        if (t.active) {
+          // While a let-go pinch may still close again, the gesture waits where it was.
+          if (!t.held) this.emit(this.subs.move, hand, this.gesturePoint(t, t.last, now), now);
+        } else if (src.far && !t.awake) this.leave(t, hand);
         else if (this.inZone(t.last) && t.last.h_cm < HOVER_MAX_CM) {
           t.hovering = true;
           this.emit(this.subs.move, hand, t.last, now);
@@ -381,6 +404,19 @@ export class HandAdapter implements PointerAdapter {
     // A select from a source that is not this side's pointer any more (a hand's pinch ending after a
     // controller was picked up): the gesture it belonged to has already ended.
     if (kind && t.kind && kind !== t.kind) return;
+    if (phase === 'start' && t.held) {
+      // The pinch closed again: near where it let go, the drag carries on; anywhere else, the old one ends first.
+      const h = t.held;
+      // A frame without the hand just now: its last good point stands in (the tracking grace covers the gap).
+      const at = t.visible && t.raw ? this.project(t.raw) : t.last;
+      const from = h.from ?? h.p;
+      if (at && from && Math.hypot(at.x_cm - from.x_cm, at.y_cm - from.y_cm) <= PINCH_REJOIN_CM) {
+        t.held = null;
+        t.lostAt = null;
+        return;
+      }
+      this.settle(t, hand);
+    }
     if (phase === 'start') {
       if (t.active || !t.visible || !t.raw) return;
       // Start where the hand is now: the filter may still be catching up with a fast
@@ -404,23 +440,48 @@ export class HandAdapter implements PointerAdapter {
       t.drift = null;
       t.dragSince = null;
       t.sent = [];
+      t.held = null;
       this.emit(this.subs.down, hand, p, now);
       return;
     }
-    if (!t.active) return;
+    if (!t.active || t.held) return;
+    // A hand's drag may be picked up again in a moment (PINCH_REJOIN_MS; a cancel, the tracking grace).
+    const bridge = t.kind === 'hand' && t.dragSince !== null;
     // A selectend with no select: the system cancelled the pinch (often the hand is going away).
     if (phase === 'cancel') {
-      this.lose(t, hand, now);
+      if (bridge) t.held = { t: now, until: now + this.graceMs, p: null, from: t.last, lost: true };
+      else this.lose(t, hand, now);
+      return;
+    }
+    const at = this.releasePoint(t, now);
+    if (bridge) {
+      t.held = { t: now, until: now + PINCH_REJOIN_MS, p: at, from: t.last, lost: false };
       return;
     }
     t.active = false;
     t.lostAt = null;
-    // Release where the hand was before the fingers began to open; after a long hitch with
-    // nothing that old, the oldest point kept, else the last.
+    if (at) this.emit(this.subs.up, hand, at, now);
+  }
+
+  /** Release where the hand was before the fingers began to open; after a long hitch with nothing that old, the oldest point kept, else the last. */
+  private releasePoint(t: HandTrack, now: number): Projected | null {
     let at: Projected | null = null;
     for (const s of t.sent) if (s.t <= now - t.profile.releaseTrimMs) at = s.p;
-    at ??= t.sent[0]?.p ?? t.last ?? t.downPoint;
-    if (at) this.emit(this.subs.up, hand, at, now);
+    return at ?? t.sent[0]?.p ?? t.last ?? t.downPoint;
+  }
+
+  /** A let-go pinch that did not close again: the drag ends where it was released (or is lost, after a cancel). */
+  private settle(t: HandTrack, hand: Side): void {
+    const h = t.held;
+    if (!h) return;
+    t.held = null;
+    if (h.lost) {
+      this.lose(t, hand, h.t);
+      return;
+    }
+    t.active = false;
+    t.lostAt = null;
+    if (h.p) this.emit(this.subs.up, hand, h.p, h.t);
   }
 
   /** A gesture point with the pinch's closing drift held, then taken off. */

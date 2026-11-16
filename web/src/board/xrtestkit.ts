@@ -1,5 +1,6 @@
 // Test helpers for the board in XR: a fake XR port the tests drive frame by frame.
 import { Object3D } from 'three';
+import { PINCH_REJOIN_MS } from './hand';
 import type { HapticName } from './pointer';
 import type { BoardXRPort, DeskPose, HeadPose, SelectPhase, Vec3, XRControllerSample, XRHandSample } from './port';
 import { placeAnchor, sheetToWorld } from './sheetMath';
@@ -107,6 +108,11 @@ export class FakePort implements BoardXRPort {
     });
   }
 
+  /** Sets a hand's thumb and index tips one by one (tracking noise moves them apart); null = not tracked. */
+  setHandTips(hand: 'left' | 'right', thumb: Vec3 | null, index: Vec3 | null): void {
+    this.handMap.set(hand, { hand, tracked: !!(thumb && index), thumbTip: thumb, indexTip: index });
+  }
+
   /** The hand over a board point, `hCm` above the sheet surface. */
   handAt(hand: 'left' | 'right', xCm: number, yCm: number, hCm = 0.5): void {
     this.setHand(hand, sheetToWorld(this.sheetAnchor, xCm, yCm, hCm));
@@ -164,7 +170,8 @@ export class FakePort implements BoardXRPort {
     // Hold at the end a moment, as a hand does, so the filter settles there.
     for (let i = 0; i < 12; i++) this.frame();
     this.select(hand, 'end');
-    this.frame();
+    // A drag's release lands once the pinch has stayed open past the rejoin window (hand.ts PINCH_REJOIN_MS).
+    for (let i = 0; i <= Math.ceil(PINCH_REJOIN_MS / 14); i++) this.frame();
   }
 }
 
