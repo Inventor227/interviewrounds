@@ -61,9 +61,10 @@ const HA_ORDER = [
 const HA_MAX = [0.65, 0.65, 0.65, 0.65, 0.65, 0.75, 0.65, 0.65, 0.65, 0.75, 0.65, 0.65, 0.65, 0.65, 0];
 /**
  * How much of the loudness jaw each viseme keeps, in HeadAudio order. Lips that must meet (p, b, m) or touch the
- * teeth (f, v) would be pulled apart by a loud jaw, so those keep little of it; open vowels keep all of it.
+ * teeth (f, v) would be pulled apart by a loud jaw, so those keep little of it; vowels and most consonants keep all
+ * or nearly all of it (hisses a little less), so the mouth does not read smaller overall.
  */
-const HA_JAW = [1, 0.85, 0.7, 0.9, 0.75, 0.12, 0.55, 0.6, 0.65, 0.35, 0.75, 0.7, 0.75, 0.6, 1];
+const HA_JAW = [1, 1, 0.9, 1, 0.9, 0.12, 0.8, 0.8, 0.9, 0.35, 1, 0.9, 0.9, 0.8, 1];
 
 export const ATTACK_S = 0.04;
 export const RELEASE_S = 0.09;
