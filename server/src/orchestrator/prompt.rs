@@ -597,7 +597,11 @@ const QUESTION_KEYS: [&str; 10] = [
 fn strings(card: &Value, field: &str) -> Vec<String> {
     card.get(field)
         .and_then(Value::as_array)
-        .map(|a| a.iter().filter_map(|i| i.as_str().map(str::to_string)).collect())
+        .map(|a| {
+            a.iter()
+                .filter_map(|i| i.as_str().map(str::to_string))
+                .collect()
+        })
         .unwrap_or_default()
 }
 
@@ -810,16 +814,24 @@ mod tests {
             voice: VoiceKind::Fake,
         };
         let mut checked = 0;
-        for round in catalog.rounds.values().filter(|r| r.round_type != "meeting") {
+        for round in catalog
+            .rounds
+            .values()
+            .filter(|r| r.round_type != "meeting")
+        {
             let card = catalog
                 .bank_card(&round.question_pool, None)
                 .cloned()
                 .unwrap_or(Value::Null);
             let persona = catalog.personas.values().next().expect("a persona");
-            let text = render_system(&catalog, round, persona, 0, &[], &card, &settings)
-                .expect("renders");
+            let text =
+                render_system(&catalog, round, persona, 0, &[], &card, &settings).expect("renders");
             for key in ["{question.", "{questions}", "{persona.", "{target_minutes}"] {
-                assert!(!text.contains(key), "{}: left {key} in the prompt", round.id);
+                assert!(
+                    !text.contains(key),
+                    "{}: left {key} in the prompt",
+                    round.id
+                );
             }
             let prompt = card["prompt"].as_str().expect("card prompt");
             assert!(text.contains(prompt), "{}: card prompt missing", round.id);

@@ -640,7 +640,7 @@ impl SessionState {
             .map(str::to_lowercase);
         match problem {
             Some(problem) => format!(
-                "{hi}, and this is {round}. Today's problem is the {problem}, and it's on your card. Where would you like to start?"
+                "{hi}, and this is {round}. Today's problem is the {problem}, it's on your card too, so where would you like to start?"
             ),
             None => format!(
                 "{hi}, and this is {round}. The question is on your card, so take a look and tell me where you'd like to start."
