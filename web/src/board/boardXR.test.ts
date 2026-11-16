@@ -146,6 +146,34 @@ describe('board in XR', () => {
     expect(store.board.ghosts).toEqual([]);
   });
 
+  it('naming a drawn box sets its type from the name; a tray card or a type already changed stays as it is', () => {
+    const { port, store, sent, xr } = setup();
+    port.pinchStroke('right', roughBox(8, 8, 10, 6, 0.4, 2));
+    expect(store.board.items[0]).toMatchObject({ kind: 'component', type: 'service' });
+    xr.say('call that the seat table', port.now);
+    expect(store.board.items[0]).toMatchObject({ type: 'db', label: 'Seat table' });
+    expect(sent.slice(-2).map((o) => [o.op, o.src])).toEqual([
+      ['item.set_type', 'voice_grammar'],
+      ['item.label', 'voice_grammar'],
+    ]);
+    // A name that says nothing about the type keeps the service.
+    port.pinchStroke('right', roughBox(30, 8, 10, 6, 0.4, 5));
+    xr.say('call that the ticket service', port.now);
+    expect(store.board.items[1]).toMatchObject({ type: 'service', label: 'Ticket service' });
+    // Renaming a card whose type was already changed (here by the Scribe) never changes it again.
+    store.apply({ op_id: 'sc1', src: 'scribe', op: 'item.set_type', args: { id: store.board.items[1]!.id, type: 'worker' } });
+    port.pinchStroke('right', step([[35, 11], [35.3, 11]], 0.2));
+    xr.say('call that the seat table', port.now);
+    expect(store.board.items[1]).toMatchObject({ type: 'worker', label: 'Seat table' });
+    // A service pulled from the tray was chosen: its name never changes its type.
+    const slot = xr.kit.tray.find((s) => s.type === 'service')!;
+    port.pinchStroke('right', step([[slot.x + 3, slot.y + 1.3], [40, 30]], 0.8));
+    const tray = store.board.items.at(-1)!;
+    expect(tray).toMatchObject({ kind: 'component', type: 'service' });
+    xr.say('call that the seat table', port.now);
+    expect(store.board.items.at(-1)).toMatchObject({ type: 'service', label: 'Seat table' });
+  });
+
   it('a left-handed user pulls cards from a tray on the right', () => {
     const { port, store, xr } = setup('left');
     const slot = xr.kit.tray.find((s) => s.type === 'db')!;

@@ -5,14 +5,14 @@
 // setGhosts).
 import type { BoardOp } from '../shared/types';
 import { GhostLayer } from './ghosts';
-import { VOICE_FOCUS_MS, voiceLabel, type VoiceLabel } from './grammar';
+import { inferComponentType, VOICE_FOCUS_MS, voiceLabel, type VoiceLabel } from './grammar';
 import { HandAdapter } from './hand';
 import { MAX_TEXT_CHARS } from './validate';
 import { BoardInput, type PointerAdapter } from './input';
 import { CodePanel } from './codePanel';
 import type { Kit } from './kits';
 import { kitForBoard } from './kits/index';
-import { IdGen } from './model';
+import { findItem, IdGen } from './model';
 import type { BoardStore } from './ops';
 import type { HapticName } from './pointer';
 import type { BoardXRPort, Sfx, SfxName } from './port';
@@ -306,7 +306,17 @@ export function createBoardXR(port: BoardXRPort, opts: BoardXROptions): BoardXR 
       const hit = voiceLabel(store.board, text, store.freshFocus(t, VOICE_FOCUS_MS));
       if (!hit) return null;
       const args = { id: hit.id, text: clampText(hit.label) };
-      if (hit.mode === 'commit') commit({ op_id: ids.next('op'), src: 'voice_grammar', op: 'item.label', args });
+      if (hit.mode === 'commit') {
+        // A box drawn by hand starts as a service: its spoken name says what it really is ("call that the seat
+        // table" makes it a database). Only while it still has the type its shape gave it; never a tray choice.
+        const it = findItem(store.board, hit.id);
+        const drawn = input.drawnType(hit.id);
+        const type = inferComponentType(hit.label);
+        if (it?.kind === 'component' && drawn !== null && it.type === drawn && type && type !== it.type) {
+          commit({ op_id: ids.next('op'), src: 'voice_grammar', op: 'item.set_type', args: { id: hit.id, type } });
+        }
+        commit({ op_id: ids.next('op'), src: 'voice_grammar', op: 'item.label', args });
+      }
       else store.suggest({ op_id: ids.next('op'), src: 'scribe', op: 'item.label', args });
       return hit;
     },

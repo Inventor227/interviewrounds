@@ -151,6 +151,8 @@ export class BoardInput {
   private readonly now_s: () => number;
   /** The card under each idle pointer (a hovering hand or the mouse), for highlighting. */
   private readonly hoverBy = new Map<Hand, string>();
+  /** Components made by drawing a box or a circle, with the type the shape gave them (not chosen from the tray). */
+  private readonly drawnAs = new Map<string, string>();
 
   constructor(
     private readonly store: BoardStore,
@@ -495,17 +497,32 @@ export class BoardInput {
     this.createItem(slot.make, x - w / 2, y - h / 2, w, h, [x, y]);
   }
 
-  /** Creates what a make produces at a snapped, on-sheet spot, filed by the kit; focuses it. */
-  private createItem(make: TrayMake, x: number, y: number, w: number, h: number, at?: Pt): void {
+  /**
+   * The type a hand-drawn component got from its shape (a box: service, a circle: client), or null for anything else
+   * (pulled from the tray, made by the Scribe). A spoken name may then say what it really is.
+   */
+  drawnType(id: string): string | null {
+    return this.drawnAs.get(id) ?? null;
+  }
+
+  /** Creates what a make produces at a snapped, on-sheet spot, filed by the kit; focuses it. Returns its id. */
+  private createItem(make: TrayMake, x: number, y: number, w: number, h: number, at?: Pt): string | null {
     const [cx, cy] = clampToSheet(this.board, snap(x), snap(y), w, h);
     const id = this.ids.next('item');
     let item = itemFor(make, id, cx, cy, w, h);
-    if (!item) return;
+    if (!item) return null;
     const [px, py] = at ?? [cx + w / 2, cy + h / 2];
     const placed = this.kit.place?.(item, px, py, this.board);
     if (placed) item = { ...item, ...placed } as BoardItem;
     this.op({ op: 'item.create', args: item });
     this.focus(id);
+    return id;
+  }
+
+  /** A component a drawn shape made: remembered with its type, so a spoken name may change it (drawnType). */
+  private drawnItem(id: string | null): void {
+    const it = id ? findItem(this.board, id) : null;
+    if (it?.kind === 'component') this.drawnAs.set(it.id, it.type);
   }
 
   private finishStroke(stroke: StrokeBuilder): void {
@@ -528,7 +545,7 @@ export class BoardInput {
         const make = this.kit.drawn?.rect === undefined ? ({ kind: 'component', type: 'service' } as TrayMake) : this.kit.drawn.rect;
         if (make) {
           const size = make.kind === 'component' || make.kind === 'class' ? { w: Math.max(r.w, make.kind === 'class' ? 10 : r.w), h: Math.max(r.h, make.kind === 'class' ? 6 : r.h) } : makeSize(make, this.kit);
-          this.createItem(make, r.x, r.y, size.w, size.h);
+          this.drawnItem(this.createItem(make, r.x, r.y, size.w, size.h));
           return;
         }
         break;
@@ -539,7 +556,7 @@ export class BoardInput {
           const d = snap(2 * r.r);
           const w = Math.max(3, d);
           const h = Math.max(2, d);
-          this.createItem(make, r.cx - w / 2, r.cy - h / 2, w, h);
+          this.drawnItem(this.createItem(make, r.cx - w / 2, r.cy - h / 2, w, h));
           return;
         }
         break;
