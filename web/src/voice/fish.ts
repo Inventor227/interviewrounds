@@ -18,6 +18,8 @@ export interface FishSessionLike {
   interrupt(): void;
   setMicMuted(muted: boolean): Promise<void>;
   startAudio(): Promise<void>;
+  /** The agent's output loudness, 0..1. */
+  getOutputVolume?(): number;
   end(): Promise<void>;
   getRoom(): RoomLike | undefined;
 }
@@ -203,6 +205,10 @@ export class FishTransport implements VoiceTransport {
 
   noteActivity(): void {
     this.session?.sendUserActivity();
+  }
+
+  outputLevel(): number {
+    return this.session?.getOutputVolume?.() ?? 0;
   }
 
   outputStream(): MediaStream | null {

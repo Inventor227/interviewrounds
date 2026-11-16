@@ -79,6 +79,8 @@ export interface VoiceTransport {
   sendText(text: string): void;
   /** The agent's audio for analysis only (lip sync). Never route it to the speakers. */
   outputStream(): MediaStream | null;
+  /** How loud the agent's audio is right now, 0..1 (when the transport can tell). */
+  outputLevel?(): number;
   on<K extends TransportEvent>(event: K, cb: TransportEvents[K]): () => void;
   /** Stops the agent mid-sentence (pause, barge-in). */
   interrupt?(): void;

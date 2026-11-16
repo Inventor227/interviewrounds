@@ -47,6 +47,7 @@ import {
   type VoiceMode,
 } from '../shared/types';
 import { PanelController } from '../voice/panel';
+import { speakGate } from '../voice/speakGate';
 import {
   Emitter,
   isMarker,
@@ -1310,6 +1311,12 @@ export class RoundController {
     t.on('agentText', (e) => this.onAgentText(t, e));
     t.on('ended', (e) => this.onEnded(t, e.reason));
     t.on('error', (e) => this.onVoiceError(t, e));
+    // What the user sees of a reply waits until it is audible (a reply stopped within milliseconds shows nothing).
+    const gate = speakGate(t);
+    gate.on('show', () => {
+      if (this.modes.get(t) === 'speaking' && this.st !== 'paused') this.deps.avatars?.(t.panelistId)?.setMode('speaking');
+    });
+    gate.on('text', (e) => this.showAgentText(t, e));
     return t;
   }
 
@@ -1485,8 +1492,10 @@ export class RoundController {
     this.modes.set(t, m);
     for (const watch of [...(this.quietWaiters.get(t) ?? [])]) watch(m);
     const avatar = this.deps.avatars?.(t.panelistId);
-    // Paused: everyone sits and listens, whatever a voice still reports.
-    avatar?.setMode(this.st === 'paused' ? 'listening' : m);
+    // Paused: everyone sits and listens, whatever a voice still reports. The speaking pose waits for the reply to be
+    // audible (the speak gate's `show`).
+    if (this.st === 'paused') avatar?.setMode('listening');
+    else if (m !== 'speaking' || speakGate(t).isShown) avatar?.setMode(m);
     // A reply that was already on its way when the pause landed: it does not play into the pause.
     if (this.st === 'paused' && (m === 'thinking' || m === 'speaking')) t.interrupt?.();
     if (m === 'speaking' && avatar && this.st !== 'paused') {
@@ -1598,6 +1607,10 @@ export class RoundController {
     const split = this.latency.agentText(Date.now(), e.segmentId);
     if (split) this.events.emit('latency', split);
     this.noteSpoken(t, e);
+  }
+
+  /** Reply text the user may see (the speak gate holds a reply's words until it is audible). */
+  private showAgentText(t: VoiceTransport, e: AgentText): void {
     this.events.emit('transcript', {
       panelistId: t.panelistId,
       role: 'agent',
