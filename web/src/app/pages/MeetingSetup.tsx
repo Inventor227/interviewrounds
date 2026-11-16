@@ -267,7 +267,7 @@ function Prepared(props: {
       </div>
 
       <h2 class="section-title">They will likely push on</h2>
-      <p class="rsec-lede">Untick anything that would not come up. The rest shapes their questions.</p>
+      <p class="rsec-lede">Untick what would not come up.</p>
       <ul class="people-plan">
         {plan.attendees.map((a, i) => (
           <li key={a.name} class="person-plan" data-test="plan-attendee">
@@ -558,7 +558,7 @@ function SetupForm(props: { catalog: Catalog; me?: Me }) {
         <button type="submit" class="btn btn-primary btn-big" disabled={busy} data-test="prepare">
           {busy ? 'Preparing the room' : 'Prepare the room'}
         </button>
-        <p class="fine">{busy ? 'Thinking about what they will ask. A few seconds.' : 'Next you see what they will likely push on, then you start.'}</p>
+        <p class="fine">{busy ? 'A few seconds.' : 'Next: what they will push on.'}</p>
       </div>
     </form>
   );
@@ -568,7 +568,7 @@ export function MeetingSetup() {
   const catalog = useAsync(() => loadCatalog(), []);
   const me = useAsync(() => loadMe(), []);
   return (
-    <Page test="meeting" title="Rehearse a real meeting" lede="Who is in the room, what they care about, and what you want from them." back={{ href: '/start', label: 'All rounds' }}>
+    <Page test="meeting" title="Rehearse a real meeting" lede="Who is there, and what you want from them." back={{ href: '/start', label: 'All rounds' }}>
       {catalog.status === 'loading' && <Loading rows={5} />}
       {catalog.status === 'error' && <ErrorState error={catalog.error} onRetry={catalog.reload} />}
       {catalog.status === 'ready' && <SetupForm catalog={catalog.data} me={me.data} />}

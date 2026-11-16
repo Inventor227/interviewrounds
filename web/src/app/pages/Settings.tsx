@@ -230,7 +230,7 @@ function Form(props: { me: Me }) {
         <Toggle
           id="practice_mode"
           label="Practice mode"
-          hint="Interviewers may offer a hint when you are stuck. Hints are noted in the report."
+          hint="A hint when you are stuck. Noted in the report."
           checked={s.practice_mode}
           onChange={(v) => set('practice_mode', v)}
         />
@@ -254,7 +254,7 @@ function Form(props: { me: Me }) {
         <Range
           id="sfx_volume"
           label="Sound effects"
-          hint="Soft clicks and paper sounds. Always quiet enough to stay out of your mic."
+          hint="Soft clicks and paper sounds."
           min={0}
           max={1}
           step={0.1}
@@ -315,7 +315,7 @@ function Form(props: { me: Me }) {
 export function Settings() {
   const me = useAsync(() => loadMe(), []);
   return (
-    <Page test="settings" title="Settings" lede="Your defaults for rounds, voice and the room. Changes save as you go.">
+    <Page test="settings" title="Settings" lede="Changes save as you go.">
       {me.status === 'loading' && <Loading rows={6} />}
       {me.status === 'error' && <ErrorState error={me.error} onRetry={me.reload} />}
       {me.status === 'ready' && <Form me={me.data} />}
