@@ -26,8 +26,10 @@ export default defineConfig({
   plugins: [
     preact(),
     // World and emulator settings (Quest 3, home_office room) live in iwsdk.config.json,
-    // which this IWSDK version requires as the single source for them.
-    iwsdkDev(),
+    // which this IWSDK version requires as the single source for them. Production builds keep only
+    // the UIKit fonts that UIKitML files in public/ name; the room builds its panels in code, so its
+    // font is listed here, or every panel in the headset draws without text.
+    iwsdkDev({ bundle: { fonts: ['inter'] } }),
     sharePreact(),
     // Content versions of the avatars and the transcoder (`virtual:ir-static`).
     staticVersions(),
