@@ -5,6 +5,7 @@ use std::time::Duration;
 use axum::http::{StatusCode, header};
 use ir_server::{AppState, router};
 use serde_json::json;
+use tower::ServiceExt;
 use sqlx::postgres::PgPoolOptions;
 
 #[tokio::test]
@@ -207,6 +208,21 @@ async fn only_the_transcoder_worker_may_eval() {
     assert_eq!(csp(&res), ir_server::app::KTX2_WORKER_CSP);
     assert!(csp(&res).contains("'unsafe-eval'"));
 
+    // A worker that revalidates its script (304) must get the same policy, or it runs under the page's.
+    let last_modified = res.headers().get(header::LAST_MODIFIED).unwrap().clone();
+    let res = app
+        .clone()
+        .oneshot(
+            axum::http::Request::get(ir_server::app::KTX2_WORKER_PATH)
+                .header(header::IF_MODIFIED_SINCE, last_modified)
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::NOT_MODIFIED);
+    assert_eq!(csp(&res), ir_server::app::KTX2_WORKER_CSP);
+
     // The page and every other file keep the strict policy.
     for path in ["/", "/round/x", "/vendor/basis/basis_transcoder.js"] {
         let res = common::get(app.clone(), path).await;
@@ -222,7 +238,6 @@ async fn a_panicking_handler_answers_500_and_the_server_keeps_serving() {
     use axum::Router;
     use axum::body::Body;
     use axum::routing::get;
-    use tower::ServiceExt;
 
     async fn boom() -> &'static str {
         panic!("user text broke a parser")

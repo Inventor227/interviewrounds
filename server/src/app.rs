@@ -285,11 +285,18 @@ pub const KTX2_WORKER_PATH: &str = "/vendor/basis/ktx2_worker.js";
 pub const KTX2_WORKER_CSP: &str =
     "default-src 'none'; script-src 'self' 'unsafe-eval' 'wasm-unsafe-eval'";
 
-/// Gives the transcoder worker its own CSP (the app-wide one is only set when a response has none).
+/// Gives the transcoder worker its own CSP (the app-wide one is only set when a response has none). Also on a 304:
+/// a worker that revalidates its script runs under the policy of that answer, so a 304 without it gets the page's.
 async fn worker_csp(req: Request, next: Next) -> Response {
     let worker = req.uri().path() == KTX2_WORKER_PATH;
     let mut res = next.run(req).await;
-    if worker && res.status().is_success() {
+    let script = res
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|t| t.starts_with("text/javascript"));
+    let answered = (res.status().is_success() && script) || res.status() == StatusCode::NOT_MODIFIED;
+    if worker && answered {
         res.headers_mut().insert(
             header::CONTENT_SECURITY_POLICY,
             HeaderValue::from_static(KTX2_WORKER_CSP),
