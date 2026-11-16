@@ -65,9 +65,11 @@ export const CHIP_HIT_CM = 2.2;
 /** Drawn radius of the tab and the chip (render.ts, hand size): inside another card's core only these count. */
 export const TAB_DRAWN_CM = 1.2;
 export const CHIP_DRAWN_CM = 1.1;
-/** Half size of an edge label pill, the target of a labelled edge. */
+/** Half size of an edge label pill, the target of a labelled edge (as drawn). */
 const LABEL_PILL_HALF_W_CM = 3;
 const LABEL_PILL_HALF_H_CM = 0.8;
+/** Its hit area reaches this far up and down outside a card: 2.2 cm tall, a fingertip's smallest target. */
+export const LABEL_PILL_HIT_HALF_H_CM = 1.1;
 /** Hit distance from an ink stroke, for picking it up. */
 export const INK_HIT_CM = 0.5;
 /**
@@ -262,7 +264,7 @@ export class BoardInput {
       if (!m) continue;
       // A labelled edge shows a pill instead of a chip: the pill is the target.
       const hitChip = e.label || e.rel
-        ? Math.abs(m[0] - x) <= LABEL_PILL_HALF_W_CM && Math.abs(m[1] - y) <= LABEL_PILL_HALF_H_CM
+        ? Math.abs(m[0] - x) <= LABEL_PILL_HALF_W_CM && Math.abs(m[1] - y) <= (core ? LABEL_PILL_HALF_H_CM : LABEL_PILL_HIT_HALF_H_CM)
         : Math.hypot(m[0] - x, m[1] - y) <= (core ? CHIP_DRAWN_CM : CHIP_HIT_CM);
       if (hitChip) return { kind: 'press', id: e.id, start: [x, y], target: 'edge' };
     }
