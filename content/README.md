@@ -48,20 +48,21 @@ template default. `tools/content-check.mjs` enforces this for panels and templat
 
 | Persona | Role played | Style | Avatar | Voice (`voices.json`) | Appears with |
 |---|---|---|---|---|---|
-| Maya | Senior Software Engineer | warm | f01 | `maya` | alone (coding, object design); designer Mei in project kickoff |
-| Ana | Site Reliability Engineer | neutral | f01 | `ana` | Daniel; partner Rhea in investor pitch; Nadia in exec update |
-| Priya | Group Product Manager | warm | f02 | `priya` | Leo; Dana in client proposal; Helen in project kickoff |
-| Grace | Chief of Staff, meeting chair | neutral | f03 | `grace` | any meeting she chairs |
-| Daniel | Staff Software Engineer | neutral | m02 | `daniel` | Ana; Ravi in performance review; Tomas in project kickoff |
-| Leo | Data Scientist | neutral | m02 | `leo` | Priya; Tom in investor pitch |
-| Sam | Engineering Manager | warm | m04 | `sam` | alone, or Viktor in PM leadership |
-| Viktor | Director of Product | tough | m05 | `viktor` | Sam; Marcus in client proposal; Martin in exec update |
+| Maya | Senior Software Engineer | warm | f01 | `maya`, Harper | alone (coding, object design); designer Mei in project kickoff |
+| Ana | Site Reliability Engineer | neutral | f01 | `ana`, Wren | Daniel; partner Rhea in investor pitch; Nadia in exec update |
+| Priya | Group Product Manager | warm | f02 | `priya`, Priya | Leo; Dana in client proposal; Helen in project kickoff |
+| Grace | Chief of Staff, meeting chair | neutral | f03 | `grace`, Amara | any meeting she chairs |
+| Daniel | Staff Software Engineer | neutral | m02 | `daniel`, Mason | Ana; Ravi in performance review; Tomas in project kickoff |
+| Leo | Data Scientist | neutral | m02 | `leo`, Gregory | Priya; Tom in investor pitch |
+| Sam | Engineering Manager | warm | m04 | `sam`, Sawyer | alone, or Viktor in PM leadership |
+| Viktor | Director of Product | tough | m05 | `viktor`, Oliver | Sam; Marcus in client proposal; Martin in exec update |
 
 Shared avatars: Maya and Ana (f01), Daniel and Leo (m02). When the meeting prepare step adds Grace or assigns a persona to a
 custom attendee, it must keep avatars and voices distinct inside the meeting (`prompts/meeting-prepare.md`).
 
-Voices are Fish voice library picks chosen from the public listing by use count and tags. Each has a reason and two
-alternates. Confirm by ear before publishing the voice agents.
+Voices are Fish Official voices, picked by ear from one shared test line and by median pitch so that no interviewer
+sounds heavy. Each has a reason and two official alternates. The server sends the persona's voice id with every voice
+session, so changing a voice is a content change and needs no agent republish.
 
 ## Prompts
 
