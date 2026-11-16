@@ -72,8 +72,6 @@ const SHOTS = [
   { name: 'history-empty', path: '/history', fake: 'empty' },
   { name: 'settings', path: '/settings' },
   { name: 'settings-delete-confirm', path: '/settings', act: tap('delete-data') },
-  { name: 'pricing', path: '/pricing' },
-  { name: 'pricing-pro', path: '/pricing', fake: 'user' },
   { name: 'not-supported', path: '/not-supported' },
   { name: 'not-found', path: '/nope' },
 ];
