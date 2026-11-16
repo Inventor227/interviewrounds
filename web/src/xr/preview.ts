@@ -36,7 +36,7 @@ export const PREVIEW_FOV = 60;
  * stage about 1045 x 588: far more pixels than the view needs, every frame, on the device with the least memory.
  */
 export const PREVIEW_MAX_RATIO = 2;
-export const PREVIEW_MAX_PIXELS = 1_500_000;
+export const PREVIEW_MAX_PIXELS = 2_000_000;
 
 /**
  * The pixel ratio the preview draws at for a cssW x cssH stage: the device's own, at most PREVIEW_MAX_RATIO and at most

@@ -28,7 +28,7 @@ describe('previewPixelRatio', () => {
 
   it('keeps a laptop with a sharp screen close to its look', () => {
     const { r, px } = buffer(2, 928, 522);
-    expect(r).toBeGreaterThan(1.7);
+    expect(r).toBe(PREVIEW_MAX_RATIO); // the page's widest stage (928 x 522) keeps a 2x screen's full ratio
     expect(px).toBeLessThanOrEqual(PREVIEW_MAX_PIXELS);
   });
 
