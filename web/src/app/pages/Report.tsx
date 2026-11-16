@@ -265,6 +265,7 @@ function Retries(props: { w: NonNullable<ReportData['weakest_moment']> }) {
     <ul class="retries" data-test="retries">
       {list.map((x) => (
         <li key={x.session_id}>
+          <span class="retry-label">Retry</span>
           <span class="retry-scores num">
             {x.before_score ?? '?'} <span aria-hidden="true">→</span>
             <span class="sr-only">to</span> {x.after_score ?? '?'}
