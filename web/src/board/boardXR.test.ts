@@ -54,6 +54,24 @@ describe('board in XR', () => {
     expect(sounds).toEqual(expect.arrayContaining(['snap', 'click']));
   });
 
+  it('a pinch that picks up a card clicks at once; a stroke on empty sheet does not', () => {
+    const { port, store, sounds } = setup();
+    store.apply({ op_id: 's1', src: 'hand', op: 'item.create', args: { id: 'n1', kind: 'component', type: 'db', label: null, x: 10, y: 10, w: 8, h: 5 } });
+    for (let i = 0; i < 12; i++) {
+      port.handAt('right', 30, 30);
+      port.frame();
+    }
+    port.select('right', 'start', 'hand');
+    expect(sounds).not.toContain('click');
+    port.select('right', 'end', 'hand');
+    for (let i = 0; i < 12; i++) {
+      port.handAt('right', 14, 12.5);
+      port.frame();
+    }
+    port.select('right', 'start', 'hand');
+    expect(sounds.at(-1)).toBe('click');
+  });
+
   it('a voice command labels the fresh focus card; a statement only suggests', () => {
     const { port, store, sent, xr } = setup();
     port.pinchStroke('right', roughBox(8, 8, 10, 6, 0.4, 2));

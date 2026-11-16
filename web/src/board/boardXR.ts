@@ -195,7 +195,7 @@ export function createBoardXR(port: BoardXRPort, opts: BoardXROptions): BoardXR 
   });
   const input = new BoardInput(store, ghosts, kit, commit, { ids, now, ...(opts.now_s ? { now_s: opts.now_s } : {}) });
 
-  // Who acted last (for the pulse), and a pulse when a press picks something up. Registered after the ghosts
+  // Who acted last (for the pulse), and a click and a pulse when a press picks something up. Registered after the ghosts
   // and the input, so both have seen the press.
   const offActor = [
     pointer.onDown((p) => {
@@ -203,7 +203,11 @@ export function createBoardXR(port: BoardXRPort, opts: BoardXROptions): BoardXR 
       actor = p.hand;
       actorAt = clock;
       pressing.add(p.hand);
-      if (input.holding(p.hand) === 'pick') port.haptic?.(p.hand, 'press');
+      if (input.holding(p.hand) === 'pick') {
+        // A pinch or a trigger that picks something up is heard (a short click) and, on a controller, felt.
+        opts.sfx?.play('click');
+        port.haptic?.(p.hand, 'press');
+      }
     }),
     pointer.onUp((p) => {
       if (p.hand === 'mouse') return;
