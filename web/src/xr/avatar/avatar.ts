@@ -345,7 +345,10 @@ export class Avatar {
     }
     const cue = this.cues.update(dt, mode === 'listening');
     if (cue === 'accept' && !this.oneShot) this.playOnce(this.pick([CLIPS.accept1, CLIPS.accept2, CLIPS.accept3]));
-    else if (cue) {
+    else if (cue === 'micro') {
+      // "Mm-hm" while the user keeps talking: a small, quick dip, never on top of a nod already running.
+      if (!this.nodder.busy) this.nodder.trigger(between(this.rng, 1.8, 3) * DEG, between(this.rng, 0.45, 0.6));
+    } else if (cue) {
       this.nodder.trigger(between(this.rng, 3, 6) * DEG, between(this.rng, 0.6, 0.8), this.rng() < 0.2);
       if (this.rng() < 0.3) this.blinker.trigger();
     }
