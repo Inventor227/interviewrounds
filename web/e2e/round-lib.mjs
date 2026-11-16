@@ -308,17 +308,45 @@ export async function draw(points, segment = 0.1, { rest = 0.3, hold = 0.15, end
   return xr('run-sequence', { device: 'hand-right', steps, body: 'auto', gaze: 'fixed', idleHand: 'keep' });
 }
 
-/** A quick pinch on a board point (accept a ghost). */
-export async function tap(x, y) {
+/** A quick pinch on a board point (accept a ghost). `rest` (seconds) waits over it first. */
+export async function tap(x, y, rest = 0.3) {
   const [p] = (await toWorld([[x, y]], 1)).map(r4);
   const steps = [
     { label: 'reach', position: p, anchor: 'grasp', duration: 0.6, pinch: 0 },
-    { label: 'settle', duration: 0.3 },
+    { label: 'settle', duration: rest },
     { label: 'pinch', pinch: 1, duration: 0.12 },
     { label: 'release', pinch: 0, duration: 0.12 },
     { label: 'lift', position: { x: p.x, y: p.y + 0.06, z: p.z }, duration: 0.3 },
   ];
   return xr('run-sequence', { device: 'hand-right', steps, body: 'auto', gaze: 'fixed', idleHand: 'keep' });
+}
+
+/**
+ * Where the scripted pinch lands against where the hand is sent, near (x, y) on empty sheet (board cm): [dx, dy]. The
+ * emulator places its hand by a grasp point that is not the thumb and index tips the app reads, and how far apart they
+ * are depends on how the hand is turned (1 to 2 cm here). A person aims by sight; the script aims by the app's own
+ * reading of a tap that makes no mark. Null when no pinch was seen.
+ */
+export async function pinchOffset(x, y) {
+  // Never on a suggestion (a tap there would accept it) or a card.
+  const busy = (q) =>
+    page((a) => {
+      const d = globalThis.__round.room.debug;
+      const b = d.store.board;
+      const inR = (r) => r && a.x >= r.x - 2 && a.x <= r.x + r.w + 2 && a.y >= r.y - 2 && a.y <= r.y + r.h + 2;
+      return b.ghosts.some((g) => inR(d.ghostRect(g.op_id))) || b.items.some((i) => i.w && inR(i));
+    }, { x: q[0], y: q[1] });
+  for (const dy of [0, 6, -12, 12]) {
+    if (!(await busy([x, y + dy]))) {
+      y += dy;
+      break;
+    }
+  }
+  const n = await page(() => globalThis.__round.room.debug.pinches?.().length ?? 0);
+  await tap(x, y, 1.5);
+  await sleep(800);
+  const d = await page((i) => globalThis.__round.room.debug.pinches?.()[i] ?? null, n);
+  return d ? [Math.round((d.x_cm - x) * 100) / 100, Math.round((d.y_cm - y) * 100) / 100] : null;
 }
 
 export const board = () =>
