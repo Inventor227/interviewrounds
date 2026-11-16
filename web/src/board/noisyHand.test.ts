@@ -245,7 +245,7 @@ describe('noisy hands: the pinch lets go for a moment mid gesture', () => {
     replay(port, along([[14, 12.5], [34, 22.5]], 0.5), 13, { ...REAL, closeCm: 0.3 }, { release: [{ at: 0.5, ms: 70 }] });
     const moves = ops.filter((o) => o.op === 'item.move');
     expect(moves).toHaveLength(1);
-    const it = store.board.items.find((i) => i.id === 'a')!;
+    const it = store.board.items.find((i) => i.id === 'a') as { x: number; y: number };
     // The card's centre lands within a grid step of where the hand ended (34, 22.5).
     expect(Math.abs(it.x + 4 - 34)).toBeLessThanOrEqual(1.5);
     expect(Math.abs(it.y + 2.5 - 22.5)).toBeLessThanOrEqual(1.5);
