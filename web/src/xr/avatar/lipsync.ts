@@ -14,7 +14,7 @@
 //
 // HeadAudio (@met4citizen/headaudio 1.0.0, MIT) gives the active viseme; we shape it ourselves (attack 40 ms,
 // release 90 ms) and scale it by loudness. An RMS-driven `jawOpen` floor keeps the mouth moving with the energy of
-// the voice even when the classifier lags. If the worklet or its model cannot load (offline, no AudioWorklet), we
+// the voice even when the classifier lags; it eases off on closing shapes (p, b, m, f, v) so the lips can meet. If the worklet or its model cannot load (offline, no AudioWorklet), we
 // fall back to RMS only, with a cheap spectral split between open, rounded, spread and hissing shapes.
 
 import workletUrl from '@met4citizen/headaudio/dist/headworklet.min.mjs?url';
@@ -59,6 +59,11 @@ const HA_ORDER = [
   'viseme_sil',
 ] as const;
 const HA_MAX = [0.65, 0.65, 0.65, 0.65, 0.65, 0.75, 0.65, 0.65, 0.65, 0.75, 0.65, 0.65, 0.65, 0.65, 0];
+/**
+ * How much of the loudness jaw each viseme keeps, in HeadAudio order. Lips that must meet (p, b, m) or touch the
+ * teeth (f, v) would be pulled apart by a loud jaw, so those keep little of it; open vowels keep all of it.
+ */
+const HA_JAW = [1, 0.85, 0.7, 0.9, 0.75, 0.12, 0.55, 0.6, 0.65, 0.35, 0.75, 0.7, 0.75, 0.6, 1];
 
 export const ATTACK_S = 0.04;
 export const RELEASE_S = 0.09;
@@ -340,7 +345,7 @@ export class LipSync {
       this.visemes.update(dt * 1000);
       const id = this.visemes.active;
       if (id >= 0 && raw > 0.02) t[HA_ORDER[id]!] = HA_MAX[id]! * (0.45 + 0.55 * raw);
-      t.jawOpen = raw * JAW_GAIN_VISEMES;
+      t.jawOpen = raw * JAW_GAIN_VISEMES * (id >= 0 ? HA_JAW[id]! : 1);
     } else {
       this.spectralShapes(raw);
       t.jawOpen = raw * JAW_GAIN_RMS;
