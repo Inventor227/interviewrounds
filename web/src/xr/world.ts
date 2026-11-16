@@ -738,6 +738,8 @@ export async function createXRApp(root: HTMLElement, opts: XRAppOptions): Promis
       const at = pressPoint(hand);
       if (desk && at && !placing && mover.state === 'idle' && onBar(hand)) {
         mover.down(hand, at, now, desk);
+        // Heard with a hand too: the hold ring then fills.
+        sounds.click();
         haptics.pulse(hand, 'press');
       }
       return;

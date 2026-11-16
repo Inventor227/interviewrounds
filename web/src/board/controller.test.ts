@@ -14,6 +14,7 @@ import type { SfxName } from './port';
 import { SurfaceProjector, sheetToWorld } from './sheetMath';
 import { along, roughBox } from './testkit';
 import { FakePort, stubCanvas } from './xrtestkit';
+import { GHOST_HOLD_MS } from './ghosts';
 
 function setup(board: Board = emptyBoard(), dominantHand: 'left' | 'right' = 'right') {
   const port = new FakePort();
@@ -153,7 +154,7 @@ describe('controllers on the board', () => {
     else port.controllerAimAt('right', 14, 30);
     for (let i = 0; i < 12; i++) port.frame();
     port.select('right', 'start', 'controller');
-    for (let i = 0; i < 50; i++) port.frame();
+    for (let i = 0; i < Math.ceil(GHOST_HOLD_MS / 14) + 2; i++) port.frame();
     port.select('right', 'end', 'controller');
     expect(rejected).toEqual(['g2']);
     expect(store.board.ghosts).toEqual([]);

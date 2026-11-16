@@ -266,23 +266,29 @@ export function createRoundRuntime({ preview }: RuntimeOptions): RoundController
     store = s;
     if (preview) relay = new RelayPointer();
     boardHand = dominantFor(null, settings?.dominant_hand);
-    const build = (hand: 'left' | 'right') => createBoardXR(a, {
-      store: s,
-      dominantHand: hand,
-      // The kit follows the board's round type; the round clock stamps traces and agenda ticks.
-      now_s: roundClock,
-      send: (op) => {
-        sync?.send(op);
-        active();
-      },
-      sendGhostReject: (id) => sync?.sendGhostReject(id),
-      sendFocus: (id) => {
-        if (!paused) sync?.sendFocus(id);
-      },
-      sfx: { play: (n) => a.sounds.play(n) },
-      pointer: relay ?? undefined,
-      ghostSettleMs: Number(devFlag('ghost_settle')) > 0 ? Number(devFlag('ghost_settle')) * 1000 : undefined,
-    });
+    /** Where each pinch or trigger went down on the board (dev builds, for scripted runs). */
+    const downs: { x_cm: number; y_cm: number; hand: string }[] = [];
+    const build = (hand: 'left' | 'right') => {
+      const b = createBoardXR(a, {
+        store: s,
+        dominantHand: hand,
+        // The kit follows the board's round type; the round clock stamps traces and agenda ticks.
+        now_s: roundClock,
+        send: (op) => {
+          sync?.send(op);
+          active();
+        },
+        sendGhostReject: (id) => sync?.sendGhostReject(id),
+        sendFocus: (id) => {
+          if (!paused) sync?.sendFocus(id);
+        },
+        sfx: { play: (n) => a.sounds.play(n) },
+        pointer: relay ?? undefined,
+        ghostSettleMs: Number(devFlag('ghost_settle')) > 0 ? Number(devFlag('ghost_settle')) * 1000 : undefined,
+      });
+      if (import.meta.env.DEV) b.hands?.onDown((p) => downs.push({ x_cm: Math.round(p.x_cm * 100) / 100, y_cm: Math.round(p.y_cm * 100) / 100, hand: p.hand }));
+      return b;
+    };
     board = build(boardHand);
     // The hand that touched the desk is the dominant one for this round, whatever the 2D setting says: the tray
     // (and in coding rounds the panel) is laid out again for it, before anything is on the sheet.
@@ -309,6 +315,7 @@ export function createRoundRuntime({ preview }: RuntimeOptions): RoundController
         // The board's pointers (hands and controllers) and what they hold, for scripted runs.
         pointers: () => ({ sources: board?.hands?.sources() ?? [], over: board?.hands?.pointers() ?? [], overlays: board?.input.overlays.map((o) => o.kind) ?? [] }),
         tray: () => board?.kit.tray.map((t) => ({ x: t.x, y: t.y, w: t.w, h: t.h })) ?? [],
+        pinches: () => downs.slice(),
       };
     }
 

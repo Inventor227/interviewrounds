@@ -4,7 +4,7 @@
 // - Statements ("that's the X", "this is our X", "it's the X") never change the board: they
 //   suggest the label as a ghost on the focus card (pinch to accept, settles in 4 s).
 // Anything looser goes to the Scribe, which shows ghosts too.
-import type { Board } from '../shared/types';
+import type { Board, ComponentType } from '../shared/types';
 import { findItem } from './model';
 
 const LEAD = String.raw`(?:(?:ok|okay|so|and|now|right|alright|let's|lets)[,\s]+)*`;
@@ -116,4 +116,31 @@ export function voiceLabel(board: Board, text: string, focus: string | null): Vo
   if (cmd) return { id: it.id, label: cmd.label, mode: 'commit' };
   const st = parseLabelStatement(text);
   return st ? { id: it.id, label: st.label, mode: 'suggest' } : null;
+}
+
+/**
+ * The component type a spoken card name implies, for a box drawn by hand (which starts as a service): "call that the
+ * seat table" is a database, "the Redis cache" a cache. First match wins, most specific first; null when the name says
+ * nothing about the type (it stays a service). Whole words only, so "app server" is not a client and "restore" not a store.
+ */
+const TYPE_WORDS: [ComponentType, RegExp][] = [
+  ['lb', /\b(?:load\s*balancers?|lb|elb|alb|nlb)\b/],
+  ['api_gateway', /\bgateways?\b/],
+  ['cdn', /\bcdns?\b/],
+  ['cache', /\b(?:caches?|caching|redis|memcached?)\b/],
+  ['queue', /\b(?:queues?|kafka|streams?|topics?|sqs|pub\s*sub|message\s*bus|event\s*bus)\b/],
+  ['object_store', /\b(?:object\s*stores?|object\s*storage|buckets?|blobs?|blob\s*storage|s3)\b/],
+  ['search', /\b(?:search|index|indexes|indices|elastic(?:search)?)\b/],
+  ['worker', /\b(?:workers?|jobs?|sweepers?|crons?|cron\s*jobs?|schedulers?)\b/],
+  ['kv', /\b(?:key\s*value|kv|nosql|dynamo(?:db)?|cassandra)\b/],
+  ['db', /\b(?:tables?|databases?|db|dbs|postgres(?:ql)?|sql|mysql|stores?|ledger)\b/],
+];
+const CLIENT_WORDS = /\b(?:clients?|apps?|browsers?|phones?|mobile|users?|frontend|front\s*end)\b/;
+const SERVER_WORDS = /\b(?:servers?|services?|backend|back\s*end|api|apis)\b/;
+
+export function inferComponentType(label: string): ComponentType | null {
+  const s = label.toLowerCase();
+  for (const [type, re] of TYPE_WORDS) if (re.test(s)) return type;
+  if (CLIENT_WORDS.test(s) && !SERVER_WORDS.test(s)) return 'client';
+  return null;
 }

@@ -1,6 +1,7 @@
 // Ghosts on the board: Scribe suggestions and local voice suggestions, drawn faded.
 // - Pinch a ghost to accept it (the caller sends it as a normal board.op with the same op_id).
-// - Pinch-hold it 0.6 s, or drag it onto the bin, to dismiss it (board.ghost_reject).
+// - Pinch-hold it 1 s, or drag it onto the bin, to dismiss it (board.ghost_reject). A slow pinch (well over
+//   half a second) still accepts.
 // - A Scribe ghost nobody touches settles (is accepted) 4 s after it first shows.
 // - A local suggestion (a voice statement like "that's the URL store") never settles: only a
 //   pinch accepts it, and untouched it fades away after 8 s. Talk never changes the board.
@@ -14,7 +15,7 @@ import { bounds, center, edgeMid, findItem, inRect, itemRect, type Pt, type Rect
 import type { BoardStore } from './ops';
 
 export const GHOST_SETTLE_MS = 4000;
-export const GHOST_HOLD_MS = 600;
+export const GHOST_HOLD_MS = 1000;
 /** An untouched local suggestion goes away after this long, without changing the board. */
 export const LOCAL_GHOST_FADE_MS = 8000;
 /** One slow frame adds at most this much to a pinch-hold, so a hitch never dismisses a ghost. */

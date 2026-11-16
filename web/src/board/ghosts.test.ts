@@ -76,7 +76,16 @@ describe('ghosts', () => {
     expect(sent.map((o) => o.op_id)).toEqual(['g1']);
   });
 
-  it('a pinch-hold of 0.6 s rejects the ghost; letting go after does nothing more', () => {
+  it('a slow pinch of 0.7 s still accepts the ghost: only a full second dismisses it', () => {
+    const { adapter, sent, rejected, tick } = setup();
+    adapter.down(44, 22);
+    for (let t = 0; t < 700; t += 50) tick(50);
+    adapter.up(44, 22);
+    expect(rejected).toEqual([]);
+    expect(sent.map((o) => o.op_id)).toEqual(['g1']);
+  });
+
+  it('a pinch-hold of 1 s rejects the ghost; letting go after does nothing more', () => {
     const { store, adapter, sent, rejected, tick } = setup();
     adapter.down(44, 22);
     for (let t = 0; t < GHOST_HOLD_MS / 2; t += 50) tick(50);

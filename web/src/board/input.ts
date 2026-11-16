@@ -65,9 +65,11 @@ export const CHIP_HIT_CM = 2.2;
 /** Drawn radius of the tab and the chip (render.ts, hand size): inside another card's core only these count. */
 export const TAB_DRAWN_CM = 1.2;
 export const CHIP_DRAWN_CM = 1.1;
-/** Half size of an edge label pill, the target of a labelled edge. */
+/** Half size of an edge label pill, the target of a labelled edge (as drawn). */
 const LABEL_PILL_HALF_W_CM = 3;
 const LABEL_PILL_HALF_H_CM = 0.8;
+/** Its hit area reaches this far up and down outside a card: 2.2 cm tall, a fingertip's smallest target. */
+export const LABEL_PILL_HIT_HALF_H_CM = 1.1;
 /** Hit distance from an ink stroke, for picking it up. */
 export const INK_HIT_CM = 0.5;
 /**
@@ -149,6 +151,8 @@ export class BoardInput {
   private readonly now_s: () => number;
   /** The card under each idle pointer (a hovering hand or the mouse), for highlighting. */
   private readonly hoverBy = new Map<Hand, string>();
+  /** Components made by drawing a box or a circle, with the type the shape gave them (not chosen from the tray). */
+  private readonly drawnAs = new Map<string, string>();
 
   constructor(
     private readonly store: BoardStore,
@@ -262,7 +266,7 @@ export class BoardInput {
       if (!m) continue;
       // A labelled edge shows a pill instead of a chip: the pill is the target.
       const hitChip = e.label || e.rel
-        ? Math.abs(m[0] - x) <= LABEL_PILL_HALF_W_CM && Math.abs(m[1] - y) <= LABEL_PILL_HALF_H_CM
+        ? Math.abs(m[0] - x) <= LABEL_PILL_HALF_W_CM && Math.abs(m[1] - y) <= (core ? LABEL_PILL_HALF_H_CM : LABEL_PILL_HIT_HALF_H_CM)
         : Math.hypot(m[0] - x, m[1] - y) <= (core ? CHIP_DRAWN_CM : CHIP_HIT_CM);
       if (hitChip) return { kind: 'press', id: e.id, start: [x, y], target: 'edge' };
     }
@@ -493,17 +497,32 @@ export class BoardInput {
     this.createItem(slot.make, x - w / 2, y - h / 2, w, h, [x, y]);
   }
 
-  /** Creates what a make produces at a snapped, on-sheet spot, filed by the kit; focuses it. */
-  private createItem(make: TrayMake, x: number, y: number, w: number, h: number, at?: Pt): void {
+  /**
+   * The type a hand-drawn component got from its shape (a box: service, a circle: client), or null for anything else
+   * (pulled from the tray, made by the Scribe). A spoken name may then say what it really is.
+   */
+  drawnType(id: string): string | null {
+    return this.drawnAs.get(id) ?? null;
+  }
+
+  /** Creates what a make produces at a snapped, on-sheet spot, filed by the kit; focuses it. Returns its id. */
+  private createItem(make: TrayMake, x: number, y: number, w: number, h: number, at?: Pt): string | null {
     const [cx, cy] = clampToSheet(this.board, snap(x), snap(y), w, h);
     const id = this.ids.next('item');
     let item = itemFor(make, id, cx, cy, w, h);
-    if (!item) return;
+    if (!item) return null;
     const [px, py] = at ?? [cx + w / 2, cy + h / 2];
     const placed = this.kit.place?.(item, px, py, this.board);
     if (placed) item = { ...item, ...placed } as BoardItem;
     this.op({ op: 'item.create', args: item });
     this.focus(id);
+    return id;
+  }
+
+  /** A component a drawn shape made: remembered with its type, so a spoken name may change it (drawnType). */
+  private drawnItem(id: string | null): void {
+    const it = id ? findItem(this.board, id) : null;
+    if (it?.kind === 'component') this.drawnAs.set(it.id, it.type);
   }
 
   private finishStroke(stroke: StrokeBuilder): void {
@@ -526,7 +545,7 @@ export class BoardInput {
         const make = this.kit.drawn?.rect === undefined ? ({ kind: 'component', type: 'service' } as TrayMake) : this.kit.drawn.rect;
         if (make) {
           const size = make.kind === 'component' || make.kind === 'class' ? { w: Math.max(r.w, make.kind === 'class' ? 10 : r.w), h: Math.max(r.h, make.kind === 'class' ? 6 : r.h) } : makeSize(make, this.kit);
-          this.createItem(make, r.x, r.y, size.w, size.h);
+          this.drawnItem(this.createItem(make, r.x, r.y, size.w, size.h));
           return;
         }
         break;
@@ -537,7 +556,7 @@ export class BoardInput {
           const d = snap(2 * r.r);
           const w = Math.max(3, d);
           const h = Math.max(2, d);
-          this.createItem(make, r.cx - w / 2, r.cy - h / 2, w, h);
+          this.drawnItem(this.createItem(make, r.cx - w / 2, r.cy - h / 2, w, h));
           return;
         }
         break;

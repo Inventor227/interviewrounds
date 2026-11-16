@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { Object3D } from 'three';
 import type { BoardOp } from '../shared/types';
-import { HandAdapter, TRACKING_GRACE_MS } from './hand';
+import { HandAdapter, PINCH_REJOIN_MS, TRACKING_GRACE_MS } from './hand';
 import type { BoardPoint } from './input';
 import { BoardInput } from './input';
 import { HLD_KIT } from './kits';
@@ -10,6 +10,14 @@ import { BoardStore } from './ops';
 import { placeAnchor, SheetProjector, sheetToWorld } from './sheetMath';
 import { along } from './testkit';
 import { FakePort } from './xrtestkit';
+
+/** Frames past the window in which a hand's let-go drag may still be picked up again (PINCH_REJOIN_MS). */
+function pastRejoin(port: FakePort, hand: 'left' | 'right' | null = null): void {
+  for (let i = 0; i * 14 <= PINCH_REJOIN_MS; i++) {
+    if (hand) port.setHand(hand, null);
+    port.frame();
+  }
+}
 
 function collect(adapter: HandAdapter) {
   const ev: [string, BoardPoint][] = [];
@@ -147,6 +155,7 @@ describe('HandAdapter', () => {
     for (const [x, y] of along([[20, 14], [30, 19.8]], 0.4)) at(x, y);
     at(30, 19.8, 40);
     port.select('right', 'end');
+    pastRejoin(port);
     expect(emitted).toHaveLength(1);
     expect(emitted[0]).toMatchObject({ op: 'item.move', args: { id: 'n1', x: 26, y: 17 } });
   });
@@ -211,6 +220,8 @@ describe('HandAdapter', () => {
     at(30, 30, 8);
     for (const [x, y] of along([[30, 30], [40, 34]], 0.4)) at(x, y);
     port.select('right', 'cancel');
+    // A drag waits out the tracking grace for the pinch to come back, then is lost.
+    at(40, 34, Math.ceil(TRACKING_GRACE_MS / 14) + 2);
     expect(emitted).toEqual([]);
     // Mid card drag: dropped where it was.
     at(14, 12.5, 3);
@@ -219,6 +230,7 @@ describe('HandAdapter', () => {
     for (const [x, y] of along([[14, 12.5], [24, 12.5]], 0.4)) at(x, y);
     at(24, 12.5, 40);
     port.select('right', 'cancel');
+    at(24, 12.5, Math.ceil(TRACKING_GRACE_MS / 14) + 2);
     expect(emitted[0]).toMatchObject({ op: 'item.move', args: { id: 'n1', x: 20 } });
   });
 
@@ -233,6 +245,7 @@ describe('HandAdapter', () => {
     const lastMove = ev.filter((e) => e[0] === 'move').at(-1)![1];
     for (let i = 0; i < 20; i++) at(35, 12.5);
     port.select('right', 'end');
+    pastRejoin(port);
     expect(emitted.at(-1)).toMatchObject({ op: 'edge.create', args: { from: 'n1', to: 'n2' } });
     // The drift correction has faded: the stroke is where the hand is (filter lag aside, at rest).
     const rest = ev.filter((e) => e[0] === 'move').at(-1)![1];
@@ -250,6 +263,7 @@ describe('HandAdapter', () => {
     // Half a second with no frames, then the release.
     port.now += 500;
     port.select('right', 'end');
+    pastRejoin(port);
     expect(emitted[0]).toMatchObject({ op: 'item.move', args: { id: 'n1', x: 20 } });
   });
 
@@ -323,6 +337,7 @@ describe('HandAdapter', () => {
     port.setHand('right', null);
     port.frame();
     port.select('right', 'end');
+    pastRejoin(port, 'right');
     expect(emitted[0]).toMatchObject({ op: 'item.move', args: { id: 'n1', x: 20, y: 10 } });
   });
 

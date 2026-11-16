@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { BoardOp, GhostOp } from '../shared/types';
 import { createBoardXR } from './boardXR';
-import { ghostRect, GHOST_SETTLE_MS } from './ghosts';
+import { ghostRect, GHOST_HOLD_MS, GHOST_SETTLE_MS } from './ghosts';
 import { HLD_KIT } from './kits';
 import { emptyBoard } from './model';
 import type { BoardPoint } from './input';
@@ -54,6 +54,24 @@ describe('board in XR', () => {
     expect(sounds).toEqual(expect.arrayContaining(['snap', 'click']));
   });
 
+  it('a pinch that picks up a card clicks at once; a stroke on empty sheet does not', () => {
+    const { port, store, sounds } = setup();
+    store.apply({ op_id: 's1', src: 'hand', op: 'item.create', args: { id: 'n1', kind: 'component', type: 'db', label: null, x: 10, y: 10, w: 8, h: 5 } });
+    for (let i = 0; i < 12; i++) {
+      port.handAt('right', 30, 30);
+      port.frame();
+    }
+    port.select('right', 'start', 'hand');
+    expect(sounds).not.toContain('click');
+    port.select('right', 'end', 'hand');
+    for (let i = 0; i < 12; i++) {
+      port.handAt('right', 14, 12.5);
+      port.frame();
+    }
+    port.select('right', 'start', 'hand');
+    expect(sounds.at(-1)).toBe('click');
+  });
+
   it('a voice command labels the fresh focus card; a statement only suggests', () => {
     const { port, store, sent, xr } = setup();
     port.pinchStroke('right', roughBox(8, 8, 10, 6, 0.4, 2));
@@ -79,13 +97,13 @@ describe('board in XR', () => {
     expect(sounds).toContain('snap');
   });
 
-  it('a pinch-hold of 0.6 s on a ghost dismisses it with board.ghost_reject', () => {
+  it('a pinch-hold of 1 s on a ghost dismisses it with board.ghost_reject', () => {
     const { port, store, sent, rejected, sounds } = setup();
     store.setGhosts([G]);
     port.handAt('right', 44, 22);
     port.frame();
     port.select('right', 'start');
-    for (let i = 0; i < 50; i++) port.frame();
+    for (let i = 0; i < Math.ceil(GHOST_HOLD_MS / 14) + 2; i++) port.frame();
     port.select('right', 'end');
     expect(rejected).toEqual(['g1']);
     expect(sent).toEqual([]);
@@ -126,6 +144,34 @@ describe('board in XR', () => {
     port.select('right', 'end');
     expect(rejected).toEqual([]);
     expect(store.board.ghosts).toEqual([]);
+  });
+
+  it('naming a drawn box sets its type from the name; a tray card or a type already changed stays as it is', () => {
+    const { port, store, sent, xr } = setup();
+    port.pinchStroke('right', roughBox(8, 8, 10, 6, 0.4, 2));
+    expect(store.board.items[0]).toMatchObject({ kind: 'component', type: 'service' });
+    xr.say('call that the seat table', port.now);
+    expect(store.board.items[0]).toMatchObject({ type: 'db', label: 'Seat table' });
+    expect(sent.slice(-2).map((o) => [o.op, o.src])).toEqual([
+      ['item.set_type', 'voice_grammar'],
+      ['item.label', 'voice_grammar'],
+    ]);
+    // A name that says nothing about the type keeps the service.
+    port.pinchStroke('right', roughBox(30, 8, 10, 6, 0.4, 5));
+    xr.say('call that the ticket service', port.now);
+    expect(store.board.items[1]).toMatchObject({ type: 'service', label: 'Ticket service' });
+    // Renaming a card whose type was already changed (here by the Scribe) never changes it again.
+    store.apply({ op_id: 'sc1', src: 'scribe', op: 'item.set_type', args: { id: store.board.items[1]!.id, type: 'worker' } });
+    port.pinchStroke('right', step([[35, 11], [35.3, 11]], 0.2));
+    xr.say('call that the seat table', port.now);
+    expect(store.board.items[1]).toMatchObject({ type: 'worker', label: 'Seat table' });
+    // A service pulled from the tray was chosen: its name never changes its type.
+    const slot = xr.kit.tray.find((s) => s.type === 'service')!;
+    port.pinchStroke('right', step([[slot.x + 3, slot.y + 1.3], [40, 30]], 0.8));
+    const tray = store.board.items.at(-1)!;
+    expect(tray).toMatchObject({ kind: 'component', type: 'service' });
+    xr.say('call that the seat table', port.now);
+    expect(store.board.items.at(-1)).toMatchObject({ type: 'service', label: 'Seat table' });
   });
 
   it('a left-handed user pulls cards from a tray on the right', () => {
