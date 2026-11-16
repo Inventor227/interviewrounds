@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CreateSessionReq } from '../shared/types';
-import { discardLaunch, enterLaunch, launchState, placeholderXr, prepareLaunch, type PrepareInput } from './launch';
+import { discardLaunch, enterLaunch, launchPendingKey, launchState, placeholderXr, prepareLaunch, registerRuntime, type PrepareInput } from './launch';
+import { readyState } from '../session/readyProgress';
 import { cleanup, testRuntime, useFakeServer, waitFor } from './test-utils';
 
 const entry = vi.hoisted(() => ({
@@ -73,6 +74,18 @@ describe('launch', () => {
     expect((launchState() as { controller: unknown }).controller).toBe(first);
     expect(posts(server)).toHaveLength(1);
     expect(testRuntime.xrPreload).toHaveBeenCalledTimes(2);
+  });
+
+  it('code_that_fails_to_load_leaves_nothing_pending', async () => {
+    useFakeServer({ scenario: '1' });
+    registerRuntime(() => Promise.reject(new Error('chunk 404')));
+    const { s, track } = stream();
+    await expect(prepareLaunch(input, { mic: s, preview: false })).rejects.toThrow('chunk 404');
+    // Back to the tap button: no pending prepare, no progress, the mic released.
+    expect(launchState().status).toBe('idle');
+    expect(launchPendingKey()).toBeNull();
+    expect(readyState()).toBeNull();
+    expect(track.stop).toHaveBeenCalled();
   });
 
   it('dropping_a_prepared_round_frees_the_room', async () => {

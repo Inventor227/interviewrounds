@@ -116,8 +116,21 @@ export async function prepareLaunch(input: PrepareInput, opts: { mic: MediaStrea
   pendingKey = key;
   // The page shows progress from here, also while the round's code loads.
   startReady();
-  const { RoundController } = await import('../session/controller');
-  const deps = await (runtime ?? defaultRuntime)({ preview: opts.preview });
+  let Controller: typeof import('../session/controller').RoundController;
+  let deps: RoundControllerDeps;
+  try {
+    Controller = (await import('../session/controller')).RoundController;
+    deps = await (runtime ?? defaultRuntime)({ preview: opts.preview });
+  } catch (err) {
+    // The round's code did not load (offline, or a page from before a deploy asking for old chunks): back to the
+    // tap button, so another tap can try again.
+    if (seq === prepareSeq) {
+      pendingKey = null;
+      clearReady();
+    }
+    opts.mic?.getTracks().forEach((t) => t.stop());
+    throw err;
+  }
   if (seq !== prepareSeq) {
     // Dropped (page left) or replaced by a newer tap meanwhile.
     opts.mic?.getTracks().forEach((t) => t.stop());
@@ -125,7 +138,7 @@ export async function prepareLaunch(input: PrepareInput, opts: { mic: MediaStrea
     return;
   }
   pendingKey = null;
-  const controller = new RoundController(deps);
+  const controller = new Controller(deps);
   return runPrepare({ key, input, preview: opts.preview, title: opts.title, controller }, opts.mic, seq);
 }
 
