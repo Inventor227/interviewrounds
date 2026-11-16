@@ -19,8 +19,8 @@ describe('blink', () => {
     expect(hi).toBeGreaterThan(5800);
   });
 
-  it('blink_lasts_140_ms_and_closes_fully', () => {
-    expect(BLINK_MS).toBe(140);
+  it('blink_lasts_180_ms_and_closes_fully', () => {
+    expect(BLINK_MS).toBe(180);
     expect(blinkCurve(0)).toBe(0);
     expect(blinkCurve(60)).toBeCloseTo(1, 5);
     expect(blinkCurve(BLINK_MS)).toBe(0);
@@ -44,7 +44,7 @@ describe('blink', () => {
     }
     expect(blinks).toBeGreaterThanOrEqual(10);
     expect(blinks).toBeLessThanOrEqual(36);
-    expect(closedFrames).toBeLessThan(blinks * 10);
+    expect(closedFrames).toBeLessThan(blinks * 12);
 
     const t = new Blinker(seededRng(4));
     t.update(10);
@@ -52,5 +52,25 @@ describe('blink', () => {
     let peak = 0;
     for (let i = 0; i < 10; i++) peak = Math.max(peak, t.update(10));
     expect(peak).toBeGreaterThan(0.9);
+  });
+
+  it('blink_pace_follows_the_conversation', () => {
+    const rng = seededRng(11);
+    const mean = (pace: Parameters<typeof nextBlinkMs>[1]) => {
+      let s = 0;
+      for (let i = 0; i < 2000; i++) s += nextBlinkMs(rng, pace);
+      return s / 2000;
+    };
+    // Attentive listening blinks least often, speaking and thinking more often than idle.
+    expect(mean('listening')).toBeGreaterThan(mean('idle'));
+    expect(mean('speaking')).toBeLessThan(mean('idle'));
+    expect(mean('thinking')).toBeLessThan(mean('speaking'));
+    // A switch to a faster pace does not leave a long wait from the slower one.
+    const b = new Blinker(seededRng(5));
+    b.setPace('thinking');
+    let first = -1;
+    for (let i = 0; i < 500 && first < 0; i++) if (b.update(10) > 0) first = i * 10;
+    expect(first).toBeGreaterThanOrEqual(0);
+    expect(first).toBeLessThanOrEqual(4000);
   });
 });

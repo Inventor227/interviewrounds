@@ -30,6 +30,7 @@ import { Blinker } from './blink';
 import { DEG, GazeController, anglesTo, dirFromAngles, gazeTarget, type Angles } from './gaze';
 import { LipSync, type LipSyncEngine } from './lipsync';
 import { configureAvatarLoader, loadAvatarGltf, loadClips } from './loader';
+import { dressAvatar } from './look';
 import { FACE_KEYS, faceFor } from './moods';
 import { Rig } from './rig';
 import { BodyDetail, bodyMesh, slimAvatar, type SlimStats } from './slim';
@@ -199,6 +200,7 @@ export class Avatar {
       // Skinned bounds come from the bind pose; seated poses can leave them, so never cull.
       o.frustumCulled = false;
     });
+    dressAvatar(model);
     this.rig = new Rig(this.root, model, entry);
     // Before the morph weights are shared: the body keeps none once its still shapes are gone.
     this.slim = opts.seated === false ? null : slimAvatar(model);
@@ -269,6 +271,7 @@ export class Avatar {
     this._mode = mode;
     this.modeTime = 0;
     this.gaze.setMode(mode);
+    this.blinker.setPace(mode);
     this.faceTarget = faceFor(mode, this.mood);
     this.tiltTarget = mode === 'listening' ? (this.rng() < 0.5 ? -1 : 1) * between(this.rng, 2.5, 4) * DEG : 0;
     if (mode === 'thinking') this.blinker.trigger();
@@ -344,11 +347,21 @@ export class Avatar {
     }
     const cue = this.cues.update(dt, mode === 'listening');
     if (cue === 'accept' && !this.oneShot) this.playOnce(this.pick([CLIPS.accept1, CLIPS.accept2, CLIPS.accept3]));
-    else if (cue) this.nodder.trigger(between(this.rng, 3, 6) * DEG, between(this.rng, 0.6, 0.8), this.rng() < 0.2);
+    else if (cue === 'micro') {
+      // "Mm-hm" while the user keeps talking: a small, quick dip, never on top of a nod already running.
+      if (!this.nodder.busy) this.nodder.trigger(between(this.rng, 1.8, 3) * DEG, between(this.rng, 0.45, 0.6));
+    } else if (cue) {
+      this.nodder.trigger(between(this.rng, 3, 6) * DEG, between(this.rng, 0.6, 0.8), this.rng() < 0.2);
+      if (this.rng() < 0.3) this.blinker.trigger();
+    }
     const beat = this.beats.update(dt, this.lip.voiceLevel, mode === 'speaking');
-    if (beat.phraseStart && this.rng() < 0.4) {
-      const side = this.rng() < 0.5 ? -1 : 1;
-      this.gaze.glance(side * between(this.rng, 6, 10) * DEG, between(this.rng, 2, 6) * DEG, between(this.rng, 0.4, 0.8));
+    if (beat.phraseStart) {
+      // People blink and look away a little as a new phrase starts.
+      if (this.rng() < 0.35) this.blinker.trigger();
+      if (this.rng() < 0.4) {
+        const side = this.rng() < 0.5 ? -1 : 1;
+        this.gaze.glance(side * between(this.rng, 6, 10) * DEG, between(this.rng, 2, 6) * DEG, between(this.rng, 0.4, 0.8));
+      }
     }
 
     // Clips.

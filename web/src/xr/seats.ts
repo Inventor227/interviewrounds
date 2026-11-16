@@ -77,6 +77,17 @@ export interface SlabFrame {
   depth: number;
 }
 
+/**
+ * Where the soft shadow under a panelist's forearms lies on the table top: in front of the avatar's root toward the
+ * user, past the avatar's own table edge (AVATAR_TO_TABLE_EDGE), where the clasped hands rest.
+ */
+export const ARM_SHADOW_AHEAD = 0.3;
+
+export function armShadowPoint(seat: Pick<SeatPose, 'pos' | 'yaw'>, deskY: number): Vec3 {
+  // The avatar's front (local +Z turned by yaw) points at the user.
+  return addScaled(v3(seat.pos.x, deskY, seat.pos.z), forwardOf(seat.yaw + Math.PI), ARM_SHADOW_AHEAD);
+}
+
 /** The slab's far edge (under the panelists' forearms), beyond the sheet's near edge. */
 export const SLAB_FAR = LEAD_DISTANCE - USER_TO_ORIGIN - AVATAR_TO_TABLE_EDGE + 0.02;
 

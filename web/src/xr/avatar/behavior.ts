@@ -1,8 +1,9 @@
 // Conversational body language that sits on top of the clips:
 // - Nodder: a slow procedural head nod (dip 3 to 6° and back over about 0.7 s), optionally doubled.
 // - ListenCues: decides when a listener acknowledges: at the user's pauses (600 ms of silence after at least a second
-//   of speech), at most once per pause and not more often than every 2.5 s. Without any user-speech signal it nods
-//   every 5 to 9 s so a listener never freezes.
+//   of speech), at most once per pause and not more often than every 2.5 s. During a long stretch of talk it gives a
+//   small back-channel nod now and then (every 4.5 to 9 s of talk), as a listener's "mm-hm". Without any user-speech
+//   signal it nods every 5 to 9 s so a listener never freezes.
 // - Beats: small beat gestures while speaking, timed to loudness onsets (stressed syllables) and phrase starts:
 //   a head bob, a brow flash, a bounce of the clasped hands or a single-hand lift.
 
@@ -43,12 +44,15 @@ export class Nodder {
   }
 }
 
-export type ListenCue = 'nod' | 'accept' | null;
+/** 'micro' is a small back-channel nod while the user is still talking. */
+export type ListenCue = 'nod' | 'accept' | 'micro' | null;
 
 const PAUSE_S = 0.6;
 const MIN_SPEECH_S = 1;
 const MIN_GAP_S = 2.5;
 const ACCEPT_GAP_S = 10;
+const MICRO_MIN_S = 4.5;
+const MICRO_MAX_S = 9;
 
 export class ListenCues {
   private heard = false;
@@ -58,9 +62,11 @@ export class ListenCues {
   private sinceCue = Infinity;
   private sinceAccept = Infinity;
   private autoWait: number;
+  private microWait: number;
 
   constructor(private readonly rng: Rng) {
     this.autoWait = between(rng, 5, 9);
+    this.microWait = between(rng, MICRO_MIN_S, MICRO_MAX_S);
   }
 
   /** Feed the user's voice activity (from a mic VAD or the transport), every frame or on change. */
@@ -92,6 +98,12 @@ export class ListenCues {
     if (!this.speaking && this.pauseS >= PAUSE_S && this.speechS >= MIN_SPEECH_S && this.sinceCue >= MIN_GAP_S) {
       this.speechS = 0;
       return this.fire();
+    }
+    // Long talk: an "mm-hm" every so often, counted from the last cue of any kind.
+    if (this.speaking && this.speechS >= MICRO_MIN_S && this.sinceCue >= this.microWait) {
+      this.sinceCue = 0;
+      this.microWait = between(this.rng, MICRO_MIN_S, MICRO_MAX_S);
+      return 'micro';
     }
     return null;
   }

@@ -152,6 +152,20 @@ describe('lipsync', () => {
     expect(r400).toBeLessThan(0.05);
   });
 
+  it('lipsync_lips_can_meet_on_p_b_m', async () => {
+    const ctx = new FakeCtx();
+    const vs: VisemeSource = { node: new FakeNode('worklet') as unknown as AudioNode, active: -1, update() {}, dispose() {} };
+    const ls = new LipSync({ createVisemeSource: async () => vs });
+    await ls.attach(stream, ctxOf(ctx));
+    ctx.signal = sine(180, -14);
+    vs.active = 0; // viseme_aa: the loud jaw stays
+    const open = run(ls, ctx, 0.3).jawOpen ?? 0;
+    vs.active = 5; // viseme_PP: the jaw nearly closes so the lips meet
+    const closed = run(ls, ctx, 0.3).jawOpen ?? 0;
+    expect(open).toBeGreaterThan(0.25);
+    expect(closed).toBeLessThan(open * 0.25);
+  });
+
   it('lipsync_detach_disconnects', async () => {
     const ctx = new FakeCtx();
     const ls = new LipSync();

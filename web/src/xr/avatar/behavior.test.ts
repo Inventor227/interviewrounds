@@ -48,6 +48,25 @@ describe('behavior', () => {
     expect(more).toBe(0);
   });
 
+  it('a_long_answer_gets_small_back_channel_nods', () => {
+    const c = new ListenCues(seededRng(5));
+    const got: string[] = [];
+    let first = -1;
+    // 30 s of continuous talk: a few small nods, never the big acknowledgements, none in the first 4.5 s.
+    for (let i = 0; i < 60 * 30; i++) {
+      c.userSpeech(true);
+      const cue = c.update(DT, true);
+      if (cue) {
+        got.push(cue);
+        if (first < 0) first = i * DT;
+      }
+    }
+    expect(first).toBeGreaterThanOrEqual(4.5);
+    expect(got.length).toBeGreaterThanOrEqual(3);
+    expect(got.length).toBeLessThanOrEqual(6);
+    expect(got.every((x) => x === 'micro')).toBe(true);
+  });
+
   it('listening_cues_need_listening_mode', () => {
     const c = new ListenCues(seededRng(2));
     let cues = 0;

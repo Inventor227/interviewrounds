@@ -5,6 +5,7 @@ import { AnimationMixer, type Object3D, type WebGLRenderer } from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { KTX2Loader } from 'three/examples/jsm/loaders/KTX2Loader.js';
 import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.js';
+import { dressAvatar } from './avatar/look';
 import { BodyDetail, bodyMesh, slimAvatar } from './avatar/slim';
 import type { SeatPose } from './seats';
 
@@ -35,6 +36,8 @@ export async function loadStandIn(renderer: WebGLRenderer, id: string, base = '/
   object.name = `standin-${id}`;
   // Seated like the round's avatars: no legs under the table, no morph shapes that never move.
   slimAvatar(object);
+  // The same passthrough materials as the round's avatars.
+  dressAvatar(object);
   object.traverse((o) => {
     (o as { frustumCulled?: boolean }).frustumCulled = false;
   });
