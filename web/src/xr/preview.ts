@@ -30,6 +30,26 @@ const EYE_ABOVE_DESK = 0.5;
 const CAMERA_BACK = 0.32;
 export const PREVIEW_FOV = 60;
 
+/**
+ * Drawing buffer limits for the preview. The world starts at the screen's full device pixel ratio with MSAA, which on
+ * a phone (2.6 to 4) makes the hidden 960 x 540 room of the Ready step a 2640 x 1485 buffer and the page's small
+ * stage about 1045 x 588: far more pixels than the view needs, every frame, on the device with the least memory.
+ */
+export const PREVIEW_MAX_RATIO = 2;
+export const PREVIEW_MAX_PIXELS = 1_500_000;
+
+/**
+ * The pixel ratio the preview draws at for a cssW x cssH stage: the device's own, at most PREVIEW_MAX_RATIO and at most
+ * what keeps the buffer within PREVIEW_MAX_PIXELS, never under 1 (a big desktop stage stays sharp) unless the device
+ * itself is under 1.
+ */
+export function previewPixelRatio(dpr: number, cssW: number, cssH: number): number {
+  const device = Number.isFinite(dpr) && dpr > 0 ? dpr : 1;
+  const area = cssW * cssH;
+  const budget = area > 0 ? Math.sqrt(PREVIEW_MAX_PIXELS / area) : Infinity;
+  return Math.max(Math.min(device, 1), Math.min(device, PREVIEW_MAX_RATIO, budget));
+}
+
 const WALL = 0xe9e4db;
 const FLOOR = 0x6e6862;
 const TRIM = 0xd7d0c5;

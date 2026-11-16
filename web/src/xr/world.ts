@@ -37,7 +37,7 @@ import { yawPitchFromQuat } from './math';
 import { MoveBarView, onMoveBar, SheetMove, type MoveStatus } from './moveSheet';
 import { DeskPlacement, type DeskPose, type HandState, type HeadPose } from './placement';
 import { PlacementView } from './placementView';
-import { buildPreviewRoom, MouseLook, PREVIEW_DESK, PREVIEW_FOV } from './preview';
+import { buildPreviewRoom, MouseLook, PREVIEW_DESK, PREVIEW_FOV, previewPixelRatio } from './preview';
 import { Room } from './room';
 import type { SeatPose } from './seats';
 import { createSounds, type Sounds } from './sound';
@@ -567,7 +567,9 @@ export async function createXRApp(root: HTMLElement, opts: XRAppOptions): Promis
       const w = root.clientWidth;
       const h = root.clientHeight;
       if (w === 0 || h === 0) return;
-      renderer.setSize(w, h, false);
+      // The drawing buffer at a bounded pixel ratio (a phone's full ratio is far more than the stage needs); the
+      // ratio stays set, so IWSDK's own resize handler sizes at it too.
+      renderer.setDrawingBufferSize(w, h, previewPixelRatio(window.devicePixelRatio || 1, w, h));
       canvas.style.width = '100%';
       canvas.style.height = '100%';
       camera.aspect = w / h;
