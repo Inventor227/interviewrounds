@@ -89,6 +89,17 @@ test('two people sharing an avatar in one meeting template is reported', () => {
   }
 });
 
+test('two personas sharing one Fish voice is reported', () => {
+  const dir = scratchCopy();
+  try {
+    editJson(join(dir, 'content/voices.json'), (v) => (v.voices.leo.fish_id = v.voices.daniel.fish_id));
+    const errors = checkContent(dir, { schemaDir });
+    assert.ok(errors.some((e) => e.includes('voices.json') && e.includes('same Fish voice')), errors.join('\n'));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('an undeclared prompt placeholder is reported', () => {
   const dir = scratchCopy();
   try {
