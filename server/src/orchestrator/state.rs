@@ -630,9 +630,22 @@ impl SessionState {
         } else {
             format!("your {title} round")
         };
-        format!(
-            "{hi}, and this is {round}. The question is on your card, so take a look and tell me where you'd like to start."
-        )
+        // Said aloud, so the problem is named even for someone who cannot see the card yet.
+        let problem = self
+            .question
+            .get("title")
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|t| !t.is_empty())
+            .map(str::to_lowercase);
+        match problem {
+            Some(problem) => format!(
+                "{hi}, and this is {round}. Today's problem is the {problem}, and it's on your card. Where would you like to start?"
+            ),
+            None => format!(
+                "{hi}, and this is {round}. The question is on your card, so take a look and tell me where you'd like to start."
+            ),
+        }
     }
 
     /// Counts a finished live turn: failed (the hold line) or answered. Only failures of an unavailable model count

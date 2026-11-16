@@ -3292,6 +3292,7 @@ async fn start_marker_says_a_written_opener_when_every_attempt_fails() {
     );
     assert!(opener.contains(&title), "{opener}");
     assert!(opener.contains("on your card"), "{opener}");
+    assert!(opener.ends_with('?'), "ends on one question: {opener}");
     assert!(
         !opener.contains('\u{2014}') && !opener.contains('\u{2013}'),
         "no dashes: {opener}"
