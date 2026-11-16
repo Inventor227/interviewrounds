@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { BoardOp, GhostOp } from '../shared/types';
 import { createBoardXR } from './boardXR';
-import { ghostRect, GHOST_SETTLE_MS } from './ghosts';
+import { ghostRect, GHOST_HOLD_MS, GHOST_SETTLE_MS } from './ghosts';
 import { HLD_KIT } from './kits';
 import { emptyBoard } from './model';
 import type { BoardPoint } from './input';
@@ -97,13 +97,13 @@ describe('board in XR', () => {
     expect(sounds).toContain('snap');
   });
 
-  it('a pinch-hold of 0.6 s on a ghost dismisses it with board.ghost_reject', () => {
+  it('a pinch-hold of 1 s on a ghost dismisses it with board.ghost_reject', () => {
     const { port, store, sent, rejected, sounds } = setup();
     store.setGhosts([G]);
     port.handAt('right', 44, 22);
     port.frame();
     port.select('right', 'start');
-    for (let i = 0; i < 50; i++) port.frame();
+    for (let i = 0; i < Math.ceil(GHOST_HOLD_MS / 14) + 2; i++) port.frame();
     port.select('right', 'end');
     expect(rejected).toEqual(['g1']);
     expect(sent).toEqual([]);

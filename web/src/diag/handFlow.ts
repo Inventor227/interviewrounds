@@ -44,7 +44,7 @@ const dist = (a: P2, b: P2) => Math.hypot(a.x - b.x, a.y - b.y);
 export interface HandResults {
   hold: { filtered: Jitter | null; raw: Jitter | null; tries: number; skipped: boolean };
   line: { filtered: Straightness | null; raw: Straightness | null; tries: number; skipped: boolean };
-  /** Taps with how long each pinch was held (a ghost card is dismissed by a 600 ms hold). */
+  /** Taps with how long each pinch was held (a ghost card is dismissed by a 1 s hold). */
   targets: { stats: HitStats | null; taps: { target: P2; down: P2; up: P2; ms: number }[]; radius_cm: number; skipped: boolean };
   /** The draw test done with a controller (the trigger held): how straight the line was, and whether by touch or by ray. */
   controller_line: { filtered: Straightness | null; mode: 'touch' | 'ray' | null; tries: number };
