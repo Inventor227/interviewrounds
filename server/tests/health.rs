@@ -131,6 +131,42 @@ async fn missing_assets_are_404_not_the_web_app() {
 }
 
 #[tokio::test]
+async fn only_the_transcoder_worker_may_eval() {
+    let public = common::temp_dir("public");
+    std::fs::write(
+        public.join("index.html"),
+        "<!doctype html><title>IR</title>",
+    )
+    .unwrap();
+    std::fs::create_dir_all(public.join("vendor/basis")).unwrap();
+    std::fs::write(public.join("vendor/basis/ktx2_worker.js"), "self.x = 1").unwrap();
+    std::fs::write(public.join("vendor/basis/basis_transcoder.js"), "var BASIS").unwrap();
+    let app = common::app_with_public(&public).await;
+    let csp = |res: &axum::response::Response| {
+        res.headers()
+            .get(header::CONTENT_SECURITY_POLICY)
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string()
+    };
+
+    let res = common::get(app.clone(), ir_server::app::KTX2_WORKER_PATH).await;
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(csp(&res), ir_server::app::KTX2_WORKER_CSP);
+    assert!(csp(&res).contains("'unsafe-eval'"));
+
+    // The page and every other file keep the strict policy.
+    for path in ["/", "/round/x", "/vendor/basis/basis_transcoder.js"] {
+        let res = common::get(app.clone(), path).await;
+        assert_eq!(res.status(), StatusCode::OK, "{path}");
+        let c = csp(&res);
+        assert!(!c.contains("'unsafe-eval'"), "{path}: {c}");
+        assert!(c.contains("script-src 'self' 'wasm-unsafe-eval'"), "{path}: {c}");
+    }
+}
+
+#[tokio::test]
 async fn a_panicking_handler_answers_500_and_the_server_keeps_serving() {
     use axum::Router;
     use axum::body::Body;

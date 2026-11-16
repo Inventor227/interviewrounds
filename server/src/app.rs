@@ -133,7 +133,8 @@ pub fn router(state: AppState) -> Router {
     // Unknown paths fall back to index.html (status 200) so client routes work on reload.
     let static_files = Router::new()
         .fallback_service(ServeDir::new(&public_dir).fallback(ServeFile::new(index)))
-        .layer(middleware::from_fn(static_cache_headers));
+        .layer(middleware::from_fn(static_cache_headers))
+        .layer(middleware::from_fn(worker_csp));
 
     Router::new()
         .merge(api::routes(&state))
@@ -269,6 +270,25 @@ async fn immutable_cache_headers(req: Request, next: Next) -> Response {
         res.headers_mut().insert(
             header::CACHE_CONTROL,
             HeaderValue::from_static("public, max-age=31536000, immutable"),
+        );
+    }
+    res
+}
+
+/// The KTX2 (Basis) transcoder worker script. The transcoder's bindings build functions from strings when they start;
+/// a worker loaded from a URL runs under that response's own CSP (not the page's), so only this worker may do that.
+pub const KTX2_WORKER_PATH: &str = "/vendor/basis/ktx2_worker.js";
+pub const KTX2_WORKER_CSP: &str =
+    "default-src 'none'; script-src 'self' 'unsafe-eval' 'wasm-unsafe-eval'";
+
+/// Gives the transcoder worker its own CSP (the app-wide one is only set when a response has none).
+async fn worker_csp(req: Request, next: Next) -> Response {
+    let worker = req.uri().path() == KTX2_WORKER_PATH;
+    let mut res = next.run(req).await;
+    if worker && res.status().is_success() {
+        res.headers_mut().insert(
+            header::CONTENT_SECURITY_POLICY,
+            HeaderValue::from_static(KTX2_WORKER_CSP),
         );
     }
     res

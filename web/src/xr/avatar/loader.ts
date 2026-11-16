@@ -4,12 +4,14 @@
 // with its defaults, so we keep our own GLTFLoader with MeshoptDecoder and KTX2Loader. The Basis transcoder is served
 // from /vendor/basis/ (a copy of three's, pinned by a test). KTX2Loader's own default finds it with
 // import.meta.url, which breaks under the Vite dev server: three is pre-bundled there, the URL 404s, the SPA answers
-// with index.html and the transcoder worker never starts. IWSDK's default would fetch it from a CDN.
+// with index.html and the transcoder worker never starts. IWSDK's default would fetch it from a CDN. Its workers
+// start from /vendor/basis/ktx2_worker.js, not a blob (see ktx2.ts: the page's CSP would stop them).
 
 import type { AnimationClip, WebGLRenderer } from 'three';
 import { GLTFLoader, type GLTF } from 'three/examples/jsm/loaders/GLTFLoader.js';
-import { KTX2Loader } from 'three/examples/jsm/loaders/KTX2Loader.js';
+import type { KTX2Loader } from 'three/examples/jsm/loaders/KTX2Loader.js';
 import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.js';
+import { OwnWorkerKTX2Loader } from './ktx2';
 import type { AvatarManifest, AvatarManifestEntry } from './types';
 
 export const MANIFEST_URL = '/avatars/manifest.json';
@@ -23,7 +25,9 @@ let manifest: Promise<AvatarManifest> | null = null;
 /** Sets up the shared loader for this renderer (KTX2 needs it to pick a GPU format). Safe to call again. */
 export function configureAvatarLoader(renderer: WebGLRenderer): GLTFLoader {
   if (loader) return loader;
-  ktx2 = new KTX2Loader().setTranscoderPath(BASIS_PATH).detectSupport(renderer);
+  ktx2 = new OwnWorkerKTX2Loader().setTranscoderPath(BASIS_PATH).detectSupport(renderer);
+  // The transcoder downloads now, alongside the models, not after the first model is in.
+  void ktx2.init().catch(() => undefined);
   loader = new GLTFLoader().setMeshoptDecoder(MeshoptDecoder).setKTX2Loader(ktx2);
   return loader;
 }
