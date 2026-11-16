@@ -82,8 +82,9 @@ anything. The check fails if a prompt uses a placeholder its header does not dec
 | `scribe.md` | voice to board ghosts | Op names and args as in `schema/board.v1.schema.json`. |
 | `scorer.md` | the scorecard | Writes the model owned parts of `report.v1`; the server fills session, delivery, verdict and confidence. |
 
-Live speech is spoken word for word, so live prompts ask for one to three short sentences with no markdown, lists,
-brackets or symbols, and numbers in words. The server's speech filter is the second line of defence.
+Live speech is spoken word for word, so live prompts ask for one to three sentences (about forty five words at most)
+with no markdown, lists, brackets or symbols, and numbers in words. Openings say the problem out loud, and every
+question names what it asks about. The server's speech filter is the second line of defence.
 
 App markers the live prompts handle: `[event: start]`, `[event: time_check]`, `[event: silence_check]`,
 `[event: long_answer]` (one answer ran past `interrupt_after_seconds`; models never time answers themselves),
