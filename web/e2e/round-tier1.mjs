@@ -124,16 +124,17 @@ async function drawTwoBoxes() {
   }
   if (drawn.length >= 2) {
     const [c1, c2] = drawn;
-    await draw(L.along([[c1.x + c1.w + 0.4, c1.y + c1.h / 2], [c2.x + 1.5, c2.y + c2.h / 2]], 1.5));
+    // From the first card's edge to the second card, the hand at rest over the start before it pinches (see draw).
+    const from = [c1.x + c1.w + 0.4, c1.y + c1.h / 2];
+    const downsBefore = (await page(() => globalThis.__round.room.debug.pinches?.().length ?? 0)) ?? 0;
+    await draw(L.along([from, [c2.x + 1.5, c2.y + c2.h / 2]], 1.5), 0.1, { rest: 1.5, hold: 0.5, end: 0.8 });
     await sleep(1200);
     b = await board();
-    stage('connected', { edges: b.edges.length });
-    // The emulator's scripted pinch closes about 2 cm short of where it is sent, so it can take a card instead of
-    // its edge (the same is reported, not required, in round-design.mjs). Reported, not a failure.
-    if (!b.edges.length) {
-      result.warnings.push('the scripted connector did not become an edge');
-      stage('WARNING the scripted connector did not become an edge', { items: b.items.map((i) => [i.x, i.y, i.w, i.h]) });
-    }
+    const down = await page((i) => globalThis.__round.room.debug.pinches?.()[i] ?? null, downsBefore);
+    // Where the pinch went down against the card's right edge: the rim (0.8 cm inside) to 1.4 cm outside draws.
+    result.connector = { from, down, start_vs_edge_cm: down ? Math.round((down.x_cm - (c1.x + c1.w)) * 100) / 100 : null, edges: b.edges.length };
+    stage('connected', result.connector);
+    if (!b.edges.length) problem('the line from one card to the other did not connect them', { ...result.connector, items: b.items.map((i) => [i.id, i.x, i.y, i.w, i.h]) });
   } else {
     problem('the two drawn boxes did not become cards', { kinds: b.items.map((x) => x.kind) });
   }

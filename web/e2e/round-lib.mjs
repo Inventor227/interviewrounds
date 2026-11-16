@@ -286,17 +286,22 @@ export function roughBox(x, y, w, h, seed) {
 const r4 = (p) => ({ x: Math.round(p.x * 1e4) / 1e4, y: Math.round(p.y * 1e4) / 1e4, z: Math.round(p.z * 1e4) / 1e4 });
 const toWorld = (pts, h) => page((a) => globalThis.__round.room.debug.toWorld(a.pts, a.h), { pts, h });
 
-/** Pinch-draws a stroke through board points (cm), 1 cm above the sheet. */
-export async function draw(points, segment = 0.1) {
+/**
+ * Pinch-draws a stroke through board points (cm), 1 cm above the sheet. `rest` (seconds) waits over the first point
+ * before the pinch: the board takes a pinch's place from the last frame it saw, and at the emulator's two or three
+ * frames a second in a round that frame can still be from the middle of the reach, centimetres away. A stroke that
+ * must start in a narrow band (a connector from a card's edge) rests first, as a hand does.
+ */
+export async function draw(points, segment = 0.1, { rest = 0.3, hold = 0.15, end = 0.25 } = {}) {
   const w = (await toWorld(points, 1)).map(r4);
   const last = w[w.length - 1];
   const steps = [
     { label: 'reach', position: w[0], anchor: 'grasp', duration: 0.6, pinch: 0 },
-    { label: 'settle', duration: 0.3 },
+    { label: 'settle', duration: rest },
     { label: 'pinch', pinch: 1, duration: 0.15 },
-    { label: 'hold', duration: 0.15 },
+    { label: 'hold', duration: hold },
     ...w.slice(1).map((p, i) => ({ label: `p${i}`, position: p, duration: segment })),
-    { label: 'hold end', duration: 0.25 },
+    { label: 'hold end', duration: end },
     { label: 'release', pinch: 0, duration: 0.15 },
     { label: 'lift', position: { x: last.x, y: last.y + 0.06, z: last.z }, duration: 0.3 },
   ];
