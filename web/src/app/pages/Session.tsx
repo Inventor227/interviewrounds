@@ -100,6 +100,56 @@ function ResumeOffer(props: { sessionId: string; onResume: () => void; onEnd: ()
   );
 }
 
+/** A stage this narrow is a phone: the room's own End is too small to hold by touch there. */
+export const NARROW_STAGE_QUERY = '(max-width: 720px)';
+/** How long the page's "End the round?" stays up before it goes back to a plain End. */
+export const END_CONFIRM_MS = 5000;
+
+function useNarrow(): boolean {
+  const mq = typeof window !== 'undefined' && typeof window.matchMedia === 'function' ? window.matchMedia(NARROW_STAGE_QUERY) : null;
+  const [narrow, setNarrow] = useState(() => !!mq?.matches);
+  useEffect(() => {
+    if (!mq) return;
+    const on = () => setNarrow(mq.matches);
+    mq.addEventListener?.('change', on);
+    return () => mq.removeEventListener?.('change', on);
+  }, []);
+  return narrow;
+}
+
+/**
+ * End on the page, for the preview on a phone. Two taps (End, then End round), like the room's hold, so a stray tap
+ * never ends the round; the question goes away by itself after a few seconds.
+ */
+function PageEnd(props: { onEnd: () => void }) {
+  const [asking, setAsking] = useState(false);
+  useEffect(() => {
+    if (!asking) return;
+    const t = setTimeout(() => setAsking(false), END_CONFIRM_MS);
+    return () => clearTimeout(t);
+  }, [asking]);
+  if (!asking) {
+    return (
+      <div class="row">
+        <button class="btn btn-small" data-test="page-end" onClick={() => setAsking(true)}>
+          End
+        </button>
+      </div>
+    );
+  }
+  return (
+    <div class="row" role="group" aria-label="End the round?">
+      <span class="meta">End the round?</span>
+      <button class="btn btn-small btn-primary" data-test="page-end-confirm" onClick={() => { setAsking(false); props.onEnd(); }}>
+        End round
+      </button>
+      <button class="btn btn-small btn-quiet" data-test="page-end-cancel" onClick={() => setAsking(false)}>
+        Keep going
+      </button>
+    </div>
+  );
+}
+
 const SPAN_LABELS: [keyof StageSpans, string][] = [
   ['session_ms', 'Session'],
   ['chunk_ms', 'Room code'],
@@ -257,6 +307,9 @@ function LiveSession(props: { launch: Taken }) {
   const stage = useStage(room, preview || dev);
   const sid = encodeURIComponent(session.session_id);
   const over = state === 'scoring' || state === 'summary';
+  const narrow = useNarrow();
+  // The room's End is a small target on a phone: the page offers its own while the round runs.
+  const pageEnd = preview && narrow && (state === 'greeting' || state === 'live' || state === 'paused');
   const lost = !!room?.sessionLost && !over && !preview && state !== 'failed' && state !== 'ending';
   // Before the round began there is nothing to resume: the way back is the start itself.
   const lostBefore = lost && (state === 'idle' || state === 'placing');
@@ -356,6 +409,7 @@ function LiveSession(props: { launch: Taken }) {
       )}
       {note && <p class="meta bad">{note}</p>}
       {(preview || dev) && <div class="xr-stage" ref={stage} data-test="session-stage" />}
+      {pageEnd && <PageEnd onEnd={() => controller.end()} />}
       {preview && room?.hasBoard && room.attachBoardCanvas && <BoardCanvas room={room} />}
       {/* Typed turns: with ?debug=1, and in a development preview with the typed-turn voice. */}
       {(debug || (dev && fakeVoice && preview)) && <DevConsole source={controller} />}
