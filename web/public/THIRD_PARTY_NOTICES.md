@@ -96,6 +96,12 @@ SOFTWARE.
 transcode the avatars' KTX2 textures. Copyright Binomial LLC, licensed under the Apache License, Version 2.0. The
 full licence text is in `vendor/basis/LICENSE`. https://github.com/BinomialLLC/basis_universal
 
+## Inter
+
+The pages use Inter 4.0 by Rasmus Andersson and the Inter Project Authors, cut to a Latin subset and served from this
+site as WOFF2. Licensed under the SIL Open Font License, Version 1.1; the full text is in the source at
+`web/src/app/fonts/Inter-LICENSE.txt`. https://github.com/rsms/inter
+
 ## UI sounds
 
 Six sounds in `sfx/` (`click`, `flap`, `chime`, `snap`, `pen`, `erase`) are edited recordings by Kenney
