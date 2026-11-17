@@ -15,10 +15,26 @@ describe('Report', () => {
   it('report_orders_sections', async () => {
     useFakeServer();
     const root = await renderApp('/report/demo');
-    expect(sections(root)).toEqual(['verdict', 'competencies', 'strengths', 'weaknesses', 'weakest', 'drills', 'delivery', 'transcript', 'share']);
+    expect(sections(root)).toEqual(['verdict', 'competencies', 'highlights', 'strengths', 'weaknesses', 'weakest', 'drills', 'delivery', 'transcript', 'share']);
     expect($(root, 'verdict')?.dataset.label).toBe('leaning_hire');
     expect($$(root, 'bar')).toHaveLength(4);
     expect($$(root, 'delta').map((d) => d.dataset.dir)).toEqual(['up', 'same', 'down']);
+  });
+
+  it('report_top_is_verdict_bars_one_strength_one_fix_and_retry_the_rest_folded', async () => {
+    useFakeServer();
+    const root = await renderApp('/report/demo');
+    const r = fakeReport('demo');
+    expect($(root, 'top-strength')!.textContent).toContain(r.strengths[0]!.title);
+    expect($(root, 'top-fix')!.textContent).toContain(r.weaknesses[0]!.title);
+    expect($$(root, 'retry-answer')).toHaveLength(1);
+    expect($(root, 'top-strength')!.querySelector('[data-test="quote"]')).not.toBeNull();
+    expect(root.querySelector('.bar-why')).toBeNull();
+    for (const name of ['strengths', 'weaknesses', 'weakest', 'drills', 'delivery']) {
+      const el = $(root, `report-section-${name}`) as HTMLDetailsElement;
+      expect(el.tagName).toBe('DETAILS');
+      expect(el.open).toBe(false);
+    }
   });
 
   it('report_explains_the_scale_in_one_tap', async () => {
@@ -60,6 +76,9 @@ describe('Report', () => {
   it('report_shows_the_retries_line', async () => {
     useFakeServer();
     const root = await renderApp('/report/demo');
+    // At the top, next to Retry, not folded away with the weakest moment.
+    expect($(root, 'retries')!.closest('[data-test="highlights"]')).not.toBeNull();
+    expect($$(root, 'retries')).toHaveLength(1);
     const rows = $(root, 'retries')!.querySelectorAll('li');
     expect(rows).toHaveLength(1);
     expect(rows[0]!.querySelector('.retry-scores')?.textContent).toMatch(/^2\s*→\s*to\s*3$/);

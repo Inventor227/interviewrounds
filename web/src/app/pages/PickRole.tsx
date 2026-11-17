@@ -5,7 +5,7 @@ import { Page } from '../components/Ui';
 
 export function PickRole() {
   return (
-    <Page test="pick-role" title="What do you want to practice?" lede="Pick one. Every round has sensible defaults, so there is nothing else to fill in.">
+    <Page test="pick-role" title="What do you want to practice?" lede="Pick one. No setup needed.">
       <div class="tiles tiles-tall">
         <Tile href="/start/sde" test="tile-sde" title="Software Engineer" icon={RoleIcon.sde}>
           Coding, system design, object design, behavioral

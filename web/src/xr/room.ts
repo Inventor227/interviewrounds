@@ -29,6 +29,7 @@ import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js
 import { addScaled, forwardOf, rightOf, v3 } from './math';
 import type { DeskPose } from './placement';
 import {
+  armShadowPoint,
   AVATAR_DESK_Y,
   SLAB_FAR,
   SHEET_D,
@@ -46,6 +47,11 @@ export const SLAB_COLOR = 0xa88f70;
 const SLAB_T = 0.03;
 /** Near edge fade of the slab, so the seam with a real desk of any colour reads soft. */
 const SLAB_FADE = 0.07;
+/**
+ * Tint of the soft shadow under the panelists' forearms: a warm near-black, as a shadow on a wooden top reads (the
+ * blob's default is a cool blue grey, which looks pasted on in a real room).
+ */
+const ARM_SHADOW_COLOR: [number, number, number, number] = [0.16, 0.13, 0.11, 1];
 /** The occluder reaches this far behind the sheet's near edge (under the user's forearms). */
 const OCCLUDER_NEAR = 0.32;
 
@@ -143,13 +149,12 @@ export class Room {
 
     // Soft shadows where the panelists' forearms rest on the slab.
     for (const s of this.seats) {
-      const fwd = forwardOf(s.yaw + Math.PI); // the avatar's front, toward the user
-      const p = addScaled(v3(s.pos.x, desk.deskY, s.pos.z), fwd, -0.33);
+      const p = armShadowPoint(s, desk.deskY);
       const o = new Object3D();
       o.position.set(p.x, desk.deskY, p.z);
       o.rotation.y = s.yaw;
       const e = this.world.createTransformEntity(o, this.rootEntity);
-      e.addComponent(ContactShadow, { size: [0.62, 0.3], opacity: 0.42, height: 0.0015 });
+      e.addComponent(ContactShadow, { size: [0.66, 0.24], opacity: 0.45, color: ARM_SHADOW_COLOR, height: 0.0015 });
       this.shadows.push(e);
     }
 

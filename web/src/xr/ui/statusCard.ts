@@ -28,20 +28,20 @@ export const STATUS_MIN_FONT_CM = Math.min(TITLE_FONT_CM, DETAIL_FONT_CM);
 
 /** Copy per stage: title and detail (plain, short, no dashes). */
 export const STATUS_COPY: Record<StatusStage, { title: string; detail: string }> = {
-  placing: { title: 'Touch your desk with one finger', detail: 'Rest it where the sheet should go.' },
-  connecting: { title: 'Joining the room', detail: 'Your interviewer will be with you in a moment.' },
-  metrics: { title: 'Writing your scorecard', detail: 'Looking at pace, pauses and talk time.' },
-  scoring: { title: 'Writing your scorecard', detail: 'Reading back through the conversation.' },
+  placing: { title: 'Touch your desk with one finger', detail: 'The sheet goes there.' },
+  connecting: { title: 'Joining the room', detail: '' },
+  metrics: { title: 'Writing your scorecard', detail: '' },
+  scoring: { title: 'Writing your scorecard', detail: '' },
   done: { title: 'Your scorecard is ready', detail: '' },
-  paused: { title: 'Paused', detail: "Your interviewer will wait. Resume when you're ready." },
-  hear: { title: 'Tap to hear your interviewer', detail: 'Your browser may be holding the sound back.' },
-  error: { title: 'We lost the connection', detail: 'Trying again. Your progress is saved.' },
+  paused: { title: 'Paused', detail: 'Your interviewer will wait.' },
+  hear: { title: 'No sound yet?', detail: '' },
+  error: { title: 'Connection lost', detail: 'Retrying. Progress saved.' },
 };
 
 /** The placement prompt names the action for what the user holds: a finger, or a controller's tip and trigger. */
 export const PLACING_COPY: Record<'hands' | 'controllers', { title: string; detail: string }> = {
   hands: STATUS_COPY.placing,
-  controllers: { title: 'Rest the controller tip on your desk, then pull the trigger', detail: 'The sheet goes where the tip rests.' },
+  controllers: { title: 'Rest the tip on your desk', detail: 'Then pull the trigger.' },
 };
 
 /** Shown once when a trigger pull during placement placed nothing. */

@@ -10,7 +10,7 @@ import type { Catalog, Delivery, Evidence, MeetingDetails, NextDrill, Report as 
 import { Bars } from '../components/Bars';
 import { loadCatalog, persona, toApiError, useAsync } from '../components/data';
 import { clock, LEVEL_NAMES, longDate, pct, plural } from '../components/format';
-import { QuoteRow, type Player } from '../components/QuoteRow';
+import { Quote, QuoteRow, type Player } from '../components/QuoteRow';
 import { Disclosure, ErrorState, Loading, Page } from '../components/Ui';
 import { MeetingOutcome, Verdict } from '../components/Verdict';
 import { fakeReady } from '../fake/mode';
@@ -145,7 +145,24 @@ function usePlayer(url: string | null): [Player | null, JSX.Element | null] {
 
 // ---------- Sections ----------
 
-function Section(props: { name: string; title: string; children: ComponentChildren; hideTitle?: boolean; lede?: string }) {
+function Section(props: { name: string; title: string; children: ComponentChildren; hideTitle?: boolean; lede?: string; fold?: boolean; count?: number }) {
+  if (props.fold) {
+    // Folded: the heading is the toggle. Content stays in the page (find in page, tests), shown on demand.
+    return (
+      <details class={`rsec rsec-fold rsec-${props.name}`} data-test={`report-section-${props.name}`}>
+        <summary>
+          <h2 id={`rs-${props.name}`} class="rsec-title">
+            {props.title}
+            {props.count != null && <span class="rsec-count num"> {props.count}</span>}
+          </h2>
+        </summary>
+        <div class="rsec-body">
+          {props.lede && <p class="rsec-lede">{props.lede}</p>}
+          {props.children}
+        </div>
+      </details>
+    );
+  }
   return (
     <section class={`rsec rsec-${props.name}`} data-test={`report-section-${props.name}`} aria-labelledby={`rs-${props.name}`}>
       <h2 id={`rs-${props.name}`} class={props.hideTitle ? 'sr-only' : 'rsec-title'}>
@@ -204,8 +221,8 @@ function NoSignal(props: { r: ReportData; meeting: boolean }) {
       {sameWords(props.r.headline.summary, label) ? null : <p class="verdict-summary">{props.r.headline.summary}</p>}
       <p>
         {props.meeting
-          ? `The meeting lasted about ${plural(mins, 'minute')} and ended before the room made a decision. What they said is below.`
-          : `To score fairly we need at least two full answers and ${props.r.session.length === 'full' ? 'about a minute and a half' : 'about a minute'} of you talking. This round ended before that, and we would rather say so than guess.`}
+          ? `The meeting lasted about ${plural(mins, 'minute')} and ended before a decision.`
+          : `We score after two full answers and ${props.r.session.length === 'full' ? 'about a minute and a half' : 'about a minute'} of you talking. This round ended sooner.`}
       </p>
       <a class="btn btn-primary" href={again} data-test="no-signal-again">
         {props.meeting ? 'Rehearse it again' : 'Try the round again'}
@@ -236,30 +253,27 @@ function Weakest(props: { r: ReportData }) {
           <p class="model">{w.model_answer}</p>
         </div>
       </div>
-      {canRetry(props.r) && (
-        <div class="row">
-          <a class="btn btn-primary" href={retryHref(props.r)} data-test="retry-answer">
-            Retry this answer
-          </a>
-          <span class="fine">
-            About {Math.round((w.retry?.max_seconds ?? 120) / 60)} minutes. Scored again, with before and after.
-          </span>
-        </div>
-      )}
-      {w.retries && w.retries.length > 0 && (
-        <ul class="retries" data-test="retries">
-          {w.retries.map((x) => (
-            <li key={x.session_id}>
-              <span class="retry-scores num">
-                {x.before_score ?? '?'} <span aria-hidden="true">→</span>
-                <span class="sr-only">to</span> {x.after_score ?? '?'}
-              </span>
-              <span>{x.note}</span>
-            </li>
-          ))}
-        </ul>
-      )}
     </div>
+  );
+}
+
+/** Before and after of each retry of the weakest answer. */
+function Retries(props: { w: NonNullable<ReportData['weakest_moment']> }) {
+  const list = props.w.retries;
+  if (!list || list.length === 0) return null;
+  return (
+    <ul class="retries" data-test="retries">
+      {list.map((x) => (
+        <li key={x.session_id}>
+          <span class="retry-label">Retry</span>
+          <span class="retry-scores num">
+            {x.before_score ?? '?'} <span aria-hidden="true">→</span>
+            <span class="sr-only">to</span> {x.after_score ?? '?'}
+          </span>
+          <span>{x.note}</span>
+        </li>
+      ))}
+    </ul>
   );
 }
 
@@ -502,7 +516,7 @@ function Share(props: { r: ReportData }) {
           <p class="share-title" id="share-label">
             Public scorecard link
           </p>
-          <p class="fine">Shows the verdict, scores, strengths and what to work on. Turn it off any time.</p>
+          <p class="fine">Verdict, scores and highlights. Off any time.</p>
           {props.r.session.mode === 'meeting' && (
             <p class="fine" data-test="share-names-note">
               It may name the people in your meeting.
@@ -568,6 +582,83 @@ function Share(props: { r: ReportData }) {
   );
 }
 
+/** The top of the report in one look: the best thing, the one fix, and the next step. */
+function Highlights(props: { r: ReportData; meeting: boolean; player: Player | null }) {
+  const { r, meeting, player } = props;
+  // The first quote behind a point: the report quotes you from the top.
+  const quoteOf = (p: ReportData['strengths'][number] | undefined) => {
+    const id = p?.evidence_ids[0];
+    return id ? r.evidence.find((e) => e.id === id) : undefined;
+  };
+  const gq = quoteOf(r.strengths[0]);
+  const fq = quoteOf(r.weaknesses[0]);
+  const good = r.strengths[0];
+  const fix = r.weaknesses[0];
+  const retry = canRetry(r);
+  const again = meeting ? '/meeting/new' : r.session.round_id ? `/round/${r.session.round_id}` : '/start';
+  if (!good && !fix && !retry) return null;
+  return (
+    <div class="highlights" data-test="highlights">
+      {(good || fix) && (
+        <div class="hl-pair">
+          {good && (
+            <div class="hl hl-good" data-test="top-strength">
+              <p class="hl-label">
+                <span aria-hidden="true">✓</span> Keep doing
+              </p>
+              <p class="hl-title">{good.title}</p>
+              <p class="hl-detail">{good.detail}</p>
+              {gq && <Quote q={gq} player={player} />}
+            </div>
+          )}
+          {fix && (
+            <div class="hl hl-fix" data-test="top-fix">
+              <p class="hl-label">
+                <span aria-hidden="true">↗</span> Work on next
+              </p>
+              <p class="hl-title">{fix.title}</p>
+              <p class="hl-detail">{fix.detail}</p>
+              {fq && <Quote q={fq} player={player} />}
+            </div>
+          )}
+        </div>
+      )}
+      {r.weakest_moment && <Retries w={r.weakest_moment} />}
+      <div class="row hl-next">
+        {retry ? (
+          <>
+            <a class="btn btn-primary btn-big" href={retryHref(r)} data-test="retry-answer">
+              Retry your weakest answer
+            </a>
+            <span class="fine">About {Math.round((r.weakest_moment?.retry?.max_seconds ?? 120) / 60)} min, scored again.</span>
+          </>
+        ) : (
+          <a class="btn btn-primary" href={again} data-test="go-again">
+            {meeting ? 'Rehearse it again' : 'Practice again'}
+          </a>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** Why each competency got its score: one line each, folded under the bars. */
+function Reasons(props: { r: ReportData }) {
+  const rows = props.r.competencies.filter((c) => c.rationale && c.score != null);
+  if (rows.length === 0) return null;
+  return (
+    <Disclosure test="bar-reasons" summary="Why these scores">
+      <ul class="reasons">
+        {rows.map((c) => (
+          <li key={c.id}>
+            <strong>{c.name}.</strong> {c.rationale}
+          </li>
+        ))}
+      </ul>
+    </Disclosure>
+  );
+}
+
 // ---------- Page ----------
 
 function ReportBody(props: { r: ReportData }) {
@@ -606,20 +697,27 @@ function ReportBody(props: { r: ReportData }) {
           <Section
             name="competencies"
             title={meeting ? 'How you ran it' : 'Competencies'}
-            lede={meeting ? 'Scored 1 to 4. 3 is a solid, professional meeting.' : 'Scored 1 to 4 against the bar for your level. 3 meets the bar.'}
+            lede={meeting ? '1 to 4. 3 is a solid meeting.' : '1 to 4. 3 meets the bar for your level.'}
           >
-            <Bars competencies={r.competencies} />
+            <Bars competencies={r.competencies} compact />
+            <Reasons r={r} />
           </Section>
         )}
 
+        {r.headline.verdict || md ? (
+          <Section name="highlights" title="In short" hideTitle>
+            <Highlights r={r} meeting={meeting} player={player} />
+          </Section>
+        ) : null}
+
         {md && (md.attendees?.length || md.objections?.length || md.next_steps?.length) ? (
-          <Section name="room" title="The room">
+          <Section name="room" title="The room" fold>
             <Room m={md} />
           </Section>
         ) : null}
 
         {r.strengths.length > 0 && (
-          <Section name="strengths" title="What went well">
+          <Section name="strengths" title="What went well" fold count={r.strengths.length}>
             <ul class="points">
               {r.strengths.map((p) => (
                 <QuoteRow key={p.title} point={p} evidence={r.evidence} tone="good" player={player} />
@@ -629,7 +727,7 @@ function ReportBody(props: { r: ReportData }) {
         )}
 
         {r.weaknesses.length > 0 && (
-          <Section name="weaknesses" title="What to work on">
+          <Section name="weaknesses" title="What to work on" fold count={r.weaknesses.length}>
             <ul class="points">
               {r.weaknesses.map((p) => (
                 <QuoteRow key={p.title} point={p} evidence={r.evidence} tone="bad" player={player} />
@@ -639,13 +737,13 @@ function ReportBody(props: { r: ReportData }) {
         )}
 
         {r.weakest_moment && (
-          <Section name="weakest" title="Your weakest moment">
+          <Section name="weakest" title="Your weakest moment" fold>
             <Weakest r={r} />
           </Section>
         )}
 
         {r.next_drills.length > 0 && (
-          <Section name="drills" title="Practice next">
+          <Section name="drills" title="Practice next" fold count={r.next_drills.length}>
             <ul class="drills">
               {r.next_drills.map((d) => {
                 const href = drillHref(d, r);
@@ -674,18 +772,22 @@ function ReportBody(props: { r: ReportData }) {
           </Section>
         )}
 
-        <Section name="delivery" title="How you sounded">
+        <Section name="delivery" title="How you sounded" fold>
           <DeliveryStrip d={r.delivery} meeting={meeting} />
         </Section>
 
         <Section name="transcript" title={board ? 'Transcript and board' : 'Transcript'}>
           <Transcript r={r} catalog={catalog.data} player={player} />
-          {board?.board_image_url ? (
-            <figure class="board" data-test="board-image">
-              <img src={board.board_image_url} alt="Your board at the end of the round" loading="lazy" />
-            </figure>
-          ) : board?.board_as_text ? (
-            <BoardText text={board.board_as_text} />
+          {board?.board_image_url || board?.board_as_text ? (
+            <Disclosure test="board" summary="Show the board">
+              {board.board_image_url ? (
+                <figure class="board" data-test="board-image">
+                  <img src={board.board_image_url} alt="Your board at the end of the round" loading="lazy" />
+                </figure>
+              ) : (
+                <BoardText text={board.board_as_text!} />
+              )}
+            </Disclosure>
           ) : null}
         </Section>
 
@@ -722,7 +824,7 @@ function Waiting(props: { since: number; status: SessionStatus }) {
   const est = Math.min(0.92, 1 - Math.exp(-elapsed / (EXPECTED_SCORING_MS / 2)));
   const stage = Math.min(STAGES.length - 1, Math.floor(est * STAGES.length));
   return (
-    <Page test="report" title="Writing your scorecard" lede="Reading back what you said. This usually takes about half a minute." back={{ href: '/history', label: 'History' }}>
+    <Page test="report" title="Writing your scorecard" lede="Usually about half a minute." back={{ href: '/history', label: 'History' }}>
       <div class="scoring" data-test="report-scoring">
         <div class="progress" role="progressbar" aria-label="Scoring progress" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(est * 100)}>
           <span style={{ width: `${Math.round(est * 100)}%` }} />
@@ -736,7 +838,7 @@ function Waiting(props: { since: number; status: SessionStatus }) {
         </ol>
         {elapsed > SLOW_SCORING_MS && (
           <p class="note" role="status" data-test="report-slow">
-            This is taking longer than usual. You can leave this page: the report will appear in your{' '}
+            Taking longer than usual. You can leave: it will be in your{' '}
             <a href="/history">History</a> when it is ready.
           </p>
         )}

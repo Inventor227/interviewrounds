@@ -48,20 +48,21 @@ template default. `tools/content-check.mjs` enforces this for panels and templat
 
 | Persona | Role played | Style | Avatar | Voice (`voices.json`) | Appears with |
 |---|---|---|---|---|---|
-| Maya | Senior Software Engineer | warm | f01 | `maya` | alone (coding, object design); designer Mei in project kickoff |
-| Ana | Site Reliability Engineer | neutral | f01 | `ana` | Daniel; partner Rhea in investor pitch; Nadia in exec update |
-| Priya | Group Product Manager | warm | f02 | `priya` | Leo; Dana in client proposal; Helen in project kickoff |
-| Grace | Chief of Staff, meeting chair | neutral | f03 | `grace` | any meeting she chairs |
-| Daniel | Staff Software Engineer | neutral | m02 | `daniel` | Ana; Ravi in performance review; Tomas in project kickoff |
-| Leo | Data Scientist | neutral | m02 | `leo` | Priya; Tom in investor pitch |
-| Sam | Engineering Manager | warm | m04 | `sam` | alone, or Viktor in PM leadership |
-| Viktor | Director of Product | tough | m05 | `viktor` | Sam; Marcus in client proposal; Martin in exec update |
+| Maya | Senior Software Engineer | warm | f01 | `maya`, Harper | alone (coding, object design); designer Mei in project kickoff |
+| Ana | Site Reliability Engineer | neutral | f01 | `ana`, Wren | Daniel; partner Rhea in investor pitch; Nadia in exec update |
+| Priya | Group Product Manager | warm | f02 | `priya`, Priya | Leo; Dana in client proposal; Helen in project kickoff |
+| Grace | Chief of Staff, meeting chair | neutral | f03 | `grace`, Amara | any meeting she chairs |
+| Daniel | Staff Software Engineer | neutral | m02 | `daniel`, Mason | Ana; Ravi in performance review; Tomas in project kickoff |
+| Leo | Data Scientist | neutral | m02 | `leo`, Gregory | Priya; Tom in investor pitch |
+| Sam | Engineering Manager | warm | m04 | `sam`, Sawyer | alone, or Viktor in PM leadership |
+| Viktor | Director of Product | tough | m05 | `viktor`, Oliver | Sam; Marcus in client proposal; Martin in exec update |
 
 Shared avatars: Maya and Ana (f01), Daniel and Leo (m02). When the meeting prepare step adds Grace or assigns a persona to a
 custom attendee, it must keep avatars and voices distinct inside the meeting (`prompts/meeting-prepare.md`).
 
-Voices are Fish voice library picks chosen from the public listing by use count and tags. Each has a reason and two
-alternates. Confirm by ear before publishing the voice agents.
+Voices are Fish Official voices, picked by ear from one shared test line and by median pitch so that no interviewer
+sounds heavy. Each has a reason and two official alternates. The server sends the persona's voice id with every voice
+session, so changing a voice is a content change and needs no agent republish.
 
 ## Prompts
 
@@ -81,8 +82,9 @@ anything. The check fails if a prompt uses a placeholder its header does not dec
 | `scribe.md` | voice to board ghosts | Op names and args as in `schema/board.v1.schema.json`. |
 | `scorer.md` | the scorecard | Writes the model owned parts of `report.v1`; the server fills session, delivery, verdict and confidence. |
 
-Live speech is spoken word for word, so live prompts ask for one to three short sentences with no markdown, lists,
-brackets or symbols, and numbers in words. The server's speech filter is the second line of defence.
+Live speech is spoken word for word, so live prompts ask for one to three sentences (about forty five words at most)
+with no markdown, lists, brackets or symbols, and numbers in words. Openings say the problem out loud, and every
+question names what it asks about. The server's speech filter is the second line of defence.
 
 App markers the live prompts handle: `[event: start]`, `[event: time_check]`, `[event: silence_check]`,
 `[event: long_answer]` (one answer ran past `interrupt_after_seconds`; models never time answers themselves),

@@ -441,8 +441,12 @@ export function checkContent(rootDir, opts = {}) {
     if (!v) errors.push(`${rel(file)}: voice_id ${data.voice_id} not in voices.json`);
     else if (v.persona_id !== id) errors.push(`content/voices.json: voice ${data.voice_id} belongs to ${v.persona_id}, used by ${id}`);
   }
+  // Meetings seat several personas together, so no two personas may sound the same.
+  const fishIds = new Map();
   for (const [key, v] of Object.entries(voices?.voices ?? {})) {
     if (!personas.has(v.persona_id)) errors.push(`content/voices.json: voice ${key} names unknown persona ${v.persona_id}`);
+    if (fishIds.has(v.fish_id)) errors.push(`content/voices.json: voices ${fishIds.get(v.fish_id)} and ${key} use the same Fish voice ${v.fish_id}`);
+    fishIds.set(v.fish_id, key);
   }
 
   // Rounds: links and lengths.

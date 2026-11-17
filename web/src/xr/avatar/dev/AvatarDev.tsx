@@ -42,6 +42,7 @@ export default function AvatarDev() {
       auto: q.get('auto') === '1',
       sway: q.get('sway') === '1',
       mood: (q.get('mood') as Mood) ?? 'warm',
+      light: q.get('light') === 'room' ? 'room' : 'dev',
       voiceUrl: (sex) => (sex === 'f' ? voiceF : voiceM),
     });
     window.__avatarDev = scene;

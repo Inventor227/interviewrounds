@@ -10,6 +10,7 @@ import { useEffect, useRef, useState } from 'preact/hooks';
 import { useLocation } from 'preact-iso';
 import type { Me } from '../../shared/types';
 import { discardLaunch, enterLaunch, launchKey, launchPendingKey, launchState, prepareLaunch, useLaunch, type PrepareInput } from '../launch';
+import { onReady, readyState, readyView, type ReadyView } from '../../session/readyProgress';
 import { CapNotice } from './CapNotice';
 import { capFromError } from './data';
 import { getAudioContext } from '../../voice/audio';
@@ -168,10 +169,10 @@ export function useMic(): Mic {
 }
 
 const MIC_TEXT: Record<MicState, { title: string; body?: string }> = {
-  unknown: { title: 'Allow your microphone', body: 'You answer out loud. The browser asks once.' },
-  asking: { title: 'Waiting for your answer', body: 'Allow the microphone in the browser prompt.' },
-  on: { title: 'Mic is on', body: 'Say something. The bar should move.' },
-  allowed: { title: 'Mic is allowed', body: 'You are set to answer out loud.' },
+  unknown: { title: 'Turn on your mic', body: 'You answer out loud.' },
+  asking: { title: 'Allow the mic', body: 'Use the browser prompt.' },
+  on: { title: 'Mic is on', body: 'Say something. The bar moves.' },
+  allowed: { title: 'Mic is allowed' },
   denied: { title: 'The microphone is blocked' },
   none: { title: 'No microphone found' },
   busy: { title: 'The microphone is busy' },
@@ -194,7 +195,7 @@ export function MicStep(props: { mic: Mic; action?: ComponentChildren; handedOve
       <div class="step-body" ref={ref} tabIndex={-1} aria-live="polite">
         <h3 class="step-title">{t.title}</h3>
         {s === 'on' && !mic.live ? (
-          <p class="step-text">{props.handedOver ? 'The round has your mic now.' : 'The microphone is allowed.'}</p>
+          <p class="step-text">{props.handedOver ? 'The round has your mic.' : 'The mic is allowed.'}</p>
         ) : (
           t.body && <p class="step-text">{t.body}</p>
         )}
@@ -237,7 +238,7 @@ export function MicStep(props: { mic: Mic; action?: ComponentChildren; handedOve
 function MicDenied(props: { onRetry: () => void }) {
   return (
     <div class="help help-denied" data-test="mic-denied">
-      <p>Rounds are spoken, so the mic has to be on. To turn it back on:</p>
+      <p>Rounds are spoken. To turn the mic back on:</p>
       <div class="howto">
         <div>
           <h4>In the Quest Browser</h4>
@@ -337,25 +338,22 @@ export function HeadsetStep(props: { xr: XrState; questUrl: string; questNote?: 
         {xr === 'ready' && (
           <>
             <h3 class="step-title">Headset ready</h3>
-            <p class="step-text">The room opens in passthrough. Sit at your desk with some space in front of you.</p>
             <p class="step-text hands" data-test="hands-note">
-              Use your hands or your controllers.
+              Sit at your desk. Hands or controllers both work.
             </p>
           </>
         )}
         {xr === 'none' && (
           <div data-test="headset-none">
             <h3 class="step-title">No headset on this device</h3>
-            <p class="step-text">
-              You can preview the round here with the same interviewer and voice. For the full room, open this page on your Quest.
-            </p>
+            <p class="step-text">Preview it here, or open it on a Quest for the full room.</p>
             <div class="quest">
               <Qr text={props.questUrl} label="QR code with the link to this round" />
               <div class="quest-text">
                 <p>
                   <strong>Open on Quest</strong>
                 </p>
-                <p class="fine">Scan with your phone and send it to your Quest, or type this address in the Quest Browser:</p>
+                <p class="fine">Or type this in the Quest Browser:</p>
                 <p class="url" data-test="quest-url">
                   {props.questUrl.replace(/^https?:\/\//, '')}
                 </p>
@@ -366,6 +364,49 @@ export function HeadsetStep(props: { xr: XrState; questUrl: string; questNote?: 
         )}
       </div>
     </li>
+  );
+}
+
+// ---------- Progress ----------
+
+/** The room's loading progress, live (null while nothing is being prepared). */
+export function useReadyView(): ReadyView | null {
+  const read = () => (readyState() ? readyView() : null);
+  const [view, setView] = useState(read);
+  useEffect(() => {
+    const update = () =>
+      setView((old) => {
+        const v = read();
+        // Byte ticks arrive often: re-render only when something shown changes.
+        return old && v && old.label === v.label && old.step === v.step && Math.round((old.fraction ?? -1) * 100) === Math.round((v.fraction ?? -1) * 100) ? old : v;
+      });
+    update();
+    return onReady(update);
+  }, []);
+  return view;
+}
+
+/**
+ * The bar: a percentage when it is known, else a sliding segment. The line naming the step is the panel's own note
+ * (one live region that stays mounted, so the step and then "Ready" are both announced).
+ */
+export function ReadyBar(props: { view: ReadyView }) {
+  const { view } = props;
+  const pct = view.fraction == null ? null : Math.round(view.fraction * 100);
+  return (
+    <div class="ready-progress" data-test="ready-progress" data-step={view.step}>
+      <div
+        class={`progress${pct == null ? ' progress-indeterminate' : ''}`}
+        role="progressbar"
+        aria-label="Getting the room ready"
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={pct ?? undefined}
+        data-test="ready-bar"
+      >
+        <span style={pct == null ? undefined : { transform: `scaleX(${pct / 100})` }} />
+      </div>
+    </div>
   );
 }
 
@@ -428,7 +469,9 @@ export function ReadyPanel(props: {
     if (mine?.status === 'ready') enterLaunch(route);
   };
 
-  const preparing = mine?.status === 'preparing';
+  const progress = useReadyView();
+  // Preparing, or still loading the round's code for this input (the launch is idle until the controller exists).
+  const preparing = mine?.status === 'preparing' || (!mine && !!key && !!progress && launchPendingKey() === key);
   const ready = mine?.status === 'ready';
   const failed = mine?.status === 'failed' ? mine.error : null;
   const cap = failed ? capFromError(failed) : null;
@@ -443,7 +486,7 @@ export function ReadyPanel(props: {
       disabled={!input || props.busy || xr === 'checking'}
       data-test="mic-allow"
     >
-      {failed ? 'Try again' : micReady ? 'Get the room ready' : 'Allow microphone'}
+      {failed ? 'Try again' : micReady ? 'Get the room ready' : 'Turn on mic'}
     </button>
   ) : null;
 
@@ -455,7 +498,7 @@ export function ReadyPanel(props: {
       </ol>
       {props.error}
       {cap ? (
-        <CapNotice reason={cap.reason} resetsAt={cap.resetsAt} isGuest={props.me?.identity.kind !== 'user'} signInAvailable={props.me?.sign_in_available} />
+        <CapNotice reason={cap.reason} resetsAt={cap.resetsAt} />
       ) : failed ? (
         <p class="note-warn" role="alert" data-test="prepare-failed">
           {prepareFailText(failed)}
@@ -474,16 +517,17 @@ export function ReadyPanel(props: {
             >
               {props.enterLabel ?? (preview ? 'Preview on this screen' : 'Enter the room')}
             </button>
-            <p class="fine" id="enter-note" aria-live="polite" data-test="enter-note">
+            {preparing && <ReadyBar view={progress ?? readyView(null)} />}
+            <p class={`fine${preparing ? ' ready-step' : ''}`} id="enter-note" aria-live="polite" data-test="enter-note">
               {blocked
-                ? 'Turn the microphone on first. Everything else is ready.'
+                ? 'Turn the mic on first.'
                 : failed
-                  ? 'Set up did not finish. Use Try again above.'
+                  ? 'Use Try again above.'
                   : preparing
-                  ? 'Getting the room ready.'
-                  : ready
-                    ? (props.hint ?? (preview ? 'Ready.' : 'Ready. Put on your headset if it is not on yet.'))
-                    : 'Allow the microphone first. The room gets ready in a few seconds.'}
+                    ? (progress ?? readyView(null)).label
+                    : ready
+                      ? (props.hint ?? (preview ? 'Ready.' : 'Ready. Put on your headset.'))
+                      : 'Turn on your mic first.'}
             </p>
           </div>
         ))}

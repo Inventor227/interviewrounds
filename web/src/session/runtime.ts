@@ -34,6 +34,9 @@ import { clearLiveRoom, setLiveRoom, type LiveRoom } from './room';
 import { describeSession, recordTransport, recorder } from './recorder';
 import { createRoundClock, itemCentre } from './roundClock';
 import { StageTimings } from './timings';
+import { readyPeople, readyStep } from './readyProgress';
+import { roomFiles } from '../xr/avatar/files';
+import { speakGate } from '../voice/speakGate';
 
 /** Longest the mic tap waits for the avatars; slower ones appear when they are loaded. */
 export const AVATAR_WAIT_MS = 12_000;
@@ -266,23 +269,29 @@ export function createRoundRuntime({ preview }: RuntimeOptions): RoundController
     store = s;
     if (preview) relay = new RelayPointer();
     boardHand = dominantFor(null, settings?.dominant_hand);
-    const build = (hand: 'left' | 'right') => createBoardXR(a, {
-      store: s,
-      dominantHand: hand,
-      // The kit follows the board's round type; the round clock stamps traces and agenda ticks.
-      now_s: roundClock,
-      send: (op) => {
-        sync?.send(op);
-        active();
-      },
-      sendGhostReject: (id) => sync?.sendGhostReject(id),
-      sendFocus: (id) => {
-        if (!paused) sync?.sendFocus(id);
-      },
-      sfx: { play: (n) => a.sounds.play(n) },
-      pointer: relay ?? undefined,
-      ghostSettleMs: Number(devFlag('ghost_settle')) > 0 ? Number(devFlag('ghost_settle')) * 1000 : undefined,
-    });
+    /** Where each pinch or trigger went down on the board (dev builds, for scripted runs). */
+    const downs: { x_cm: number; y_cm: number; hand: string }[] = [];
+    const build = (hand: 'left' | 'right') => {
+      const b = createBoardXR(a, {
+        store: s,
+        dominantHand: hand,
+        // The kit follows the board's round type; the round clock stamps traces and agenda ticks.
+        now_s: roundClock,
+        send: (op) => {
+          sync?.send(op);
+          active();
+        },
+        sendGhostReject: (id) => sync?.sendGhostReject(id),
+        sendFocus: (id) => {
+          if (!paused) sync?.sendFocus(id);
+        },
+        sfx: { play: (n) => a.sounds.play(n) },
+        pointer: relay ?? undefined,
+        ghostSettleMs: Number(devFlag('ghost_settle')) > 0 ? Number(devFlag('ghost_settle')) * 1000 : undefined,
+      });
+      if (import.meta.env.DEV) b.hands?.onDown((p) => downs.push({ x_cm: Math.round(p.x_cm * 100) / 100, y_cm: Math.round(p.y_cm * 100) / 100, hand: p.hand }));
+      return b;
+    };
     board = build(boardHand);
     // The hand that touched the desk is the dominant one for this round, whatever the 2D setting says: the tray
     // (and in coding rounds the panel) is laid out again for it, before anything is on the sheet.
@@ -309,6 +318,7 @@ export function createRoundRuntime({ preview }: RuntimeOptions): RoundController
         // The board's pointers (hands and controllers) and what they hold, for scripted runs.
         pointers: () => ({ sources: board?.hands?.sources() ?? [], over: board?.hands?.pointers() ?? [], overlays: board?.input.overlays.map((o) => o.kind) ?? [] }),
         tray: () => board?.kit.tray.map((t) => ({ x: t.x, y: t.y, w: t.w, h: t.h })) ?? [],
+        pinches: () => downs.slice(),
       };
     }
 
@@ -529,6 +539,7 @@ export function createRoundRuntime({ preview }: RuntimeOptions): RoundController
     {
       // In dev the managed emulator browser keeps a small tooling world on 2D pages; a script can ask to drop it.
       if (devFlag('one_world') === '1') await import('../xr/devtools').then((m) => m.stopToolingWorld()).catch(() => undefined);
+      readyStep('room');
       timings.begin('chunk');
       const [world, project, portMod, loaded] = await Promise.all([
         import('../xr/world'),
@@ -634,6 +645,14 @@ export function createRoundRuntime({ preview }: RuntimeOptions): RoundController
       );
 
       timings.begin('avatars');
+      // The bar follows the people's downloads (which a page may have started before the tap); until their list is
+      // known it has no percentage.
+      const names = res.panel.map((p) => p.display_name);
+      readyPeople(names, []);
+      void roomFiles(res.panel.map((p) => p.avatar_id)).then(
+        (files) => !disposed && app === a && readyPeople(names, files),
+        () => undefined,
+      );
       const peopleReady = loadPeople(a, res).then(() => {
         timings.mark('avatars_loaded');
         const desk = a.desk();
@@ -687,8 +706,8 @@ export function createRoundRuntime({ preview }: RuntimeOptions): RoundController
       Object.assign(rec.meta, describeSession(res));
       recordTransport(rec, t);
     }
-    // Captions follow the words as they play; the board hears what the user said.
-    t.on('agentText', (e) => app?.ui.setCaption(p.display_name, e.text));
+    // Captions follow the words as they play, once the reply is audible; the board hears what the user said.
+    speakGate(t).on('text', (e) => app?.ui.setCaption(p.display_name, e.text));
     t.on('userTranscript', (e) => {
       if (e.final && !isMarker(e.text) && !paused) board?.say(e.text);
     });

@@ -37,7 +37,9 @@ import { yawPitchFromQuat } from './math';
 import { MoveBarView, onMoveBar, SheetMove, type MoveStatus } from './moveSheet';
 import { DeskPlacement, type DeskPose, type HandState, type HeadPose } from './placement';
 import { PlacementView } from './placementView';
-import { buildPreviewRoom, MouseLook, PREVIEW_DESK, PREVIEW_FOV } from './preview';
+import { forgetPointers } from './pointers';
+import { gpuResourcesOf, releaseGpuResources, type UniformsOf } from './release';
+import { buildPreviewRoom, MouseLook, PREVIEW_DESK, PREVIEW_FOV, previewPixelRatio } from './preview';
 import { Room } from './room';
 import type { SeatPose } from './seats';
 import { createSounds, type Sounds } from './sound';
@@ -567,7 +569,9 @@ export async function createXRApp(root: HTMLElement, opts: XRAppOptions): Promis
       const w = root.clientWidth;
       const h = root.clientHeight;
       if (w === 0 || h === 0) return;
-      renderer.setSize(w, h, false);
+      // The drawing buffer at a bounded pixel ratio (a phone's full ratio is far more than the stage needs); the
+      // ratio stays set, so IWSDK's own resize handler sizes at it too.
+      renderer.setDrawingBufferSize(w, h, previewPixelRatio(window.devicePixelRatio || 1, w, h));
       canvas.style.width = '100%';
       canvas.style.height = '100%';
       camera.aspect = w / h;
@@ -738,6 +742,8 @@ export async function createXRApp(root: HTMLElement, opts: XRAppOptions): Promis
       const at = pressPoint(hand);
       if (desk && at && !placing && mover.state === 'idle' && onBar(hand)) {
         mover.down(hand, at, now, desk);
+        // Heard with a hand too: the hold ring then fills.
+        sounds.click();
         haptics.pulse(hand, 'press');
       }
       return;
@@ -885,6 +891,9 @@ export async function createXRApp(root: HTMLElement, opts: XRAppOptions): Promis
     destroy() {
       if (destroyed) return;
       destroyed = true;
+      // Everything the renderer drew, gathered before the panels and people are taken apart (see release.ts).
+      const uniformsOf: UniformsOf = (mat) => (renderer.properties.get(mat) as { uniforms?: ReturnType<UniformsOf> }).uniforms;
+      const held = gpuResourcesOf([scene, camera, ...Object.values(ui.groups), ui.hint.group], uniformsOf);
       if (enterWaiter?.poll) clearInterval(enterWaiter.poll);
       enterWaiter?.reject(new Error('The room was closed.'));
       enterWaiter = null;
@@ -919,10 +928,13 @@ export async function createXRApp(root: HTMLElement, opts: XRAppOptions): Promis
       standins = [];
       if (previewGroup) disposeTree(previewGroup);
       room.dispose();
+      releaseGpuResources(held);
       world.destroy();
       renderer.dispose();
       renderer.forceContextLoss();
       renderer.domElement.remove();
+      // The pointer library keeps every pointer in a global map; this room's would keep all of it reachable.
+      forgetPointers(camera);
     },
     onFrame(cb) {
       frameCbs.add(cb);

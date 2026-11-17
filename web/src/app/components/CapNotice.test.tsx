@@ -45,7 +45,7 @@ describe('CapNotice', () => {
 
   it('guest_limits_never_promise_sign_in', async () => {
     for (const reason of LIMIT_REASONS) {
-      const root = await renderNode(<CapNotice reason={reason} resetsAt={resets} now={now} isGuest signInAvailable={false} />);
+      const root = await renderNode(<CapNotice reason={reason} resetsAt={resets} now={now} />);
       expect(root.textContent).not.toMatch(/sign in/i);
       cleanup();
     }

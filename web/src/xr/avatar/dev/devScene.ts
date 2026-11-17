@@ -2,7 +2,8 @@
 // Flat WebGL (no XR session) so it runs in the headless emulator browser and on a laptop alike.
 //
 // Query: ?id=f01 (avatar), ?view=seat|face|side, ?auto=1 (cycle the modes), ?sway=1 (the "user" moves side to
-// side so the head follow shows), ?mood=warm|neutral|stern.
+// side so the head follow shows), ?mood=warm|neutral|stern, ?light=room (the passthrough room's lighting: room IBL at
+// 0.85, exposure 0.9 and the one warm key light from above the user's left, on a neutral backdrop).
 
 import {
   BoxGeometry,
@@ -34,6 +35,8 @@ export interface DevOptions {
   auto: boolean;
   sway: boolean;
   mood: Mood;
+  /** 'room' lights the avatar as the passthrough room does; 'dev' is the brighter studio look. */
+  light?: 'dev' | 'room';
   voiceUrl: (sex: 'f' | 'm') => string;
 }
 
@@ -105,7 +108,7 @@ export class AvatarDevScene {
     this.renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
     this.renderer.outputColorSpace = SRGBColorSpace;
     this.renderer.toneMapping = ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 0.95;
+    this.renderer.toneMappingExposure = opts.light === 'room' ? 0.9 : 0.95;
     host.append(this.renderer.domElement);
     this.audio = document.createElement('audio');
     this.audio.hidden = true;
@@ -199,15 +202,26 @@ export class AvatarDevScene {
 
   private buildRoom(): void {
     const s = this.scene;
-    s.background = new Color(0xd9d5ce);
     const pmrem = new PMREMGenerator(this.renderer);
-    s.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
-    s.environmentIntensity = 0.45;
+    if (this.opts.light === 'room') {
+      // As world.ts and room.ts set up the passthrough room (IWSDK's 'room' IBL is three's RoomEnvironment).
+      s.background = new Color(0x8c8780);
+      s.environment = pmrem.fromScene(new RoomEnvironment()).texture;
+      s.environmentIntensity = 0.85;
+      const key = new DirectionalLight(0xfff4e8, 1.1);
+      key.position.set(-0.8, 2.85, 0.9);
+      key.target.position.set(0, 0.95, 0);
+      s.add(key, key.target);
+    } else {
+      s.background = new Color(0xd9d5ce);
+      s.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+      s.environmentIntensity = 0.45;
+      s.add(new HemisphereLight(0xffffff, 0x8a8070, 1.1));
+      const sun = new DirectionalLight(0xffffff, 1.5);
+      sun.position.set(0.8, 2.5, 2);
+      s.add(sun);
+    }
     pmrem.dispose();
-    s.add(new HemisphereLight(0xffffff, 0x8a8070, 1.1));
-    const sun = new DirectionalLight(0xffffff, 1.5);
-    sun.position.set(0.8, 2.5, 2);
-    s.add(sun);
     const mat = (c: number) => new MeshStandardMaterial({ color: c, roughness: 0.85 });
     const floor = new Mesh(new PlaneGeometry(8, 8), mat(0xbdb8ae));
     floor.rotation.x = -Math.PI / 2;

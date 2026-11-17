@@ -548,6 +548,49 @@ h4 {
   padding: var(--space-3) var(--space-4);
   color: var(--ink);
 }
+/* The round's state on its page: a dot and a few words. */
+.state-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 36px;
+  padding: var(--space-1) var(--space-4);
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--ink);
+  font-weight: 600;
+  font-size: 0.95rem;
+  margin: 0 0 var(--space-3);
+}
+.state-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--accent);
+  flex: none;
+}
+.state-pill.is-live .state-dot {
+  background: var(--good);
+  animation: pulse 1.6s ease-in-out infinite;
+}
+.sheet-hints {
+  list-style: none;
+  padding: 0;
+  margin: var(--space-4) 0 var(--space-3);
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-5);
+  color: var(--ink-2);
+  font-size: 0.95rem;
+}
+.sheet-hints li {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.sheet-hints svg {
+  color: var(--accent);
+}
 .note-warn {
   background: var(--warn-soft);
   color: var(--warn-ink);
@@ -796,7 +839,36 @@ h4 {
   min-height: var(--tap);
 }
 .how {
-  margin-top: var(--space-5);
+  list-style: none;
+  padding: 0;
+  margin: var(--space-7) 0 0;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-4);
+}
+.how-step {
+  display: flex;
+  gap: var(--space-3);
+  align-items: flex-start;
+}
+.how-icon {
+  flex: none;
+  display: inline-grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.how-title {
+  display: block;
+  font-weight: 650;
+}
+.how-body {
+  display: block;
+  color: var(--ink-2);
+  font-size: 0.92rem;
 }
 .today {
   position: relative;
@@ -819,8 +891,17 @@ h4 {
   z-index: -1;
 }
 .today-empty {
-  min-height: 240px;
+  min-height: 160px;
   box-shadow: none;
+}
+.today-line {
+  margin: 0;
+  color: var(--ink-2);
+  font-size: 0.95rem;
+}
+.today-line a {
+  display: inline-block;
+  padding: 12px 0;
 }
 .today-when {
   color: var(--muted);
@@ -1181,6 +1262,54 @@ h4 {
   margin-top: var(--space-5);
 }
 
+/* Getting the room ready: a thin bar (a percentage when known, else a sliding segment) and one line. */
+.ready-progress {
+  max-width: 360px;
+  margin-top: var(--space-3);
+}
+.progress {
+  height: 6px;
+  border-radius: 3px;
+  background: var(--track);
+  overflow: hidden;
+}
+.progress span {
+  display: block;
+  height: 100%;
+  width: 100%;
+  background: var(--accent);
+  transform-origin: left;
+  transform: scaleX(0);
+  transition: transform 0.3s ease-out;
+}
+.progress-indeterminate span {
+  width: 40%;
+  transform: none;
+  transition: none;
+  animation: progress-slide 1.4s ease-in-out infinite;
+}
+@keyframes progress-slide {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(250%);
+  }
+}
+.ready-step {
+  margin-top: var(--space-2);
+}
+@media (prefers-reduced-motion: reduce) {
+  .progress span {
+    transition: none;
+  }
+  .progress-indeterminate span {
+    width: 100%;
+    animation: none;
+    opacity: 0.45;
+  }
+}
+
 /* ---------- Report ---------- */
 
 .report {
@@ -1196,6 +1325,105 @@ h4 {
   color: var(--muted);
   font-size: 0.92rem;
   margin-top: calc(-1 * var(--space-2));
+}
+
+/* Folded sections: a list of headings, each one tap to open. */
+.rsec-fold {
+  border-top: 1px solid var(--line);
+}
+.rsec-fold + .rsec-fold {
+  margin-top: calc(-1 * var(--space-6));
+}
+.rsec-fold + :not(.rsec-fold) {
+  border-top: 1px solid var(--line);
+  padding-top: var(--space-5);
+}
+.rsec-fold > summary {
+  display: flex;
+  align-items: center;
+  min-height: var(--tap-primary);
+  cursor: pointer;
+  list-style: none;
+}
+.rsec-fold > summary::-webkit-details-marker {
+  display: none;
+}
+.rsec-fold > summary::after {
+  content: '';
+  margin-left: auto;
+  width: 10px;
+  height: 10px;
+  border-right: 2px solid var(--muted);
+  border-bottom: 2px solid var(--muted);
+  transform: rotate(45deg) translateY(-3px);
+  transition: transform 150ms ease;
+}
+.rsec-fold[open] > summary::after {
+  transform: rotate(225deg) translateY(-3px);
+}
+.rsec-fold > summary .rsec-title {
+  margin: 0;
+  font-size: 1.15rem;
+}
+.rsec-count {
+  color: var(--muted);
+  font-weight: 500;
+}
+.rsec-fold > summary:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+.rsec-body {
+  padding: var(--space-2) 0 var(--space-5);
+}
+
+/* The report's top in one look. */
+.highlights {
+  display: grid;
+  gap: var(--space-4);
+}
+.hl-pair {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-4);
+}
+.hl {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-top: 4px solid var(--good);
+  border-radius: var(--radius);
+  padding: var(--space-4) var(--space-5);
+}
+.hl-fix {
+  border-top-color: var(--v3);
+}
+.hl p {
+  margin: 0;
+}
+.hl-label {
+  color: var(--muted);
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+.hl-title {
+  font-size: 1.1rem;
+  font-weight: 650;
+  margin: var(--space-1) 0 !important;
+}
+.hl-detail {
+  color: var(--ink-2);
+  font-size: 0.95rem;
+}
+.hl-next {
+  align-items: center;
+}
+.reasons {
+  margin: 0;
+  padding-left: var(--space-5);
+  display: grid;
+  gap: var(--space-2);
+  color: var(--ink-2);
 }
 
 .verdict,
@@ -1536,6 +1764,10 @@ h4 {
   display: flex;
   gap: var(--space-4);
   padding-top: var(--space-3);
+}
+.retry-label {
+  color: var(--muted, inherit);
+  white-space: nowrap;
 }
 .retry-scores {
   font-weight: 700;
@@ -2287,6 +2519,9 @@ textarea {
 /* ---------- Narrow screens (phones) ---------- */
 
 @media (max-width: 760px) {
+  .hl-pair {
+    grid-template-columns: 1fr;
+  }
   .hero {
     grid-template-columns: 1fr;
     gap: var(--space-6);
@@ -2294,6 +2529,7 @@ textarea {
   .bars,
   .weakest-grid,
   .howto,
+  .how,
   .onboard-cards,
   .ns {
     grid-template-columns: 1fr;

@@ -2,7 +2,6 @@
 // The reset time is in the viewer's local time.
 
 import type { LimitReason } from '../../shared/types';
-import { links } from '../../net/api';
 import { resetPhrase } from './format';
 
 const COPY: Record<LimitReason, { title: string; body: string }> = {
@@ -38,8 +37,6 @@ const GUEST_PASS_USED = { title: 'You’ve used the guest round on this device',
 export function CapNotice(props: {
   reason: LimitReason;
   resetsAt: string | null;
-  signInAvailable?: boolean;
-  isGuest?: boolean;
   now?: Date;
 }) {
   const used = props.reason === 'guest_daily_limit' && !props.resetsAt;
@@ -72,11 +69,6 @@ export function CapNotice(props: {
           {props.reason === 'guest_full_used' && (
             <a class="btn" href="/start" data-test="cap-quick">
               Pick a quick round
-            </a>
-          )}
-          {props.isGuest && props.signInAvailable && props.reason !== 'build_budget_reached' && (
-            <a class="btn" href={links.googleSignIn} data-test="cap-sign-in">
-              Sign in to keep your history
             </a>
           )}
           <a class="btn btn-quiet" href="/history" data-test="cap-history">

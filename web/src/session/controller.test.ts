@@ -17,6 +17,7 @@ import { panelist, ScriptedTransport, sessionRes } from '../voice/testkit';
 import { VoiceError, type TransportOptions } from '../voice/transport';
 import { HANDOFF_START_MS, HANDOFF_WAIT_MS, LONG_ANSWER_CUT_IN_MS, RoundController, SessionError, type RoundControllerDeps, type RoundError } from './controller';
 import { OLD_VOICE_TAIL_MS } from '../voice/panel';
+import { SPEAK_SHOW_MS } from '../voice/speakGate';
 import type { NoticeKind } from './notices';
 import type { AvatarPort, HeadSamplerPort, SocketPort, UiAction, VisibilityPort, XRPort, XRVisibilityLike } from './ports';
 import { StageTimings } from './timings';
@@ -924,6 +925,7 @@ describe('RoundController hand-overs', () => {
     const t1 = await live(h); // its greeting was segment a0
     t1.mode('speaking');
     t1.agent('a1', 'Tell me about the market. Tom will take the churn question.');
+    await vi.advanceTimersByTimeAsync(SPEAK_SHOW_MS); // played long enough to be shown
     t1.mode('listening');
     h.socket.serverSend('panel.hand_over', { from: 'p1', to: 'p2', opening_line: 'Hi' });
     await vi.advanceTimersByTimeAsync(0);
@@ -937,6 +939,7 @@ describe('RoundController hand-overs', () => {
     expect(back.panelistId).toBe('p1');
     back.mode('speaking');
     back.agent('a1', "Thanks, Tom. To close: it's not now for the partner meeting.");
+    await vi.advanceTimersByTimeAsync(SPEAK_SHOW_MS);
     back.mode('listening');
     // Every reply is reported as played and is its own transcript line, the return to the floor included.
     expect(h.socket.of('voice.spoken').map((v) => v.text_prefix.slice(0, 20))).toEqual([
@@ -3190,5 +3193,75 @@ describe('RoundController swap with the fake voice', () => {
     expect(joinedAt).toBeLessThan(quietAt);
     expect(firstSound - quietAt).toBeLessThanOrEqual(1_500);
     expect(firstSound - quietAt).toBeGreaterThan(0);
+  });
+});
+
+describe('RoundController shows a reply once it is audible', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-11-13T10:00:00Z'));
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('a_reply_cut_within_milliseconds_leaves_no_line_and_no_speaking_pose_but_is_still_reported', async () => {
+    const h = harness({ voice: 'fish' });
+    const t = await live(h);
+    const lines: string[] = [];
+    h.ctl.on('transcript', (l) => l.role === 'agent' && lines.push(l.text));
+    const avatar = h.avatars.get('p1')!;
+    avatar.modes.length = 0;
+    t.stream = {} as MediaStream;
+    t.mode('thinking');
+    t.mode('speaking');
+    t.agent('a1', 'Okay.');
+    t.mode('listening');
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(lines).toEqual([]);
+    expect(avatar.modes).not.toContain('speaking');
+    // Lip sync is attached to the audio as soon as the voice speaks; it follows the audio, not the gate.
+    expect(avatar.attachVoice).toHaveBeenCalled();
+    // What the server is told is unchanged: it reconciles with the voice service's own transcript.
+    expect(h.socket.of('voice.spoken')).toEqual([{ panelist_id: 'p1', text_prefix: 'Okay.' }]);
+  });
+
+  it('a_real_reply_is_shown_within_200_ms_or_as_soon_as_it_is_audible', async () => {
+    const h = harness({ voice: 'fish' });
+    const t = await live(h);
+    const lines: string[] = [];
+    h.ctl.on('transcript', (l) => l.role === 'agent' && lines.push(l.text));
+    const avatar = h.avatars.get('p1')!;
+    avatar.modes.length = 0;
+    t.mode('speaking');
+    t.agent('a1', 'Got it.');
+    await vi.advanceTimersByTimeAsync(199);
+    expect(lines).toEqual([]);
+    expect(avatar.modes).toEqual([]);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(lines).toEqual(['Got it.']);
+    expect(avatar.modes).toEqual(['speaking']);
+    t.agent('a1', 'Got it. What happened next?');
+    expect(lines.at(-1)).toBe('Got it. What happened next?');
+    t.mode('listening');
+    expect(avatar.modes.at(-1)).toBe('listening');
+
+    // The next reply is audible at once: shown on the first level reading.
+    t.mode('speaking');
+    t.agent('a2', 'Right.');
+    t.level = 0.2;
+    await vi.advanceTimersByTimeAsync(30);
+    expect(lines.at(-1)).toBe('Right.');
+    expect(avatar.modes.at(-1)).toBe('speaking');
+  });
+
+  it('a_reply_shown_during_a_pause_does_not_put_the_avatar_in_its_speaking_pose', async () => {
+    const h = harness({ voice: 'fish' });
+    const t = await live(h);
+    t.mode('speaking');
+    t.agent('a1', 'So tell me');
+    h.xrVisibility('visible-blurred');
+    await vi.advanceTimersByTimeAsync(300);
+    expect(h.avatars.get('p1')!.modes.at(-1)).toBe('listening');
   });
 });

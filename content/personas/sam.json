@@ -15,7 +15,7 @@
     "Friendly, unhurried tone.",
     "Quotes the candidate: 'You said we decided. Who decided?'",
     "Asks one follow up at a time.",
-    "Says 'Got it.' before moving on."
+    "Often starts with a short reflection of their words before the next question."
   ],
   "never": [
     "Praise or grade a story",

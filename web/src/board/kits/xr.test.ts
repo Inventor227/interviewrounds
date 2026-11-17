@@ -92,7 +92,8 @@ describe('kits in XR', () => {
     }
     for (let i = 0; i < 12; i++) port.frame();
     port.select('right', 'end');
-    port.frame();
+    // A hand's drag lands once the pinch stays open past the rejoin window.
+    for (let i = 0; i < 12; i++) port.frame();
     expect(sent).toEqual([expect.objectContaining({ op: 'code.move', args: { id: 'l2', after: 'l3' } })]);
     expect(store.board.code!.lines.map((l) => l.id)).toEqual(['l1', 'l3', 'l2']);
   });
@@ -157,7 +158,8 @@ describe('kits in XR', () => {
     }
     for (let i = 0; i < 12; i++) port.frame();
     port.select('right', 'end');
-    port.frame();
+    // A hand's drag lands once the pinch stays open past the rejoin window.
+    for (let i = 0; i < 12; i++) port.frame();
     expect(store.board.code!.lines.map((l) => l.id)).toEqual(['l1', 'l3', 'l2']);
     expect(played).toContain('snap');
   });

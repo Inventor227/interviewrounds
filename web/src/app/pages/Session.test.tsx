@@ -8,7 +8,7 @@ import { Emitter } from '../../voice/transport';
 import { fakeMe } from '../fake/server';
 import { $, cleanup, click, renderApp, settle, useFakeServer } from '../test-utils';
 import { sameWords } from './Report';
-import { noticeLine, RESUMABLE_POLL_MS, startHref } from './Session';
+import { NARROW_STAGE_QUERY, noticeLine, RESUMABLE_POLL_MS, startHref } from './Session';
 
 const launchMock = vi.hoisted(() => ({ next: null as unknown }));
 vi.mock('../launch', async (orig) => ({
@@ -57,11 +57,11 @@ function fakeRoom(): LiveRoom & { changed(): void } {
   };
 }
 
-async function mount(state: ControllerState, input: PrepareInput = { kind: 'new', req: { mode: 'interview', round_id: 'beh_short', length: 'short', level: 'mid', style: 'neutral', voice: 'fake' } }) {
+async function mount(state: ControllerState, input: PrepareInput = { kind: 'new', req: { mode: 'interview', round_id: 'beh_short', length: 'short', level: 'mid', style: 'neutral', voice: 'fake' } }, preview = false) {
   const controller = fakeController(state);
   const room = fakeRoom();
   setLiveRoom(room);
-  launchMock.next = { key: 'k', input, preview: false, title: 'Behavioral', controller: controller as unknown as RoundController, session: sessionRes() };
+  launchMock.next = { key: 'k', input, preview, title: 'Behavioral', controller: controller as unknown as RoundController, session: sessionRes() };
   const root = await renderApp('/session/sess1');
   return { root, controller, room };
 }
@@ -227,7 +227,7 @@ describe('session page', () => {
     controller.go('ending');
     await settle();
     expect($(root, 'resume-offer')).toBeNull();
-    expect($(root, 'ended-paused')!.textContent).toBe('The round ended while paused. Your report is being written.');
+    expect($(root, 'ended-paused')!.textContent).toBe('The round ended while paused. Writing your report.');
     expect($(root, 'see-report')!.getAttribute('href')).toBe('/report/sess1');
     controller.go('scoring');
     await settle();
@@ -253,6 +253,51 @@ describe('session page', () => {
     expect(startHref({ session, input: { kind: 'resume', sessionId: 's 1', voice: 'fish' } })).toBe('/resume/s%201');
     expect(startHref({ session, input: { kind: 'retry', parentSessionId: 'p1', voice: 'fish' } })).toBe('/round/beh_short?retry=p1');
     expect(startHref({ session, input: { kind: 'new', req: { mode: 'meeting', meeting_plan_id: 'm', length: 'short', level: 'mid', style: 'neutral', voice: 'fish' } } })).toBe('/meeting/new');
+  });
+
+  describe('end on the page, for the preview on a phone', () => {
+    const NEW: PrepareInput = { kind: 'new', req: { mode: 'interview', round_id: 'beh_short', length: 'short', level: 'mid', style: 'neutral', voice: 'fake' } };
+    const screen = (narrow: boolean) =>
+      vi.spyOn(window, 'matchMedia').mockImplementation(
+        (q: string) => ({ matches: narrow && q === NARROW_STAGE_QUERY, media: q, addEventListener() {}, removeEventListener() {} }) as unknown as MediaQueryList,
+      );
+    afterEach(() => vi.restoreAllMocks());
+    if (!window.matchMedia) window.matchMedia = (() => null) as unknown as typeof window.matchMedia;
+
+    it('takes_two_taps_and_ends_through_the_controller', async () => {
+      screen(true);
+      const { root, controller } = await mount('live', NEW, true);
+      await click($(root, 'page-end'));
+      expect(controller.end).not.toHaveBeenCalled(); // one stray tap never ends the round
+      expect($(root, 'page-end-confirm')!.textContent).toBe('End round');
+      await click($(root, 'page-end-confirm'));
+      expect(controller.end).toHaveBeenCalledTimes(1);
+    });
+
+    it('keep_going_takes_the_question_back', async () => {
+      screen(true);
+      const { root, controller } = await mount('live', NEW, true);
+      await click($(root, 'page-end'));
+      await click($(root, 'page-end-cancel'));
+      expect($(root, 'page-end-confirm')).toBeNull();
+      expect($(root, 'page-end')).not.toBeNull();
+      expect(controller.end).not.toHaveBeenCalled();
+    });
+
+    it('shows_only_on_a_narrow_preview_while_the_round_runs', async () => {
+      screen(false);
+      let m = await mount('live', NEW, true);
+      expect($(m.root, 'page-end')).toBeNull(); // a wide screen holds the room's End fine
+      cleanup();
+      screen(true);
+      m = await mount('live', NEW, false);
+      expect($(m.root, 'page-end')).toBeNull(); // the headset has its own End
+      cleanup();
+      m = await mount('live', NEW, true);
+      m.controller.go('scoring');
+      await settle();
+      expect($(m.root, 'page-end')).toBeNull(); // the round is over
+    });
   });
 
   it('the_report_says_not_enough_signal_once', () => {

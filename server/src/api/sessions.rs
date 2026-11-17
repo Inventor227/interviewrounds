@@ -391,6 +391,65 @@ fn prewarm(app: &AppState, hub: &Hub, st: &SessionState, session_id: Uuid) {
     }));
 }
 
+/// Interviews: writes the opener now, while the user enters the room and places the desk, and keeps it as the floor's
+/// first line, so `[event: start]` is answered at once with no model call (as a meeting's opening line is). The call
+/// is the start turn's own request, so it also writes the prompt cache. Nothing is kept when the round has started
+/// meanwhile (that start turn asked the model itself) or the line is unusable; the start turn then asks the model as
+/// before.
+fn prepare_opener(app: &AppState, handle: Arc<Mutex<SessionState>>, session_id: Uuid) {
+    let llm = app.llm.clone();
+    tokio::spawn(LLM_SESSION.scope(session_id, async move {
+        let started = Instant::now();
+        let (req, panelist) = {
+            let st = handle.lock().await;
+            if st.mode != Mode::Interview
+                || !st.history.is_empty()
+                || st.pending_handover.contains_key(&st.floor)
+            {
+                return;
+            }
+            let (mut req, _) = prepare_live_turn(
+                &st,
+                &st.floor,
+                &UserInput::Event(EventKind::Start),
+                Instant::now(),
+            );
+            req.stream = false;
+            (req, st.floor.clone())
+        };
+        let line = match llm.create(&req).await {
+            Ok(res) if res.stop_reason.as_deref() == Some("end_turn") => res.text(),
+            Ok(res) => {
+                tracing::warn!(session_id = %session_id, stop = ?res.stop_reason, "opener not kept");
+                return;
+            }
+            Err(err) => {
+                tracing::warn!(session_id = %session_id, error = %err, "opener not prepared");
+                return;
+            }
+        };
+        let line = line.trim().to_string();
+        let mut filter = SpeechFilter::new();
+        let spoken = format!("{}{}", filter.push(&line), filter.finish());
+        if spoken.trim().is_empty() || filter.cut_tool_text() {
+            tracing::warn!(session_id = %session_id, "opener not kept: nothing to say");
+            return;
+        }
+        let mut st = handle.lock().await;
+        if !st.history.is_empty()
+            || st.floor != panelist
+            || st.pending_handover.contains_key(&panelist)
+            || !matches!(st.status, SessionStatus::Created | SessionStatus::Live)
+        {
+            tracing::info!(session_id = %session_id, "opener ready after the round started; not kept");
+            return;
+        }
+        st.pending_handover.insert(panelist, line);
+        st.opener_written_ahead = true;
+        tracing::info!(session_id = %session_id, ms = started.elapsed().as_millis() as u64, "opener prepared");
+    }));
+}
+
 async fn current_limits(app: &AppState, identity: &Identity) -> AppResult<usage::Limits> {
     let mut conn = app.db.acquire().await?;
     Ok(usage::limits(&mut conn, identity, &app.config, Utc::now()).await?)
@@ -648,7 +707,14 @@ async fn launch(
     let handle = app.registry.insert(st);
     let hub = ws::attach(app, session_id, handle.clone()).await;
     remember_voices(&hub, &voices);
-    prewarm(app, &hub, &*handle.lock().await, session_id);
+    let opener = app.orchestrator.prepare_opener && handle.lock().await.mode == Mode::Interview;
+    if opener {
+        // The opener's own call writes the prompt cache too: no separate prewarm.
+        *hub.last_prewarm.lock().unwrap_or_else(|e| e.into_inner()) = Some(Instant::now());
+        prepare_opener(app, handle.clone(), session_id);
+    } else {
+        prewarm(app, &hub, &*handle.lock().await, session_id);
+    }
     tracing::info!(session_id = %session_id, round_id = %round_id, voice = %voice, length, "session created");
     Ok(Ok(res))
 }

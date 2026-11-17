@@ -1,36 +1,36 @@
 {
   "provider": "fish",
-  "listed_at": "2026-11-13",
-  "how_chosen": "Read only GET /model listings, English, sorted by use count, about 1,000 voices plus title searches for accents. Kept voices tagged conversational, professional, narration or educational; dropped character, gaming, announcer and celebrity voices. Gender matches the persona. Final picks should be confirmed by ear from the samples.",
-  "sample_model": "s2.1-pro-free",
+  "listed_at": "2026-11-16",
+  "how_chosen": "Fish Official voices only (author_id d8b0991f96b44e489422ca2ddf0bd31d), read from the GET /model listing. Each was rendered with one shared English line and picked by ear and by median pitch: men 126 to 145 Hz and women 174 to 232 Hz, so no interviewer sounds heavy or deep. Accents spread across American, British, Indian and Nigerian English. Alternates are other official voices of the same gender. sample_text is a line in each persona's style for a per persona check.",
+  "sample_model": "s2.1-pro",
   "voices": {
     "maya": {
       "persona_id": "persona.maya",
       "gender": "female",
-      "fish_id": "c2623f0c075b4492ac367989aee1576f",
-      "fish_title": "Paula",
-      "accent": "American (unstated; confirm by ear)",
-      "task_count": 168514,
+      "fish_id": "c250136a9ec74cc0b799be54664a83f2",
+      "fish_title": "Harper",
+      "accent": "American (en-us)",
+      "task_count": 125,
       "tags": [
         "female",
-        "middle-aged",
-        "educational",
+        "young",
         "conversational",
         "professional",
-        "confident",
         "clear",
-        "friendly",
-        "Articulate"
+        "confident",
+        "brisk",
+        "english",
+        "en-us"
       ],
-      "reason": "Professional, clear and friendly with a conversational tag and 168k uses: a warm senior engineer who still sounds precise.",
+      "reason": "Natural, professional American voice at a brisk conversational pace, about 232 Hz: a warm senior engineer who still sounds precise.",
       "sample_text": "Hi, I'm Maya. We'll do one coding problem today, maybe with a follow-up. Please think out loud as you go. Take your time, there's no rush.",
-      "sample_file": "maya.mp3",
+      "sample_file": "maya-Harper.mp3",
       "alternates": [
         {
           "fish_id": "9a9cf47702da476aa4629e2506d4a857",
           "fish_title": "Hannah",
-          "accent": "American (unstated; confirm by ear)",
-          "task_count": 315464,
+          "accent": "American",
+          "task_count": 319925,
           "tags": [
             "female",
             "middle-aged",
@@ -42,468 +42,387 @@
             "friendly",
             "Fitness"
           ],
-          "reason": "Most used professional female voice in the list (315k), billed as a conversation specialist; slightly brighter than Paula."
+          "reason": "Bright, friendly professional voice, about 250 Hz."
         },
         {
-          "fish_id": "f6a19fe5ab494e1fa51bb1476d583a44",
-          "fish_title": "Abby: English Woman (US) - Audiobook",
-          "accent": "American",
-          "task_count": 114481,
+          "fish_id": "606aa33cd0964bbeaddd77071e4ec8b8",
+          "fish_title": "Kendall",
+          "accent": "American (en-us)",
+          "task_count": 84,
           "tags": [
             "female",
-            "middle-aged",
-            "narration",
-            "smooth",
-            "professional",
-            "warm",
+            "young",
+            "conversational",
+            "english",
+            "en-us",
+            "friendly",
+            "soft",
+            "relaxed",
             "clear",
-            "American Accent"
+            "voice-factory"
           ],
-          "reason": "Warm, smooth American narration voice; softer option if Paula sounds too formal."
+          "reason": "Friendly, soft and relaxed American voice, about 200 Hz."
         }
       ]
     },
     "daniel": {
       "persona_id": "persona.daniel",
       "gender": "male",
-      "fish_id": "c5f56a6cc2ec4fa8920cb4c5889a3fb7",
-      "fish_title": "Slax",
-      "accent": "American (unstated; confirm by ear)",
-      "task_count": 1609562,
+      "fish_id": "02e950ce577d4f008a2dfb4782789a3a",
+      "fish_title": "Mason",
+      "accent": "American (en-us)",
+      "task_count": 193,
       "tags": [
         "male",
-        "middle-aged",
-        "medium",
-        "clear",
-        "crisp",
-        "smooth",
-        "calm",
-        "measured",
+        "young",
+        "conversational",
         "professional",
-        "neutral-tone",
+        "clear",
         "confident",
-        "social-media",
-        "narration",
-        "educational"
+        "brisk",
+        "english",
+        "en-us"
       ],
-      "reason": "The most used clean professional male voice (1.6M uses); tags read clear, crisp, measured, neutral: exactly the precise staff engineer.",
+      "reason": "Natural, professional American voice at a brisk conversational pace, about 129 Hz: calm and neutral for the staff engineer, lighter than the earlier pick.",
       "sample_text": "Hi, I'm Daniel. We've got about thirty minutes to design one system together. You drive, and I'll ask questions along the way. Use the cards on your desk whenever you're ready.",
-      "sample_file": "daniel.mp3",
+      "sample_file": "daniel-Mason.mp3",
       "alternates": [
         {
-          "fish_id": "536d3a5e000945adb7038665781a4aca",
-          "fish_title": "Ethan",
-          "accent": "American (unstated; confirm by ear)",
-          "task_count": 723848,
+          "fish_id": "e041d483a7b54d96a6b91676468b304b",
+          "fish_title": "Grant",
+          "accent": "American (en-us)",
+          "task_count": 22,
           "tags": [
+            "english",
             "male",
-            "middle-aged",
-            "educational",
-            "narration",
-            "professional",
-            "clear",
-            "calm",
-            "authoritative",
-            "documentary"
+            "en-us"
           ],
-          "reason": "Calm, clear and authoritative with 724k uses; a little more documentary in tone."
+          "reason": "Polished American voice, about 137 Hz; a touch more formal."
         },
         {
-          "fish_id": "1d52151a55eb4878a997bd06e816b5f6",
-          "fish_title": "alex",
-          "accent": "American (unstated; confirm by ear)",
-          "task_count": 87308,
+          "fish_id": "18b7e3bed34d46b088b8fbd10926feb2",
+          "fish_title": "Michael",
+          "accent": "Unstated; confirm by ear",
+          "task_count": 34,
           "tags": [
-            "male",
-            "young",
-            "narration",
-            "storytelling",
-            "professional",
-            "calm",
-            "clear",
-            "medium",
-            "smooth"
+            "conversational",
+            "english",
+            "male"
           ],
-          "reason": "Calm, articulate and younger sounding; a lighter option for a less senior feel."
+          "reason": "Natural conversational voice, about 139 Hz."
         }
       ]
     },
     "ana": {
       "persona_id": "persona.ana",
       "gender": "female",
-      "fish_id": "e3cd384158934cc9a01029cd7d278634",
-      "fish_title": "Laura",
-      "accent": "American (unstated; confirm by ear)",
-      "task_count": 211441,
+      "fish_id": "84a54330a178478a88e8c9589de585a0",
+      "fish_title": "Wren",
+      "accent": "Unstated; confirm by ear",
+      "task_count": 1010,
       "tags": [
-        "female",
-        "middle-aged",
         "conversational",
-        "educational",
-        "deep",
-        "warm",
-        "calm",
-        "professional",
-        "clear"
+        "english",
+        "female"
       ],
-      "reason": "Calm, clear, conversational and warm with 211k uses; short curious questions land well in a lower, steady voice.",
+      "reason": "Natural, conversational voice for everyday dialogue, about 174 Hz: curious failure questions without sounding heavy.",
       "sample_text": "Yes. Say the cache cluster loses a node at peak traffic. What happens to reads, and how long until the system is healthy again?",
-      "sample_file": "ana.mp3",
+      "sample_file": "ana-Wren.mp3",
       "alternates": [
         {
-          "fish_id": "8906b5268cae414fb9b8d3da6e84413d",
-          "fish_title": "Measured Storyteller",
-          "accent": "American (unstated; confirm by ear)",
-          "task_count": 116796,
+          "fish_id": "15259c52cf5d41c28ea4394080e5e593",
+          "fish_title": "Marion",
+          "accent": "American (en-us)",
+          "task_count": 37,
           "tags": [
+            "english",
             "female",
-            "middle-aged",
-            "narration",
-            "educational",
-            "clear",
-            "calm",
-            "measured",
-            "smooth",
-            "professional",
-            "confident",
-            "neutral-tone",
-            "storytelling",
-            "narrative",
-            "expressive",
-            "warm"
+            "en-us"
           ],
-          "reason": "Measured, neutral tone built for explaining complex ideas, 117k uses."
+          "reason": "Calm American voice, about 176 Hz."
         },
         {
-          "fish_id": "bebd3797a58b4b3d9934bf86776b7d2b",
-          "fish_title": "Yorkshire Woman",
-          "accent": "Northern English",
-          "task_count": 4808,
+          "fish_id": "3f9fb0d2cea6414187ab44b20806f9e3",
+          "fish_title": "Sloane",
+          "accent": "American",
+          "task_count": 24,
           "tags": [
             "female",
-            "young",
-            "social-media",
+            "american",
             "conversational",
-            "friendly",
-            "relaxed",
-            "clear",
-            "Northern English",
-            "British Accent"
+            "narration",
+            "warm"
           ],
-          "reason": "Friendly conversational Northern English accent; adds accent range to the engineering panel."
+          "reason": "Warm, natural American voice, about 163 Hz."
         }
       ]
     },
     "sam": {
       "persona_id": "persona.sam",
       "gender": "male",
-      "fish_id": "0b74ead073f2474a904f69033535b98e",
-      "fish_title": "CALM- NORMAL",
-      "accent": "American (unstated; confirm by ear)",
-      "task_count": 67351,
+      "fish_id": "fa4c9eb3dccc4806b382b40d61c6b10a",
+      "fish_title": "Sawyer",
+      "accent": "American",
+      "task_count": 654,
       "tags": [
         "male",
-        "middle-aged",
+        "american",
         "conversational",
-        "calm",
-        "gentle",
-        "empathetic",
-        "warm",
-        "smooth",
-        "Meditation"
+        "narration"
       ],
-      "reason": "Calm, empathetic, warm and conversational (67k uses): a hiring manager who makes people open up, then digs.",
+      "reason": "Natural American voice for conversation, about 138 Hz: an easy to talk to hiring manager.",
       "sample_text": "Hi, I'm Sam. I'd like to hear about your work today. You said we rolled it back. What exactly did you do, versus the rest of the team?",
-      "sample_file": "sam.mp3",
+      "sample_file": "sam-Sawyer.mp3",
       "alternates": [
         {
-          "fish_id": "4746f1b456494387993af9041d0516c4",
-          "fish_title": "w2w",
-          "accent": "American (unstated; confirm by ear)",
-          "task_count": 83941,
+          "fish_id": "f1c025d3f1ce4018a26b47948c1e172b",
+          "fish_title": "Hollis",
+          "accent": "American",
+          "task_count": 23,
           "tags": [
             "male",
-            "middle-aged",
-            "narration",
-            "social-media",
-            "educational",
+            "american",
             "conversational",
-            "medium",
-            "warm",
-            "calm",
-            "clear",
-            "smooth",
-            "professional",
-            "confident",
-            "expressive",
-            "measured",
-            "storytelling",
-            "neutral-tone"
+            "narration",
+            "warm"
           ],
-          "reason": "Calm, confident, warm and conversational with 84k uses; a touch more energy."
+          "reason": "Warm, natural American voice, about 150 Hz; the lightest male option."
         },
         {
-          "fish_id": "7c3bc847a8c847a9a99154f8e1b0ec5c",
-          "fish_title": "Cisam shawali",
-          "accent": "East African",
-          "task_count": 14372,
+          "fish_id": "18b7e3bed34d46b088b8fbd10926feb2",
+          "fish_title": "Michael",
+          "accent": "Unstated; confirm by ear",
+          "task_count": 34,
           "tags": [
-            "male",
-            "young",
-            "narration",
-            "educational",
-            "deep",
-            "professional",
-            "measured",
-            "documentary",
-            "African Accent"
+            "conversational",
+            "english",
+            "male"
           ],
-          "reason": "Steady, professional East African accent; widens the accent range of the male cast."
+          "reason": "Natural conversational voice, about 139 Hz."
         }
       ]
     },
     "priya": {
       "persona_id": "persona.priya",
       "gender": "female",
-      "fish_id": "b1a1d760d9604bdb957a56eec3460f1b",
-      "fish_title": "indian Lady Voice",
-      "accent": "Indian English",
-      "task_count": 8739,
+      "fish_id": "18b1276891524bd786fb8a59ecd3630a",
+      "fish_title": "Priya",
+      "accent": "Indian English (en-in)",
+      "task_count": 32,
       "tags": [
         "female",
-        "middle-aged",
-        "educational",
+        "young",
         "conversational",
-        "friendly",
-        "enthusiastic",
-        "clear",
         "professional",
-        "Indian Accent"
+        "clear",
+        "confident",
+        "brisk",
+        "english",
+        "en-in"
       ],
-      "reason": "Friendly, professional and conversational with a clear Indian accent; the most used voice of that kind (8.7k uses) and a natural fit for a warm product lead.",
+      "reason": "Natural, professional Indian English voice at a brisk conversational pace, about 205 Hz: a warm product lead.",
       "sample_text": "Hi, I'm Priya. Let's design a product together. You said first-time renters. Who exactly, and how would you know your idea actually worked?",
-      "sample_file": "priya.mp3",
+      "sample_file": "priya-Priya.mp3",
       "alternates": [
         {
-          "fish_id": "9ee2b8dcf0f940bb990f6ffa46488cdc",
-          "fish_title": "Course 9",
-          "accent": "Indian English (mild)",
-          "task_count": 5755,
+          "fish_id": "606aa33cd0964bbeaddd77071e4ec8b8",
+          "fish_title": "Kendall",
+          "accent": "American (en-us)",
+          "task_count": 84,
           "tags": [
             "female",
-            "middle-aged",
-            "educational",
-            "professional",
+            "young",
+            "conversational",
+            "english",
+            "en-us",
+            "friendly",
+            "soft",
+            "relaxed",
             "clear",
-            "smooth",
-            "teacher",
-            "Indian Accent",
-            "measured"
+            "voice-factory"
           ],
-          "reason": "Clear, measured, teacher-like with a mild Indian accent."
+          "reason": "Friendly, soft and relaxed American voice, about 200 Hz."
         },
         {
-          "fish_id": "9a9cf47702da476aa4629e2506d4a857",
-          "fish_title": "Hannah",
-          "accent": "American (unstated; confirm by ear)",
-          "task_count": 315464,
+          "fish_id": "8abfa9ebd4c24a3399b68c3cdac8c7b5",
+          "fish_title": "Freya",
+          "accent": "British (en-gb)",
+          "task_count": 988,
           "tags": [
             "female",
-            "middle-aged",
-            "advertisement",
-            "educational",
+            "young",
+            "conversational",
             "professional",
-            "confident",
             "clear",
-            "friendly",
-            "Fitness"
+            "confident",
+            "brisk",
+            "english",
+            "en-gb"
           ],
-          "reason": "High-use friendly professional voice if the Indian English picks sound too scripted."
+          "reason": "Professional British voice at a brisk conversational pace, about 208 Hz."
         }
       ]
     },
     "leo": {
       "persona_id": "persona.leo",
       "gender": "male",
-      "fish_id": "536d3a5e000945adb7038665781a4aca",
-      "fish_title": "Ethan",
-      "accent": "American (unstated; confirm by ear)",
-      "task_count": 723848,
+      "fish_id": "2680da81de8348a68e1f4dbaa79272f1",
+      "fish_title": "Gregory",
+      "accent": "American (en-us)",
+      "task_count": 681,
       "tags": [
         "male",
         "middle-aged",
         "educational",
-        "narration",
-        "professional",
+        "teacher",
+        "english",
+        "en-us",
         "clear",
-        "calm",
-        "authoritative",
-        "documentary"
+        "professional",
+        "energetic",
+        "voice-factory"
       ],
-      "reason": "Billed as a curious explainer, calm and clear with 724k uses: suits a data scientist who asks for exact definitions.",
+      "reason": "Clear, professional American voice with some energy, about 145 Hz: a data scientist who asks for exact definitions.",
       "sample_text": "You said conversion dropped twelve percent. Counted how, and over what window? Before we guess at causes, I'd like to know the data is right.",
-      "sample_file": "leo.mp3",
+      "sample_file": "leo-Gregory.mp3",
       "alternates": [
         {
-          "fish_id": "a84d19016bc34098b3c89d78f9299e33",
-          "fish_title": "peter",
-          "accent": "American (unstated; confirm by ear)",
-          "task_count": 18873,
+          "fish_id": "e041d483a7b54d96a6b91676468b304b",
+          "fish_title": "Grant",
+          "accent": "American (en-us)",
+          "task_count": 22,
           "tags": [
+            "english",
             "male",
-            "middle-aged",
-            "educational",
-            "professional",
-            "calm",
-            "authoritative",
-            "measured",
-            "clear",
-            "confident"
+            "en-us"
           ],
-          "reason": "Calm, measured and authoritative; good for crisp metric questions."
+          "reason": "Polished American voice, about 137 Hz; a touch more formal."
         },
         {
-          "fish_id": "afb77dd41a774863b1dae00a1ec9122e",
-          "fish_title": "Mr. Finance",
-          "accent": "American (unstated; confirm by ear)",
-          "task_count": 5539,
+          "fish_id": "f1c025d3f1ce4018a26b47948c1e172b",
+          "fish_title": "Hollis",
+          "accent": "American",
+          "task_count": 23,
           "tags": [
             "male",
-            "young",
+            "american",
+            "conversational",
             "narration",
-            "educational",
-            "advertisement",
-            "clear",
-            "crisp",
-            "professional",
-            "confident",
-            "measured",
-            "calm",
-            "neutral-tone",
-            "storytelling",
-            "narrative"
+            "warm"
           ],
-          "reason": "Young, crisp, neutral voice made for business explanations."
+          "reason": "Warm, natural American voice, about 150 Hz; the lightest male option."
         }
       ]
     },
     "viktor": {
       "persona_id": "persona.viktor",
       "gender": "male",
-      "fish_id": "b7204d4e40ef4a548c7c8547b7f73492",
-      "fish_title": "Alok",
-      "accent": "British",
-      "task_count": 62613,
+      "fish_id": "8d8aec63a56c460cb7def795bdf754fa",
+      "fish_title": "Oliver",
+      "accent": "British (en-gb)",
+      "task_count": 53,
       "tags": [
         "male",
-        "middle-aged",
-        "educational",
-        "narration",
-        "podcast",
+        "young",
+        "conversational",
         "professional",
-        "calm",
-        "measured",
-        "British Accent"
+        "clear",
+        "confident",
+        "brisk",
+        "english",
+        "en-gb"
       ],
-      "reason": "Calm, measured British voice with authority and 62k uses; terse lines from a director sound firm without shouting.",
+      "reason": "Natural, professional British voice at a brisk pace, about 126 Hz: a director who sounds firm without shouting.",
       "sample_text": "Let me pause you there. So what? You've told me what happened. I want to know what you decided, and what it cost the team.",
-      "sample_file": "viktor.mp3",
+      "sample_file": "viktor-Oliver.mp3",
       "alternates": [
         {
-          "fish_id": "74e2e3eface047b69dd352afbcf8c88c",
-          "fish_title": "patrick222",
-          "accent": "British",
-          "task_count": 13597,
+          "fish_id": "9a3a69c63dbc4774ac41b03945229dc8",
+          "fish_title": "Alistair",
+          "accent": "British (en-gb)",
+          "task_count": 26,
           "tags": [
-            "male",
-            "middle-aged",
-            "educational",
-            "professional",
-            "serious",
-            "authoritative",
+            "English",
             "British",
-            "narration",
-            "clear"
+            "Male",
+            "Conversational",
+            "Natural"
           ],
-          "reason": "Serious and authoritative British voice; the tougher option."
+          "reason": "Natural, warm British voice, about 126 Hz."
         },
         {
-          "fish_id": "59b8d12e87724010a34190047391be4f",
-          "fish_title": "F1",
-          "accent": "British",
-          "task_count": 51649,
+          "fish_id": "08b4100b4c3747fe84ed8b57d26a95ba",
+          "fish_title": "James",
+          "accent": "British (en-gb)",
+          "task_count": 346,
           "tags": [
             "male",
-            "middle-aged",
-            "educational",
-            "narration",
+            "young",
+            "conversational",
+            "english",
+            "en-gb",
             "professional",
-            "authoritative",
             "clear",
-            "British",
-            "documentary"
+            "friendly",
+            "confident",
+            "voice-factory",
+            "CALE_OCT_12"
           ],
-          "reason": "Articulate, authoritative British voice with 52k uses."
+          "reason": "Clear, friendly British voice, about 131 Hz."
         }
       ]
     },
     "grace": {
       "persona_id": "persona.grace",
       "gender": "female",
-      "fish_id": "5d3f36b4a0f84353980c15bdf186fadc",
-      "fish_title": "african woman",
-      "accent": "West African",
-      "task_count": 3449,
+      "fish_id": "1258154bb41540c7b9dc0d10cd6704bf",
+      "fish_title": "Amara",
+      "accent": "Nigerian English (en-ng)",
+      "task_count": 338,
       "tags": [
         "female",
-        "middle-aged",
-        "narration",
-        "warm",
+        "young",
+        "conversational",
+        "professional",
         "clear",
-        "gentle",
-        "storytelling",
-        "African Accent",
-        "measured"
+        "confident",
+        "brisk",
+        "english",
+        "en-ng"
       ],
-      "reason": "Clear, warm and measured with a gentle West African accent: a calm chair who keeps time, and accent range for the cast.",
+      "reason": "Natural, professional Nigerian English voice at a brisk conversational pace, about 195 Hz: a calm chair who keeps time.",
       "sample_text": "Thanks for coming, everyone. We have twenty minutes. What are we here to decide today? Over to you. We'll take questions after your opening.",
-      "sample_file": "grace.mp3",
+      "sample_file": "grace-Amara.mp3",
       "alternates": [
         {
-          "fish_id": "ca4934e8e9d346059b40515784e5a70d",
-          "fish_title": "WOMEN",
-          "accent": "American (unstated; confirm by ear)",
-          "task_count": 4684,
+          "fish_id": "15259c52cf5d41c28ea4394080e5e593",
+          "fish_title": "Marion",
+          "accent": "American (en-us)",
+          "task_count": 37,
           "tags": [
+            "english",
             "female",
-            "middle-aged",
-            "educational",
-            "professional",
-            "empathetic",
-            "warm",
-            "clear",
-            "calm",
-            "Health"
+            "en-us"
           ],
-          "reason": "Mature, calm, professional and empathetic; a neutral chair."
+          "reason": "Calm American voice, about 176 Hz."
         },
         {
-          "fish_id": "bebd3797a58b4b3d9934bf86776b7d2b",
-          "fish_title": "Yorkshire Woman",
-          "accent": "Northern English",
-          "task_count": 4808,
+          "fish_id": "8abfa9ebd4c24a3399b68c3cdac8c7b5",
+          "fish_title": "Freya",
+          "accent": "British (en-gb)",
+          "task_count": 988,
           "tags": [
             "female",
             "young",
-            "social-media",
             "conversational",
-            "friendly",
-            "relaxed",
+            "professional",
             "clear",
-            "Northern English",
-            "British Accent"
+            "confident",
+            "brisk",
+            "english",
+            "en-gb"
           ],
-          "reason": "Friendly, relaxed Northern English accent if a British chair fits better."
+          "reason": "Professional British voice at a brisk conversational pace, about 208 Hz."
         }
       ]
     }

@@ -35,7 +35,8 @@ export function Delta(props: { delta: number | null | undefined }) {
   );
 }
 
-export function Bars(props: { competencies: Competency[] }) {
+/** compact: no reason under each bar (the report folds them into one list below). */
+export function Bars(props: { competencies: Competency[]; compact?: boolean }) {
   return (
     <ul class="bars" data-test="bars">
       {props.competencies.map((c) => {
@@ -73,7 +74,7 @@ export function Bars(props: { competencies: Competency[] }) {
               <span class="bar-level">{LEVEL_TEXT[level]}</span>
               <Delta delta={c.delta_vs_last} />
             </div>
-            {c.rationale && score != null && <p class="bar-why">{c.rationale}</p>}
+            {!props.compact && c.rationale && score != null && <p class="bar-why">{c.rationale}</p>}
           </li>
         );
       })}

@@ -26,7 +26,7 @@ This is a mid level interview. Expect a medium problem.
 This is a senior level interview. Expect a medium to hard problem, a little vague on purpose.
 - The candidate drives, including the order of work. You probe; you do not guide.
 - Hints only after about ninety seconds of being stuck, and prefer a question over a hint. Avoid going past level two unless the phase must end.
-- Three or four follow ups per topic. Include at least one "What if you're wrong about that?" or "What breaks first?"
+- Three or four follow ups per topic. Include at least one question that tests a key assumption or asks what breaks first, naming the assumption or the part.
 - Time is tight. Move on at phase boundaries even mid-thought.
 - In design rounds, ask them where they would go deeper before you choose.
 - In behavioral questions, a strong story is a project of three or more people that they led or shaped.
@@ -37,5 +37,5 @@ This is a staff level interview. The prompt is vague on purpose and spans teams.
 - Hints are rare. Ask a sharper question instead.
 - Four or more follow ups per topic, including cost, migration from the current system, team boundaries and what they would not build.
 - Time is tight.
-- Push once on simplicity: "What would the simplest version that still works look like?"
+- Push once on simplicity, naming what they built: "What would the simplest version of this pipeline look like that still works?"
 - In behavioral questions, a strong story spans two or more teams or changes how an org works.

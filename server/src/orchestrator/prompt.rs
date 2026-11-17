@@ -537,6 +537,11 @@ pub fn render_system(
         };
         vars.insert(key, text);
     }
+    // Cards carry what a strong answer covers and the red flags, not a ready made notes field.
+    if vars["question.interviewer_notes"].trim().is_empty() {
+        vars.insert("question.interviewer_notes", interviewer_notes(question));
+    }
+    vars.insert("questions", question_card(question));
 
     // Panel rules: lead and second each get their section of hand-over.md.
     let lead = panel.first();
@@ -576,7 +581,7 @@ pub fn render_system(
     Ok(tidy_blank_runs(&fill(house, &vars)))
 }
 
-const QUESTION_KEYS: [&str; 7] = [
+const QUESTION_KEYS: [&str; 10] = [
     "question.title",
     "question.prompt",
     "question.brief_lines",
@@ -584,7 +589,56 @@ const QUESTION_KEYS: [&str; 7] = [
     "question.follow_ups",
     "question.twist",
     "question.interviewer_notes",
+    "question.hints",
+    "question.success_prompt",
+    "question.diagnosis_prompt",
 ];
+
+fn strings(card: &Value, field: &str) -> Vec<String> {
+    card.get(field)
+        .and_then(Value::as_array)
+        .map(|a| {
+            a.iter()
+                .filter_map(|i| i.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// "Strong answer covers: ... Red flags: ..." from the card, for the interviewer's eyes only.
+fn interviewer_notes(card: &Value) -> String {
+    let mut out = String::new();
+    let covers = strings(card, "strong_answer_covers");
+    if !covers.is_empty() {
+        out.push_str(&format!("A strong answer covers: {}.", covers.join("; ")));
+    }
+    let flags = strings(card, "red_flags");
+    if !flags.is_empty() {
+        out.push_str(&format!(" Red flags: {}.", flags.join("; ")));
+    }
+    out.trim().to_string()
+}
+
+/// The story card for `{questions}` (behavioral and leadership rounds): the question, then targets, probes, a strong
+/// answer and red flags.
+fn question_card(card: &Value) -> String {
+    let Some(prompt) = card.get("prompt").and_then(Value::as_str) else {
+        return String::new();
+    };
+    let mut parts = vec![prompt.to_string()];
+    for (label, field) in [
+        ("targets", "targets"),
+        ("probes", "follow_ups"),
+        ("strong answer", "strong_answer_covers"),
+        ("red flags", "red_flags"),
+    ] {
+        let items = strings(card, field);
+        if !items.is_empty() {
+            parts.push(format!("{label}: {}", items.join("; ")));
+        }
+    }
+    format!("- {}", parts.join(" / "))
+}
 
 /// Collapses three or more newlines (left by empty sections) into one blank line.
 fn tidy_blank_runs(text: &str) -> String {
@@ -747,5 +801,42 @@ mod tests {
             "x {b} B {c} {not a key!}"
         );
         assert_eq!(fill("{", &vars), "{");
+    }
+
+    #[test]
+    fn every_round_prompt_fills_its_card() {
+        use crate::orchestrator::state::{Level, Style, VoiceKind};
+        let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../content");
+        let catalog = Catalog::load(&dir).expect("content loads");
+        let settings = SessionSettings {
+            level: Level::Mid,
+            style: Style::Neutral,
+            voice: VoiceKind::Fake,
+        };
+        let mut checked = 0;
+        for round in catalog
+            .rounds
+            .values()
+            .filter(|r| r.round_type != "meeting")
+        {
+            let card = catalog
+                .bank_card(&round.question_pool, None)
+                .cloned()
+                .unwrap_or(Value::Null);
+            let persona = catalog.personas.values().next().expect("a persona");
+            let text =
+                render_system(&catalog, round, persona, 0, &[], &card, &settings).expect("renders");
+            for key in ["{question.", "{questions}", "{persona.", "{target_minutes}"] {
+                assert!(
+                    !text.contains(key),
+                    "{}: left {key} in the prompt",
+                    round.id
+                );
+            }
+            let prompt = card["prompt"].as_str().expect("card prompt");
+            assert!(text.contains(prompt), "{}: card prompt missing", round.id);
+            checked += 1;
+        }
+        assert!(checked >= 14);
     }
 }

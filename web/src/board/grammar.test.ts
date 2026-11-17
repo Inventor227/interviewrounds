@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseLabelCommand, parseLabelStatement, voiceLabel } from './grammar';
+import { inferComponentType, parseLabelCommand, parseLabelStatement, voiceLabel } from './grammar';
 import { emptyBoard } from './model';
 
 describe('parseLabelCommand (instant labels)', () => {
@@ -98,4 +98,41 @@ describe('voiceLabel', () => {
     }
     expect(voiceLabel(board, "that's the URL store", null)).toBeNull();
   });
+});
+
+describe('inferComponentType (what a spoken name says a drawn box is)', () => {
+  it.each([
+    ['Seat table', 'db'],
+    ['Orders database', 'db'],
+    ['User DB', 'db'],
+    ['Postgres', 'db'],
+    ['URL store', 'db'],
+    ['Redis', 'cache'],
+    ['Edge cache', 'cache'],
+    ['Job queue', 'queue'],
+    ['Kafka', 'queue'],
+    ['Event stream', 'queue'],
+    ['S3 bucket', 'object_store'],
+    ['Blob storage', 'object_store'],
+    ['Object store', 'object_store'],
+    ['Search index', 'search'],
+    ['Hold sweeper', 'worker'],
+    ['Cron', 'worker'],
+    ['API gateway', 'api_gateway'],
+    ['Load balancer', 'lb'],
+    ['LB', 'lb'],
+    ['CDN', 'cdn'],
+    ['Mobile app', 'client'],
+    ['Browser', 'client'],
+    ['Dynamo', 'kv'],
+  ])('%s is a %s', (label, type) => {
+    expect(inferComponentType(label)).toBe(type);
+  });
+
+  it.each(['Order service', 'Ticket service', 'App server', 'Payments API', 'Checkout', 'Restore', 'Tablet'])(
+    '%s says nothing about the type (it stays a service)',
+    (label) => {
+      expect(inferComponentType(label)).toBeNull();
+    },
+  );
 });

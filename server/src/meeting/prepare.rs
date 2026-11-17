@@ -10,7 +10,7 @@
 //!   templates decide whether the user chairs;
 //! - voices and looks are assigned here, not by the model: the template's (or user's) `voice_base` first, then a
 //!   balanced default, with no shared persona, avatar or voice;
-//! - the opening line fits in about eight seconds of speech;
+//! - the opening line fits in about ten seconds of speech;
 //! - nothing generated repeats the user's walk away point.
 //!
 //! If the model call fails, the same rules build a plan without it (templates are fully pre-filled).
@@ -43,8 +43,8 @@ const PREPARE_TIMEOUT: Duration = Duration::from_secs(120);
 /// The persona that chairs when no attendee runs the meeting.
 pub const CHAIR_PERSONA: &str = "persona.grace";
 
-/// About eight seconds of speech at a natural pace.
-pub const OPENING_MAX_WORDS: usize = 20;
+/// About ten seconds of speech at a natural pace: a welcome, the topic and the hand-over.
+pub const OPENING_MAX_WORDS: usize = 26;
 
 #[derive(Debug, thiserror::Error)]
 pub enum PrepareError {
@@ -814,7 +814,7 @@ pub fn assign_personas(
     Ok(out.into_iter().flatten().collect())
 }
 
-/// The opening line, cleaned and cut to about eight seconds of speech: the whole line if it fits, else its first and
+/// The opening line, cleaned and cut to about ten seconds of speech: the whole line if it fits, else its first and
 /// last sentences (the welcome and the hand-over or question), else the last sentence. None when nothing fits.
 pub fn fit_opening(line: &str) -> Option<String> {
     let line = plain(line)
@@ -920,7 +920,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn opening_is_cut_to_eight_seconds() {
+    fn opening_is_cut_to_ten_seconds() {
         assert_eq!(
             fit_opening("Thanks for coming. Over to you.").as_deref(),
             Some("Thanks for coming. Over to you.")

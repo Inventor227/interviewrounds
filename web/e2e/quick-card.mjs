@@ -30,7 +30,7 @@ await page((c) => globalThis.__xrApp.ui.showQuickCard(c), CARD);
 await page(() => document.querySelector('.xr-stage')?.scrollIntoView({ block: 'start' }));
 await sleep(2500);
 await screenshot('quick-card');
-await page(() => globalThis.__xrApp.ui.showQuickCard({ one_line: 'Your scorecard is taking longer than usual. Open the full report to see it.', top_strength: null, top_fix: null }));
+await page(() => globalThis.__xrApp.ui.showQuickCard({ one_line: 'Taking longer than usual. See the full report.', top_strength: null, top_fix: null }));
 await sleep(2000);
 await screenshot('quick-card-fallback');
 console.log('quick card ok');

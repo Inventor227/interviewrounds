@@ -202,6 +202,17 @@ describe('BoardInput', () => {
     expect(emitted[0]).toMatchObject({ op: 'edge.set_dir', args: { id: 'e1' } });
   });
 
+  it('a label pill answers a fingertip 1 cm above or below it: its hit area is 2.2 cm tall', () => {
+    const { store, adapter, emitted } = setup();
+    store.apply({ op_id: 'e', src: 'hand', op: 'edge.create', args: { id: 'e1', from: 'n1', to: 'n2', label: 'HTTPS' } });
+    // The pill is drawn 1.6 cm tall around the midpoint (24, 12.5).
+    adapter.down(25, 13.5);
+    adapter.up(25, 13.5);
+    adapter.down(23, 11.5);
+    adapter.up(23, 11.5);
+    expect(emitted.map((o) => o.op)).toEqual(['edge.set_dir', 'edge.set_dir']);
+  });
+
   it('a press that jumps past the threshold between samples is a drag, not a tap', () => {
     const { adapter, emitted } = setup();
     adapter.down(14, 12.5);

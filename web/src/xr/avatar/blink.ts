@@ -1,22 +1,33 @@
-// Blinks: a new blink every 2 to 6 s (uniform), each 140 ms long (fast close, short hold, slower open). Gaze shifts
-// can trigger an extra blink, and now and then a blink comes as a quick double, as people do in conversation.
+// Blinks: a new blink every 2 to 6 s (uniform), each 180 ms long (fast close, short hold, slower open). The rate
+// follows the conversation: an attentive listener blinks less, a speaker or someone thinking more. Gaze shifts and
+// phrase starts can trigger an extra blink, and now and then a blink comes as a quick double, as people do.
 
 import type { Rng } from './rng';
 
-export const BLINK_MS = 140;
+export const BLINK_MS = 180;
 export const BLINK_GAP_MIN_MS = 2000;
 export const BLINK_GAP_MAX_MS = 6000;
 
-const CLOSE_MS = 50;
-const HOLD_MS = 20;
+const CLOSE_MS = 55;
+const HOLD_MS = 25;
 const DOUBLE_CHANCE = 0.1;
 const DOUBLE_GAP_MS = 70;
 /** A triggered blink is skipped if one ended this recently (no blink storms). */
 const REFRACTORY_MS = 400;
 
-/** Wait before the next spontaneous blink: uniform in [2000, 6000] ms. */
-export function nextBlinkMs(rng: Rng): number {
-  return BLINK_GAP_MIN_MS + rng() * (BLINK_GAP_MAX_MS - BLINK_GAP_MIN_MS);
+/** Gap range per conversation mode, ms: listeners blink less while they attend, speakers and thinkers more. */
+export type BlinkPace = 'idle' | 'listening' | 'thinking' | 'speaking';
+const PACE: Record<BlinkPace, [number, number]> = {
+  idle: [BLINK_GAP_MIN_MS, BLINK_GAP_MAX_MS],
+  listening: [2600, 6500],
+  thinking: [1500, 4000],
+  speaking: [1800, 4500],
+};
+
+/** Wait before the next spontaneous blink: uniform in the pace's range ([2000, 6000] ms by default). */
+export function nextBlinkMs(rng: Rng, pace: BlinkPace = 'idle'): number {
+  const [lo, hi] = PACE[pace];
+  return lo + rng() * (hi - lo);
 }
 
 const easeIn = (u: number) => u * u;
@@ -37,9 +48,16 @@ export class Blinker {
   private t = -1;
   private sinceEnd = Infinity;
   private pendingDouble = false;
+  private pace: BlinkPace = 'idle';
 
   constructor(private readonly rng: Rng) {
     this.wait = nextBlinkMs(rng);
+  }
+
+  /** Follows the conversation mode; a pending wait longer than the new range allows is cut down to it. */
+  setPace(pace: BlinkPace): void {
+    this.pace = pace;
+    this.wait = Math.min(this.wait, PACE[pace][1]);
   }
 
   /** Blink now (for gaze shifts), unless a blink is running or just ended. */
@@ -55,7 +73,7 @@ export class Blinker {
       if (this.t >= BLINK_MS) {
         this.t = -1;
         this.sinceEnd = 0;
-        this.wait = this.pendingDouble ? DOUBLE_GAP_MS : nextBlinkMs(this.rng);
+        this.wait = this.pendingDouble ? DOUBLE_GAP_MS : nextBlinkMs(this.rng, this.pace);
         this.pendingDouble = false;
         return 0;
       }
