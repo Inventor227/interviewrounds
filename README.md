@@ -1,5 +1,5 @@
 <p align="center">
-  <a href="<VIDEO_URL>"><img src="docs/images/hero.jpg" width="100%" alt="An interviewer sits across your desk in a system design round, with the question card and the sheet you draw on (emulator capture, simulated room); click to watch the demo video"></a>
+  <a href="<VIDEO_URL>"><img src="docs/images/hero.jpg" width="100%" alt="An interviewer sits across your desk and states a system design problem, with the question card beside him (emulator capture, simulated room); click to watch the demo video"></a>
 </p>
 
 <h1 align="center">Interview Rounds</h1>
@@ -21,7 +21,7 @@
   <img alt="WebXR passthrough" src="https://img.shields.io/badge/WebXR-passthrough-3b3936?style=flat-square">
   <img alt="Hand tracking first" src="https://img.shields.io/badge/hand%20tracking-first-3b3936?style=flat-square">
   <img alt="Built with IWSDK, three.js, Rust" src="https://img.shields.io/badge/built%20with-IWSDK%20%C2%B7%20three.js%20%C2%B7%20Rust-3b3936?style=flat-square">
-  <img alt="Over 1,200 automated tests" src="https://img.shields.io/badge/tests-1%2C200%2B-3b3936?style=flat-square">
+  <img alt="Over 1,400 automated tests" src="https://img.shields.io/badge/tests-1%2C400%2B-3b3936?style=flat-square">
 </p>
 
 **Practise the conversations that shape a career, out loud, with people sitting across your own desk.** On Meta Quest,
@@ -64,19 +64,20 @@ Made by Mohammad Ibrahim.
 
 <table>
   <tr>
-    <td width="33%"><img src="docs/images/shots/01-across-your-desk.jpg" alt="The interviewer seated across the desk, with the question card"><br><sub><b>People across your own desk</b></sub></td>
-    <td width="33%"><img src="docs/images/shots/02-pinch-and-draw.jpg" alt="A hand pinches and draws a connection between two cards on the sheet"><br><sub><b>Pinch and draw on your desk</b></sub></td>
-    <td width="33%"><img src="docs/images/shots/03-points-at-your-board.jpg" alt="The interviewer points at a card on the sheet"><br><sub><b>The interviewer reads your board</b></sub></td>
+    <td width="33%"><img src="docs/images/shots/01-across-your-desk.jpg" alt="Daniel, seated across the desk, states the problem; the question card stands beside him"><br><sub><b>People across your own desk</b></sub></td>
+    <td width="33%"><img src="docs/images/shots/02-pinch-and-draw.jpg" alt="A hand pinches and draws a rough box on the sheet next to the Booking service card"><br><sub><b>Pinch and draw on your desk</b></sub></td>
+    <td width="33%"><img src="docs/images/shots/03-reads-your-board.jpg" alt="The interviewer across the desk with the drawn board in front of him: cards, connections and their labels"><br><sub><b>The interviewer reads your board</b></sub></td>
   </tr>
   <tr>
-    <td width="33%"><img src="docs/images/shots/04-meeting.jpg" alt="Three attendees across the table in a meeting rehearsal"><br><sub><b>Rehearse a real meeting</b></sub></td>
-    <td width="33%"><img src="docs/images/shots/05-scorecard.jpg" alt="The scorecard in the headset with Retry this answer and See full report"><br><sub><b>A scorecard in the headset</b></sub></td>
-    <td width="33%"><img src="docs/images/shots/06-report.jpg" alt="The report quotes the candidate's words with the time they said them"><br><sub><b>A report that quotes you</b></sub></td>
+    <td width="33%"><img src="docs/images/shots/04-meeting.jpg" alt="Two attendees across the table in a meeting rehearsal"><br><sub><b>Rehearse a real meeting</b></sub></td>
+    <td width="33%"><img src="docs/images/shots/05-scorecard.jpg" alt="The scorecard card in the headset: a summary, what to keep doing and what to work on, each with a quote"><br><sub><b>A scorecard in the headset</b></sub></td>
+    <td width="33%"><img src="docs/images/shots/06-report.jpg" alt="The report page: a point to work on, the candidate's own words with the time, and Retry your weakest answer"><br><sub><b>A report that quotes you</b></sub></td>
   </tr>
 </table>
 
-<sub>All images are frames rendered from the app in Meta's IWER emulator. Where you would see your own room through
-passthrough, a photographed room stands in. The image at the top opens the demo video.</sub>
+<sub>The room images are frames of the demo video, rendered from the app in Meta's IWER emulator from a recorded round.
+Where you would see your own room through passthrough, a photographed room stands in (labelled on each image). The
+report is a capture of the hosted page showing that round's report. The image at the top opens the demo video.</sub>
 
 <details>
 <summary><b>Contents</b></summary>
@@ -136,8 +137,9 @@ on what you say and pass the floor between them.
 
 - **One button.** The home page has one main button, **Start a quick round**. It asks for the microphone on the page,
   so the headset view never stops for a prompt.
-- **Two taps to the room.** Allow the microphone, then **Enter the room**. The interviewer's opening line is written
-  while you walk in.
+- **Two taps to the room.** Allow the microphone, then **Enter the room**. A thin progress bar names each step
+  (Setting up your round, Building the room, Bringing in Daniel, Almost ready), and the interviewer's opening line is
+  written while you walk in.
 - **One touch to place.** A ring follows your fingertip; rest it on the desk and the sheet lands there. With no desk,
   the app sets one up after 6 seconds and says "No desk? We set one up for you."
 - **Learn by doing.** On the first round a looping hand shows the one gesture, "Pinch and draw a box". Your first box
@@ -342,7 +344,7 @@ The models by role (defaults in `server/src/config.rs` and `server/src/scoring/m
 - **Server:** Rust unit and integration tests, the database tests on Postgres (`cd server && cargo test`).
 - **Web:** Vitest unit tests for the board rules, the input filters, the round controller, the room UI and the pages
   (`cd web && npm test`), including replays of noisy hand input through the whole board path.
-- **Together:** over 1,200 automated tests. <!-- PHASE2: recount on the final main. -->
+- **Together:** over 1,400 automated tests on the released build: 392 Rust tests and 1,022 web tests.
 - **Shared fixtures:** the board rules run the same fixtures in TypeScript and Rust (`content/fixtures/`).
 - **Emulator runs:** `web/e2e/` drives whole rounds in Meta's IWER emulator against a running server: every round
   type, hands and controllers, onboarding, pause and resume, switching input, two rounds in a row, and a meeting.
@@ -353,19 +355,22 @@ The models by role (defaults in `server/src/config.rs` and `server/src/scoring/m
 ## Frame rate, speed and measurements
 
 - **Frame rate:** the session asks for 72 Hz and raises to 90 Hz only when frames show headroom; fixed foveation is
-  on. Budgets the room is built to: under 60 draw calls, under 60,000 triangles, under 64 MB of textures, KTX2
-  textures, no post-processing.
+  on. The room is built to a budget of about 60 draw calls, 60,000 triangles and 64 MB of textures, with KTX2
+  textures and no post-processing.
 - **Measured in the emulator** (both eyes, Nov 14): one interviewer with the sheet and the panels, at most 60 draw
   calls and about 35,000 triangles; three people in a meeting room with the sheet and the wall board, 58 draw calls,
   53,636 triangles and about 35 MB of textures. Avatars are slimmed at load: morphs that never move are dropped and the
-  legs under the desk are removed. <!-- PHASE2: recheck draw calls after lane/look (forearm shadows) against the 60
-  budget. --> The emulator renders in software, so these are draw counts, not frame times.
-- **Reply time:** about 3 seconds from the end of your speech to the interviewer's first word (median 2.7 to 3.2 s in
-  test rounds with the real voice, emulator, Nov 14). The voice service decides your turn is over, our server streams
-  the model's first words, and speech starts as they arrive; the interviewer shows a thinking look while you wait.
-  <!-- PHASE2: remeasure on the final build. -->
-- **Scorecard:** the short card comes first; the full report was ready about a minute after ending a round in emulator
-  runs (Nov 14). Scoring now starts while the goodbye plays. <!-- PHASE2: remeasure on the final build. -->
+  legs under the desk are removed. The emulator renders in software, so these are draw counts, not frame times.
+- **Getting the room ready:** from the tap to a room ready to enter, 1.4 to 1.7 s against the hosted app (headless
+  browser on a throttled 10 Mbps link, median of three cold runs; it was 12 to 13 s before this release's loading fixes).
+  A real voice session adds about half a second.
+- **Greeting:** the interviewer's opening line is written while you enter the room, so in the same headless test
+  its first words were ready 0.16 s after **Enter** (test voice; the real voice adds its own start-up).
+- **Reply time:** in the round filmed for the demo, with the real voices, the interviewer started speaking 2.6 to
+  3.9 s after the candidate stopped. The voice service decides your turn is over, our server streams the model's
+  first words, and speech starts as they arrive; the interviewer shows a thinking look while you wait.
+- **Scorecard:** scoring starts while the goodbye plays. The short card comes first in the headset, and the full
+  report follows in under a minute.
 - **How the frame numbers were taken:** `web/e2e/perf-room.mjs` and `web/e2e/perf-meeting.mjs` read the renderer's
   counters in the emulator.
 
@@ -382,6 +387,10 @@ The models by role (defaults in `server/src/config.rs` and `server/src/scoring/m
   mid stroke carries on.
 - **Hands or controllers, any time:** pick up a controller and the cards switch to controller wording; put it down
   and hands take over.
+- **Slow network:** the room's people are fetched while you read the start page and cached by version, and the
+  progress bar shows each step, so the wait is short and never silent.
+- **Phone preview:** on a narrow screen the 2D preview adds an **End** button on the page, with **End round** and
+  **Keep going** to confirm.
 - **Microphone blocked:** the round page says how to allow it, in the browser and in the Quest's settings, with a
   **Check again** button.
 - **Report trouble:** a report that fails is scored again; a round too short to judge says so; a slow report goes to
@@ -404,7 +413,7 @@ The models by role (defaults in `server/src/config.rs` and `server/src/scoring/m
 
 ## Roadmap
 
-- Tune drawing, placement and timing on more headsets and real desks.
+- Tune drawing, placement and timing with feedback from more players.
 - Meta VR Glasses: gaze plus pinch on the board.
 - Faster hand-overs between people in panels and meetings.
 - Optional sign-in, so history follows you across devices.
@@ -540,7 +549,8 @@ share link, and you can take the link down.
   controller models from WebXR Input Profiles (MIT). Full texts: `web/public/THIRD_PARTY_NOTICES.md`.
 - **Sounds:** six UI sounds are edited recordings by Kenney (kenney.nl), CC0 1.0. Six round cues were made with
   ElevenLabs sound generation on a paid plan and edited. Sources, prompts and edits: `web/public/sfx/CREDITS.md`.
-- **Font:** Inter, SIL Open Font License 1.1, through UIKit's MSDF fonts.
+- **Font:** Inter, SIL Open Font License 1.1: served from this site for the 2D pages (`web/src/app/fonts/`) and through
+  UIKit's MSDF fonts in the room.
 - **Room:** the table, chairs, wall board and sheet are built in code (`web/public/props/CREDITS.md`).
 - **Dependencies** from npm and crates.io keep their own licences (`web/package-lock.json`, `server/Cargo.lock`).
 - **Services:** Fish Audio for voice and Anthropic's Claude models for the interviewers and scoring.
