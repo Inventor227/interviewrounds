@@ -364,7 +364,7 @@ The models by role (defaults in `server/src/config.rs` and `server/src/scoring/m
 - **Getting the room ready:** from the tap to a room ready to enter, 1.4 to 1.7 s against the hosted app (headless
   browser on a throttled 10 Mbps link, median of three cold runs; it was 12 to 13 s before this release's loading fixes).
   A real voice session adds about half a second.
-- **Greeting:** the interviewer's opening line is written while you enter the room, so in the same headless test
+- **Greeting:** the interviewer's opening line is written while you enter the room, so in a headless run against the hosted app
   its first words were ready 0.16 s after **Enter** (test voice; the real voice adds its own start-up).
 - **Reply time:** in the round filmed for the demo, with the real voices, the interviewer started speaking 2.6 to
   3.9 s after the candidate stopped. The voice service decides your turn is over, our server streams the model's
