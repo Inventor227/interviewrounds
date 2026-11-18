@@ -2,9 +2,9 @@
 
 Spoken practice for job interviews and meetings, seated, in mixed reality on Meta Quest.
 
-[Open the app](https://rounds.dijmo.com) | [Watch the demo](<VIDEO_URL>) | [Architecture](#architecture) | [Run it locally](#develop)
+[Open the app](https://rounds.dijmo.com) | [Watch the demo](https://www.youtube.com/watch?v=osTx1nPmlDc) | [Architecture](#architecture) | [Run it locally](#develop)
 
-[![An interviewer sits across your desk and states a system design problem, with the question card beside him (emulator capture, simulated room)](docs/images/hero.jpg)](<VIDEO_URL>)
+[![An interviewer sits across your desk and states a system design problem, with the question card beside him (emulator capture, simulated room)](docs/images/hero.jpg)](https://www.youtube.com/watch?v=osTx1nPmlDc)
 
 Interview Rounds is a seated, hands-first practice room for job interviews and real meetings. In passthrough, an interviewer sits across your real desk, meets your eyes and asks a question by voice. You answer out loud, and they follow up on what you said. Passthrough is there for a reason: your own desk is the whiteboard. Touch it once, then pinch and draw with bare hands, and the interviewer reads your board and points at it. The round ends with a scorecard that quotes your own words, and a 2 minute retry of your weakest answer, scored before and after.
 
