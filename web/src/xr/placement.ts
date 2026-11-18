@@ -256,6 +256,8 @@ export class DeskPlacement {
   constructor(
     private readonly startMs: number,
     private readonly fallbackMs = FALLBACK_MS,
+    /** A rest finishes only this long after the start, so a hand already lying on the desk does not place at once. */
+    private readonly armMs = 0,
   ) {}
 
   get done(): boolean {
@@ -281,7 +283,7 @@ export class DeskPlacement {
       while (hist.length > 2 && hist[0]!.t_ms < t_ms - DWELL_MS - 150) hist.shift();
       const r = restingMs(hist, kind === 'controller' ? CONTROLLER_REST : FINGER_REST);
       const dwell = detectDeskDwell(hist, r, pad);
-      if (dwell) return this.finish(dwell.at, dwell.deskY, head, side, kind);
+      if (dwell && t_ms - this.startMs >= this.armMs) return this.finish(dwell.at, dwell.deskY, head, side, kind);
       // A controller's trigger, pulled once the tip has rested a moment: placed now, where it rests.
       if (pulled && r.at && r.ms >= TRIGGER_STEADY_MS) {
         let minY = Infinity;

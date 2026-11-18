@@ -490,7 +490,7 @@ export async function createXRApp(root: HTMLElement, opts: XRAppOptions): Promis
   let placing: { p: DeskPlacement; laidOut: HeadPose | null; toldRest?: boolean } | null = null;
   const lifecycle = new PlacementLifecycle({
     start: () => {
-      placing = { p: new DeskPlacement(performance.now(), opts.placementFallbackMs), laidOut: null };
+      placing = { p: new DeskPlacement(performance.now(), opts.placementFallbackMs, 1500), laidOut: null };
       placementView.reset();
       placementView.group.visible = true;
       mover.cancel();

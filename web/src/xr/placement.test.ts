@@ -174,6 +174,20 @@ describe('DeskPlacement', () => {
     expect(s.state).toBe('dwelling');
   });
 
+  it('a_hand_already_resting_when_placement_starts_places_only_once_armed', () => {
+    const p = new DeskPlacement(0, 60000, 1500);
+    const tip = { x: 0, y: 0.75, z: -0.4 };
+    const hand = { hand: 'right' as const, tracked: true, indexTip: tip, thumbTip: tip, tips: [tip], pinch: 0 };
+    let s = p.update(0, head, [hand]);
+    let t = 0;
+    while (t < 1400) s = p.update((t += 1000 / 72), head, [hand]);
+    // Rested for well over 0.6 s, but placement began under 1.5 s ago.
+    expect(s.state).toBe('dwelling');
+    while (t < 1600 && s.state !== 'done') s = p.update((t += 1000 / 72), head, [hand]);
+    expect(s.result?.source).toBe('touch');
+    expect(t).toBeGreaterThanOrEqual(1500);
+  });
+
   it('a_dwell_in_progress_holds_off_the_fallback', () => {
     const p = new DeskPlacement(0);
     const tip = { x: 0, y: 0.75, z: -0.4 };
