@@ -2828,6 +2828,28 @@ describe('RoundController outages and edge cases', () => {
     expect(h.api.endSession).toHaveBeenCalledWith('sess1', 'user_ended');
   });
 
+  it('a_mic_that_fails_to_open_holds_the_round_until_resume', async () => {
+    const h = harness({ voice: 'fish' });
+    const errors = errorsOf(h);
+    const t1 = await live(h);
+    t1.events.emit('error', new VoiceError('mic_toggle_failed', 'Could not switch the microphone'));
+    expect(h.ctl.state).toBe('paused');
+    expect(h.notice()).toBe('lost');
+    expect(t1.muted).toBe(true);
+    expect(errors.map((e) => (e as VoiceError).code)).toEqual(['mic_toggle_failed']);
+    expect(h.api.resumeSession).not.toHaveBeenCalled();
+    // Resume is the user's press: the same voice opens the mic again.
+    h.ui('resume');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.ctl.state).toBe('live');
+    expect(h.notice()).toBeNull();
+    expect(t1.muted).toBe(false);
+    // A failed close is only reported.
+    h.ctl.setMuted(true);
+    t1.events.emit('error', new VoiceError('mic_toggle_failed', 'Could not switch the microphone'));
+    expect(h.ctl.state).toBe('live');
+  });
+
   it('a_lost_voice_that_comes_back_carries_on_by_itself', async () => {
     const h = harness({ voice: 'fish' });
     const t1 = await live(h);
