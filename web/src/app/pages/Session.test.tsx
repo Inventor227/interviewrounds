@@ -20,6 +20,8 @@ vi.mock('../launch', async (orig) => ({
   },
 }));
 
+vi.mock('../../xr/entry', () => ({ createImmersive: async () => Promise.reject(new Error('no room in tests')) }));
+
 function fakeController(state: ControllerState) {
   const events = new Emitter<ControllerEvents>();
   const c = {
@@ -72,6 +74,16 @@ describe('session page', () => {
     const r = fakeRoom();
     setLiveRoom(r);
     clearLiveRoom(r);
+  });
+
+  it('a_finished_round_without_a_launch_goes_to_its_report', async () => {
+    useFakeServer();
+    await renderApp('/session/demo'); // the fake server says scored
+    expect(location.pathname).toBe('/report/demo');
+    cleanup();
+    const root = await renderApp('/session/abandoned');
+    expect(location.pathname).toBe('/session/abandoned');
+    expect(root.textContent).toContain('This round is not running here');
   });
 
   it('leaving_the_headset_during_placement_returns_through_the_controller_and_end_works', async () => {

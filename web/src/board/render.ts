@@ -1185,8 +1185,11 @@ export function renderOverlay(ctx: Ctx, board: Board, overlay: Overlay, kit: Kit
   }
 }
 
-/** Board cm bounds a live overlay touches (for dirty rects), or null when it draws nothing. */
-export function overlayBounds(board: Board, o: Overlay, kit: Kit | null): Rect | null {
+/**
+ * Board cm bounds a live overlay touches (for dirty rects), or null when it draws nothing. `withBin` adds the bin
+ * (it lights up under a card): false where the bin is drawn elsewhere (the XR sheet).
+ */
+export function overlayBounds(board: Board, o: Overlay, kit: Kit | null, withBin = true): Rect | null {
   const pad = 1.5;
   const grow = (r: Rect): Rect => ({ x: r.x - pad, y: r.y - pad, w: r.w + 2 * pad, h: r.h + 2 * pad });
   const union = (rs: Rect[]): Rect | null => {
@@ -1215,7 +1218,7 @@ export function overlayBounds(board: Board, o: Overlay, kit: Kit | null): Rect |
         const c = findItem(b, e.to);
         if (a && c) rs.push(itemRect(a), itemRect(c));
       }
-      if (kit) rs.push(kit.bin);
+      if (kit && withBin) rs.push(kit.bin);
       return grow(union(rs)!);
     }
     case 'connect': {
@@ -1231,7 +1234,7 @@ export function overlayBounds(board: Board, o: Overlay, kit: Kit | null): Rect |
     case 'tray': {
       const { w, h } = trayCardSize(o.slot.make, kit);
       const rs = [{ x: o.x - w / 2, y: o.y - h / 2, w, h }];
-      if (kit) rs.push(kit.bin);
+      if (kit && withBin) rs.push(kit.bin);
       return grow(union(rs)!);
     }
   }
