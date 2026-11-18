@@ -337,6 +337,22 @@ describe('panels with a hand poke', () => {
     expect(actions.at(-1)).toBe('pause');
   });
 
+  it('a_finger_that_pushes_through_a_button_and_comes_back_presses_it_once', async () => {
+    const { actions, rig, over, press } = await barScene();
+    await press('mute');
+    // On through the panel to 4 cm behind it, then back out the front.
+    for (let d = -0.004; d >= -0.04; d -= 0.005) await rig.at(over('mute', d));
+    for (let d = -0.04; d <= 0.08; d += 0.005) await rig.at(over('mute', d));
+    expect(rig.down()).toBe(false);
+    expect(actions).toEqual(['mute']);
+    // A press that only ever comes from behind presses nothing; the next poke from the front still does.
+    for (let d = -0.08; d <= 0.08; d += 0.005) await rig.at(over('cc', d));
+    expect(actions).toEqual(['mute']);
+    await press('cc');
+    for (let d = 0.001; d <= 0.08; d += 0.005) await rig.at(over('cc', d));
+    expect(actions).toEqual(['mute', 'captions']);
+  });
+
   it('a_finger_that_slides_off_a_button_along_the_panel_presses_nothing', async () => {
     const { actions, rig, over, press } = await barScene();
     // Down on Mute, then 3 mm above the panel all the way: off Mute's top edge and on over the bare panel, where

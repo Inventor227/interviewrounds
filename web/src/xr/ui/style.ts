@@ -8,6 +8,7 @@ import {
   Mesh,
   ShaderMaterial,
   type Object3D,
+  type Vector3,
 } from 'three';
 
 export const GLASS = 'rgba(20,22,26,0.78)';
@@ -133,9 +134,12 @@ export function button(labelText: string, opts: ButtonOpts = {}): Button {
     cursor: 'pointer',
     hover: { backgroundColor: hover },
     active: { backgroundColor: opts.primary ? ACCENT_HI : BUTTON_ACTIVE, transformScaleX: 0.97, transformScaleY: 0.97 },
-    onPointerDown: (e?: { pointerId?: number; button?: number }) => {
+    onPointerDown: (e?: { pointerId?: number; button?: number; pointerType?: string; pointerPosition?: Vector3; object?: Object3D }) => {
       // The main button only (a mouse's right button in the 2D preview presses nothing).
       if ((e?.button ?? 0) !== 0) return;
+      // A fingertip that pushed through the panel and comes back presses again from behind (the touch distance has
+      // no side): only a press that starts in front of the panel (its local +z) counts.
+      if (e?.pointerType === 'touch' && e.pointerPosition && e.object && e.object.worldToLocal(e.pointerPosition.clone()).z < 0) return;
       armed.add(id(e));
       opts.onDown?.();
     },
