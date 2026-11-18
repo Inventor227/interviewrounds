@@ -50,7 +50,7 @@ export const FALLBACK_SHEET_AHEAD = 0.2;
 /** Jitter allowance: a resting tip may wander this far from the window centroid. */
 const DWELL_MAX_SPREAD = 0.008;
 /** Another fingertip of the same hand lower than the index tip by more than this disqualifies it. */
-const LOWEST_TOLERANCE = 0.005;
+const LOWEST_TOLERANCE = 0.015;
 
 export interface DwellSample {
   t_ms: number;
