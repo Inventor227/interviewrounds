@@ -33,7 +33,7 @@ Made by Mohammad Ibrahim for the Meta VR Start Developer Competition 2026, Produ
 
 Other rounds and the meeting rehearsal are on the home page (**Choose another round**, **Rehearse a real meeting**). On a computer or phone the same link runs a 2D preview round with the same interviewer and voice.
 
-Each headset can run 3 quick rounds and one full round a day; a retry counts as a quick round.
+Each headset can run 3 quick rounds and one full round a day. A retry counts as a quick round. A round you leave without speaking does not count.
 
 ## Your first minute
 
@@ -85,7 +85,7 @@ You answer out loud. The interviewer follows up on what you said, moves the roun
 
 ![Two cards on the sheet and a faint dashed card, Payment processor, suggested from the conversation, with the interviewer's caption above](docs/images/gallery/05-suggestions-from-what-you-say.jpg)
 
-While you talk, a Scribe suggests board changes as faint cards. Pinch one to keep it. Untouched, it settles after 4 seconds.
+While you talk, a Scribe suggests board changes as faint cards. Pinch one to keep it right away. Left alone, it is added after 4 seconds. Hold it for a second or drag it to the bin to dismiss it.
 
 ### 5. Or rehearse a meeting
 
@@ -93,7 +93,7 @@ While you talk, a Scribe suggests board changes as faint cards. Pinch one to kee
 
 For a meeting rehearsal you pick a template (its attendees come filled in) or describe your own meeting: who is in the room, what they care about and what you want. The app prepares the room. Two or three people sit across the table and turn to whoever is speaking. Each attendee has their own stance and concerns. They question you on what you say and pass the floor between them.
 
-The demo video is emulator footage in simulated rooms. It starts with a feature tour narrated by a synthetic voice, then shows part of a system design round and a meeting rehearsal, where the candidate is a synthetic voice reading a script (labeled on screen).
+The demo video is emulator footage in simulated rooms. It starts with a feature tour narrated by a synthetic voice, then shows part of a system design round and part of a meeting rehearsal. In both, the candidate is a synthetic voice reading a script (labeled on screen).
 
 ## The scorecard
 
@@ -144,7 +144,7 @@ Every spoken turn goes through the server, which rebuilds the prompt from the ro
 | Move the sheet | Pinch its "Hold to move" bar | Trigger on the bar |
 | Pause, captions, mute, end | Poke the round bar (End needs a one second hold) | The same with the ray |
 
-Hands come first. Controllers do the same things. Both share one input path. You can pick up or put down a controller mid round. The cards switch their wording. On controllers the thumbstick scrolls the code panel and short haptic pulses mark presses and snaps. With hands, every pinch, snap and drop has a visual change and a quiet sound.
+Hands come first. Controllers do the same things. Both share one input path. You can pick up or put down a controller mid round, and the cards switch to controller wording. On controllers the thumbstick scrolls the code panel and short haptic pulses mark presses and snaps. With hands, every pinch, snap and drop has a visual change and a quiet sound.
 
 - **Seated** at your own desk, everything within reach at desk height. No standing, no walking, no typing in the room.
 - **Passthrough** keeps your room, your notes and your coffee in view the whole time.
@@ -161,7 +161,7 @@ Hands come first. Controllers do the same things. Both share one input path. You
 - **Pinch:** from the system's select event. The pinch point is smoothed with a One Euro filter. For the first 0.1 s the slide of the closing fingers (up to 2.5 cm) is held so a tap stays a tap, and the last 80 ms of a release is trimmed. A pinch that drops for under 150 ms within 6 cm of the hand carries on as one stroke or drag.
 - **Strokes:** under 1.5 cm a stroke makes no mark. A connection may start up to 1.4 cm outside a card (a 2.2 cm band with the card's rim), end 1.5 cm outside its target, and snaps to a card within 4 cm.
 - **Targets:** card tabs 2 cm, edge chips and edge labels 2.2 cm. Ink is picked up only after a still 0.3 s pinch.
-- **Suggestions:** a pinch keeps one. A one second hold or a drag to the bin dismisses it. Untouched, it settles after 4 s.
+- **Suggestions:** a pinch keeps one. A one second hold or a drag to the bin dismisses it. Left alone, it is added after 4 s.
 - **Tracking loss:** a hand that leaves tracking keeps its gesture for 0.3 s, then lets go. A pinch starts only within 12 cm above the sheet, and a hand highlights what is under it within 4 cm.
 - **Checked by** unit tests that replay noisy hands through the board: jitter, tremor, uneven and missing frames, pinch drops and tracking dropouts.
 
@@ -237,7 +237,7 @@ Defaults are in `server/src/config.rs` and `server/src/scoring/mod.rs`.
 | Phone preview | On a narrow screen the 2D preview adds an **End** button on the page, with **End round** and **Keep going** to confirm. |
 | Microphone blocked | The round page says how to allow it, in the browser and in the Quest's settings, with a **Check again** button. |
 | Report trouble | A report that fails is scored again. A round too short to judge says so. A slow report goes to History. |
-| Daily limit | Each headset can run 3 quick rounds and one full round a day; a retry counts as a quick round. This keeps the hosted app open for everyone. |
+| Daily limit | Each headset can run 3 quick rounds and one full round a day. A retry counts as a quick round. A round you leave without speaking does not count. This keeps the hosted app open for everyone. |
 
 ## Measurements
 
@@ -299,7 +299,7 @@ npm run dev        # https://localhost:8081, with a self-signed certificate
 
 The dev server proxies `/api`, `/ws`, `/v1`, `/s` and `/healthz` to `IR_API_ORIGIN` (default `http://127.0.0.1:8080`). On localhost the IWSDK dev plugin adds Meta's IWER emulator (Quest 3 in a home office room, set in `web/iwsdk.config.json`), so the room runs in a desktop browser. `?fake=<scenario>` serves fixture data so the 2D pages render without a server.
 
-Deploy: deploy/Dockerfile builds one image with the server and the web app. deploy/compose.yml is the Compose file the hosted app uses.
+Deploy: `deploy/Dockerfile` builds one image with the server and the web app. `deploy/compose.yml` is the Compose file the hosted app uses.
 
 ### Configuration
 
@@ -317,7 +317,7 @@ For local work set `APP_ORIGIN=http://127.0.0.1:8080`: the web dev server presen
 
 `tools/fish/setup-agent.mjs` creates or updates the Fish agent, points it at `APP_ORIGIN` as a custom model and prints the agent id for `FISH_AGENT_ID` (`--dry-run` changes nothing).
 
-Usage limits and spend caps: see server/src/config.rs.
+Usage limits and spend caps are set in `server/src/config.rs`.
 
 <details>
 <summary><b>Optional variables</b></summary>
