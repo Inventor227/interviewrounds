@@ -5,6 +5,7 @@
 
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { useLocation } from 'preact-iso';
+import { api } from '../../net/api';
 import { DevConsole } from '../../session/DevConsole';
 import { isDebug } from '../../session/browser';
 import { NOTICES } from '../../session/notices';
@@ -423,6 +424,19 @@ function BareRoom(props: { id?: string }) {
   const stage = useRef<HTMLDivElement>(null);
   const [handle, setHandle] = useState<ImmersiveHandle | null>(null);
   const [note, setNote] = useState('');
+  const { route } = useLocation();
+
+  // Back from the report lands here: a finished round goes to its report again, in place of this page.
+  useEffect(() => {
+    const id = props.id;
+    if (!id) return;
+    let live = true;
+    const done = (s: { status: string }) => {
+      if (live && (s.status === 'scoring' || s.status === 'scored')) route(`/report/${encodeURIComponent(id)}`, true);
+    };
+    api.sessionStatus(id).then(done, () => undefined);
+    return () => void (live = false);
+  }, []);
 
   useEffect(() => {
     if (!stage.current) return;

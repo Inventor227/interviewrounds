@@ -50,7 +50,7 @@ export const FALLBACK_SHEET_AHEAD = 0.2;
 /** Jitter allowance: a resting tip may wander this far from the window centroid. */
 const DWELL_MAX_SPREAD = 0.008;
 /** Another fingertip of the same hand lower than the index tip by more than this disqualifies it. */
-const LOWEST_TOLERANCE = 0.005;
+const LOWEST_TOLERANCE = 0.015;
 
 export interface DwellSample {
   t_ms: number;
@@ -256,6 +256,8 @@ export class DeskPlacement {
   constructor(
     private readonly startMs: number,
     private readonly fallbackMs = FALLBACK_MS,
+    /** A rest finishes only this long after the start, so a hand already lying on the desk does not place at once. */
+    private readonly armMs = 0,
   ) {}
 
   get done(): boolean {
@@ -281,7 +283,7 @@ export class DeskPlacement {
       while (hist.length > 2 && hist[0]!.t_ms < t_ms - DWELL_MS - 150) hist.shift();
       const r = restingMs(hist, kind === 'controller' ? CONTROLLER_REST : FINGER_REST);
       const dwell = detectDeskDwell(hist, r, pad);
-      if (dwell) return this.finish(dwell.at, dwell.deskY, head, side, kind);
+      if (dwell && t_ms - this.startMs >= this.armMs) return this.finish(dwell.at, dwell.deskY, head, side, kind);
       // A controller's trigger, pulled once the tip has rested a moment: placed now, where it rests.
       if (pulled && r.at && r.ms >= TRIGGER_STEADY_MS) {
         let minY = Infinity;
@@ -317,8 +319,12 @@ export class DeskPlacement {
     }
     for (const side of ['left', 'right'] as const) {
       if (!seen[side]) {
-        this.hist[side].length = 0;
-        this.histKind[side] = null;
+        // A frame or two without the hand (tracking noise) keeps its rest; a longer gap starts it again.
+        const h = this.hist[side];
+        if (!h.length || t_ms - h[h.length - 1]!.t_ms > 150) {
+          h.length = 0;
+          this.histKind[side] = null;
+        }
       }
       if (!controllers.some((c) => c.tracked && c.hand === side)) this.trigger[side] = null;
     }

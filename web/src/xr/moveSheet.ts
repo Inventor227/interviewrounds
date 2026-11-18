@@ -1,7 +1,7 @@
 // Moving the sheet after it is placed: pinch (or pull the trigger) on the grab bar below the sheet's near-left
 // corner and hold still for half a second; the bar's ring fills, then the sheet and the room follow the hand until
 // it lets go. A quick pinch or one that slides away does nothing, so a hand passing by never moves the desk. This
-// is how a desk that was set up without a real one ("No desk? We set one up for you.") gets to where the user
+// is how a desk that was set up without a real one (the no-desk hint points at the bar) gets to where the user
 // wants it, and it works the same with a hand, a controller's tip or a controller's ray.
 //
 // Pure logic and the bar's mesh; the world feeds pointers and applies the move.
@@ -24,7 +24,7 @@ export const MOVE_BAR = { x: -SHEET_W / 2 + 0.085, z: 0.03, w: 0.13, d: 0.03 } a
 /** A press counts this far outside the bar (Meta: targets of at least 22 mm, with room around). */
 const BAR_MARGIN = 0.012;
 /** A hand or a controller tip grabs the bar from at most this far above it, or a little below. */
-const BAR_ABOVE = 0.06;
+const BAR_ABOVE = 0.1;
 const BAR_BELOW = 0.035;
 
 /** True when a point in the sheet frame (m; y is the height above the sheet's plane) is on the grab bar. */

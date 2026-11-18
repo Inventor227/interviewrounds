@@ -1,4 +1,4 @@
-// A one-line hint that shows for a few seconds just below the eye line, e.g. "No desk? We set one up for you." after
+// A one-line hint that shows for a few seconds just below the eye line, e.g. the no-desk line after
 // the fallback placement. Nothing is said about controllers: hands and controllers both do everything.
 
 import { UIKitDocument } from '@iwsdk/core';

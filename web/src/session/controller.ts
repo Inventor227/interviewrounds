@@ -642,7 +642,9 @@ export class RoundController {
     // for a round whose voice did not make it.
     this.socketWanted = true;
     await this.connectSocket();
-    this.releaseMic(); // the voice service holds its own capture now
+    // The page's own capture ends here. The voices joined with their mics closed: the voice SDK captures the
+    // mic itself at the first unmute (openMic), and that capture can fail (onVoiceError).
+    this.releaseMic();
     const panel = this.panel;
     // Ended, failed or disposed while the voices were connecting: the panel stopped them.
     if (this.disposed || !panel || panel.isStopped || !isActive(this.st)) return;
@@ -1328,6 +1330,15 @@ export class RoundController {
   private onVoiceError(t: VoiceTransport, e: VoiceError): void {
     const panel = this.panel;
     const floor = !!panel && !panel.isStopped && panel.current() === t;
+    // The mic did not open (the headset can refuse a capture that no tap started): the round is held on the
+    // lost-voice card, whose Resume opens it again from the user's own press. A failed close (the user's mute,
+    // a long answer, a hand-over, a pause) is only reported.
+    const open = !this.userMuted && !this.longAnswerMuted && !this.handingOver && (this.st === 'live' || this.st === 'greeting');
+    if (floor && e.code === 'mic_toggle_failed' && open) {
+      this.emitError(e);
+      this.voiceLost = true;
+      return this.pause('voice_lost');
+    }
     if (floor || !panel) return this.emitError(e);
     this.emitError(new VoiceError('handover_failed', e.message, e));
   }

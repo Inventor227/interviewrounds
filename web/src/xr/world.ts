@@ -303,6 +303,8 @@ export async function createXRApp(root: HTMLElement, opts: XRAppOptions): Promis
     controllerViews.right.attach(world.player.raySpaces.right);
   }
   const handsLost = new HandsLostWatch();
+  /** The hint is shown once per XR session: in a spoken round the hands rest out of view again and again. */
+  let handsHintShown = false;
   let lastXRFrameAt: number | null = null;
   let lastInterval = 0;
 
@@ -405,7 +407,8 @@ export async function createXRApp(root: HTMLElement, opts: XRAppOptions): Promis
     // Hands or controllers: whichever the session lists now. Nothing is said about it; both do everything.
     input.update({ hands: listedHands, controllers: controllers ? 1 : 0 });
     // In a placed room with no hand and no controller in view for 5 s: one calm line, once.
-    if (handsLost.update(now, left.tracked || right.tracked || controllers) && desk$.value) {
+    if (handsLost.update(now, left.tracked || right.tracked || controllers) && desk$.value && !handsHintShown) {
+      handsHintShown = true;
       ui.layoutHint(headPose());
       ui.showHint(HANDS_LOST_LINE, now, 6000);
     }
@@ -490,7 +493,7 @@ export async function createXRApp(root: HTMLElement, opts: XRAppOptions): Promis
   let placing: { p: DeskPlacement; laidOut: HeadPose | null; toldRest?: boolean } | null = null;
   const lifecycle = new PlacementLifecycle({
     start: () => {
-      placing = { p: new DeskPlacement(performance.now(), opts.placementFallbackMs), laidOut: null };
+      placing = { p: new DeskPlacement(performance.now(), opts.placementFallbackMs, 1500), laidOut: null };
       placementView.reset();
       placementView.group.visible = true;
       mover.cancel();
@@ -528,7 +531,7 @@ export async function createXRApp(root: HTMLElement, opts: XRAppOptions): Promis
     ui.restoreNotice();
     if (desk.source === 'fallback') {
       ui.layoutHint(headPose());
-      ui.showHint('No desk? We set one up for you.', now, 6000);
+      ui.showHint('No desk? We set one up. Hold the bar to move it.', now, 6000);
     }
     sounds.flap();
     desk$.value = desk;
@@ -802,6 +805,7 @@ export async function createXRApp(root: HTMLElement, opts: XRAppOptions): Promis
     haptics.reset();
     s?.addEventListener('inputsourceschange', onSources);
     handsLost.reset();
+    handsHintShown = false;
     lastXRFrameAt = null;
     s?.addEventListener('visibilitychange', () => {
       // The round controller pauses on anything but `visible`, in every active state, and never resumes by itself.

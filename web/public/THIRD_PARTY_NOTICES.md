@@ -115,10 +115,12 @@ use the output commercially and keep all rights in it.
 The source file, pack and page of each recording, and the prompt and take of each generated cue, are listed in
 `sfx/CREDITS.md`.
 
-## WebXR input profiles: Meta Quest Touch Plus controller models
+## WebXR input profiles: Meta Quest Touch Plus controller models and the hand model
 
 `vendor/input-profiles/meta-quest-touch-plus/left.glb` and `right.glb`, from `@webxr-input-profiles/assets` 1.0.20
 (`dist/profiles/meta-quest-touch-plus/`), shown when the user holds controllers.
+`vendor/input-profiles/generic-hand/left.glb` and `right.glb`, from the same package and version
+(`dist/profiles/generic-hand/`), drawn over the user's tracked hands.
 https://github.com/immersive-web/webxr-input-profiles
 
 ```

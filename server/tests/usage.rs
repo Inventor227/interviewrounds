@@ -119,6 +119,52 @@ async fn judge_budget_blocks_guests() {
 }
 
 #[tokio::test]
+async fn abandoned_rounds_do_not_count_against_a_guest() {
+    let app = live::test_app(Options {
+        env: &[("USAGE_PHASE", "judging")],
+        ..Options::default()
+    })
+    .await;
+    let base = app.serve().await;
+    let cookie = app.guest().await;
+    for length in [
+        short_req("fake"),
+        short_req("fake"),
+        short_req("fake"),
+        full_req("fake"),
+    ] {
+        let res = app.create(&cookie, length).await;
+        assert_eq!(res.status, StatusCode::OK, "{}", res.body);
+        go_live(&base, &res.body).await;
+    }
+    assert_eq!(
+        app.create(&cookie, short_req("fake")).await.body["code"],
+        "guest_daily_limit"
+    );
+    assert_eq!(
+        app.create(&cookie, full_req("fake")).await.body["code"],
+        "guest_full_used"
+    );
+    // The candidate left all four without ever speaking.
+    sqlx::query("update sessions set status = 'abandoned', ended_at = now()")
+        .execute(&app.state.db)
+        .await
+        .unwrap();
+    let me = app.call(Method::GET, "/api/me", Some(&cookie), None).await;
+    assert_eq!(me.body["limits"]["short_left_today"], 3);
+    assert_eq!(me.body["limits"]["full_left"], 1);
+    assert!(me.body["limits"]["reason"].is_null());
+    assert_eq!(
+        app.create(&cookie, short_req("fake")).await.status,
+        StatusCode::OK
+    );
+    assert_eq!(
+        app.create(&cookie, full_req("fake")).await.status,
+        StatusCode::OK
+    );
+}
+
+#[tokio::test]
 async fn after_judging_guests_get_one_quick_round() {
     let app = live::test_app(Options {
         env: &[("USAGE_PHASE", "after")],

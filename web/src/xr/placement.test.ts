@@ -151,6 +151,43 @@ describe('DeskPlacement', () => {
     expect(s.result!.origin.y).toBeCloseTo(0.744, 3);
   });
 
+  it('a_rest_with_one_dropped_tracking_frame_still_places_on_time', () => {
+    const p = new DeskPlacement(0, 60000);
+    const tip = { x: 0, y: 0.75, z: -0.4 };
+    const hand = { hand: 'right' as const, tracked: true, indexTip: tip, thumbTip: tip, tips: [tip], pinch: 0 };
+    let s = p.update(0, head, [hand]);
+    let n = 0;
+    let t = 0;
+    while (t < 700 && s.state !== 'done') {
+      t += 1000 / 72;
+      // The hand is missing for one frame, 0.4 s into the rest.
+      s = p.update(t, head, ++n === 29 ? [] : [hand]);
+    }
+    expect(s.result?.source).toBe('touch');
+    // A rest that started again at the gap would need until about 1.0 s.
+    expect(t).toBeLessThan(700);
+    // A gap longer than 150 ms does start the rest again.
+    const q = new DeskPlacement(0, 60000);
+    for (t = 0; t <= 400; t += 1000 / 72) q.update(t, head, [hand]);
+    for (t = 414; t <= 600; t += 1000 / 72) q.update(t, head, []);
+    for (t = 614; t <= 1000; t += 1000 / 72) s = q.update(t, head, [hand]);
+    expect(s.state).toBe('dwelling');
+  });
+
+  it('a_hand_already_resting_when_placement_starts_places_only_once_armed', () => {
+    const p = new DeskPlacement(0, 60000, 1500);
+    const tip = { x: 0, y: 0.75, z: -0.4 };
+    const hand = { hand: 'right' as const, tracked: true, indexTip: tip, thumbTip: tip, tips: [tip], pinch: 0 };
+    let s = p.update(0, head, [hand]);
+    let t = 0;
+    while (t < 1400) s = p.update((t += 1000 / 72), head, [hand]);
+    // Rested for well over 0.6 s, but placement began under 1.5 s ago.
+    expect(s.state).toBe('dwelling');
+    while (t < 1600 && s.state !== 'done') s = p.update((t += 1000 / 72), head, [hand]);
+    expect(s.result?.source).toBe('touch');
+    expect(t).toBeGreaterThanOrEqual(1500);
+  });
+
   it('a_dwell_in_progress_holds_off_the_fallback', () => {
     const p = new DeskPlacement(0);
     const tip = { x: 0, y: 0.75, z: -0.4 };

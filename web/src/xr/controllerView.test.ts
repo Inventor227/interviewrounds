@@ -1,7 +1,8 @@
 import { existsSync, statSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { ControllerView, HOSTED_MODEL_DIR, HOSTED_PROFILES, hostedModelUrls, STANDIN_AFTER_MS, TIP_DOT_R } from './controllerView';
+import { CacheManager } from '@iwsdk/core';
+import { ControllerView, HOSTED_HAND_DIR, HOSTED_MODEL_DIR, HOSTED_PROFILES, hostControllerModels, hostedModelUrls, STANDIN_AFTER_MS, TIP_DOT_R } from './controllerView';
 
 describe('controller visuals', () => {
   it('the_controller_model_is_served_from_this_origin_for_every_meta_controller', () => {
@@ -15,6 +16,19 @@ describe('controller visuals', () => {
     expect(urls.map((u) => u.from)).toContain('https://cdn.jsdelivr.net/npm/@webxr-input-profiles/assets@1.0/dist/profiles/meta-quest-touch-plus/right.glb');
     for (const side of ['left', 'right']) {
       const f = resolve(process.cwd(), 'public', HOSTED_MODEL_DIR, `${side}.glb`);
+      expect(existsSync(f), f).toBe(true);
+      expect(statSync(f).size).toBeGreaterThan(50_000);
+      expect(statSync(f).size).toBeLessThan(400_000);
+    }
+  });
+
+  it('the_tracked_hand_model_is_served_from_this_origin', () => {
+    hostControllerModels('/');
+    for (const side of ['left', 'right']) {
+      // The address the platform builds for a tracked hand's model (its generic-hand profile).
+      const from = `https://cdn.jsdelivr.net/npm/@webxr-input-profiles/assets@1.0/dist/profiles/generic-hand/${side}.glb`;
+      expect(CacheManager.resolveUrl(from)).toBe(`/vendor/input-profiles/generic-hand/${side}.glb`);
+      const f = resolve(process.cwd(), 'public', HOSTED_HAND_DIR, `${side}.glb`);
       expect(existsSync(f), f).toBe(true);
       expect(statSync(f).size).toBeGreaterThan(50_000);
       expect(statSync(f).size).toBeLessThan(400_000);
