@@ -271,7 +271,7 @@ export class Sheet {
 
     const rects: Rect[] = [];
     for (const o of overlays) {
-      const r = overlayBounds(board, o, this.kit);
+      const r = overlayBounds(board, o, this.kit, false); // the bin is its own mesh here
       if (r) rects.push(r);
     }
     for (const r of rings) rects.push({ x: r.x - 1.2, y: r.y - 1.2, w: 2.4, h: 2.4 });
