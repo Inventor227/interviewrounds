@@ -365,8 +365,8 @@ The models by role (defaults in `server/src/config.rs` and `server/src/scoring/m
   calls and about 35,000 triangles; three people in a meeting room with the sheet and the wall board, 58 draw calls,
   53,636 triangles and about 35 MB of textures. Avatars are slimmed at load: morphs that never move are dropped and the
   legs under the desk are removed. The emulator renders in software, so these are draw counts, not frame times.
-- **Getting the room ready:** from the tap to a room ready to enter, 1.4 to 1.7 s against the hosted app (headless
-  browser on a throttled 10 Mbps link, median of three cold runs; it was 12 to 13 s before this release's loading fixes).
+- **Getting the room ready:** from the tap to a room ready to enter, about 1.5 to 3 s against the hosted app (headless
+  browser, cold runs; it was 12 to 13 s before the loading fixes).
   A real voice session adds about half a second.
 - **Greeting:** the interviewer's opening line is written while you enter the room, so in a headless run against the hosted app
   its first words were ready 0.16 s after **Enter** (test voice; the real voice adds its own start-up).
