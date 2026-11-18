@@ -318,7 +318,9 @@ export function createRoundRuntime({ preview }: RuntimeOptions): RoundController
           checkedAt = nowMs;
           const cards = s.board.items.filter((i) => i.kind !== 'ink' && i.kind !== 'interviewer_card').length;
           const tip = tips.next(nowMs, { cards, edges: s.board.edges.length, ghosts: s.board.ghosts.length }, paused || a.ui.hint.visible || !!onboarding?.showing);
-          if (tip) a.ui.showHint(tip.line, nowMs, TIP_SHOW_MS);
+          if (!tip) return;
+          a.ui.layoutHint(a.headPose()); // in front of where the user looks now, like every other hint
+          a.ui.showHint(tip.line, nowMs, TIP_SHOW_MS);
         }),
       );
     }
