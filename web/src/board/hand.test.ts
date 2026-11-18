@@ -188,7 +188,7 @@ describe('HandAdapter', () => {
     const bin = HLD_KIT.bin;
     for (const [x, y] of along([[14, 12.5], [bin.x + 3, bin.y + 3]], 0.8)) at(x, y);
     at(bin.x + 3, bin.y + 3, 30);
-    for (let i = 0; i < 30; i++) {
+    for (let i = 0; i < Math.ceil(TRACKING_GRACE_MS / 14) + 3; i++) {
       port.setHand('right', null);
       port.frame();
     }

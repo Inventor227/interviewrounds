@@ -4,7 +4,7 @@
 // it is on or just above the sheet (near), else the point where its aim ray meets the sheet
 // (far). The press is the XR select event (selectstart / selectend): the system's pinch, or
 // the trigger. Tracking loss mid gesture: the gesture freezes at the last good point for
-// 300 ms; if the pointer comes back still pressed it carries on, otherwise it is cancelled
+// 500 ms; if the pointer comes back still pressed it carries on, otherwise it is cancelled
 // (no op). A side that changes from a hand to a controller (or back) mid gesture ends it the
 // same way at once: the new pointer starts idle and needs its own press.
 // The system's pinch can let go for a frame or two while a hand draws or drags (a fast or turned
@@ -16,7 +16,7 @@ import { SHEET, type Rect } from './model';
 import { CONTROLLER_AWAKE_MS, CONTROLLER_NEAR_CM, CONTROLLER_NEAR_SLACK_CM, CONTROLLER_RAY_MAX_M, CONTROLLER_WAKE_MOVE_M, CONTROLLER_WAKE_TURN_COS, HAND_PROFILE, profileFor, type BoardPointer, type PointerKind, type PointerProfile } from './pointer';
 import type { BoardXRPort, SelectPhase, Vec3, XRControllerSample, XRHandSample } from './port';
 
-export const TRACKING_GRACE_MS = 300;
+export const TRACKING_GRACE_MS = 500;
 /**
  * The pinch point slides as the fingers finish closing after select fires (about 2 cm in
  * the emulator). For this long after a pinch starts, movement under PINCH_DRIFT_MAX_CM is
