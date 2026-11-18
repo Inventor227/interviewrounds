@@ -75,9 +75,11 @@ Made by Mohammad Ibrahim.
   </tr>
 </table>
 
-<sub>The room images are frames of the demo video, rendered from the app in Meta's IWER emulator from a recorded round.
+<sub>The room images are frames rendered for the demo video from the app in Meta's IWER emulator, from a recorded round.
 Where you would see your own room through passthrough, a photographed room stands in (labelled on each image). The
-report is a capture of the hosted page showing that round's report. The image at the top opens the demo video.</sub>
+report is a capture of the hosted page showing that round's report. The image at the top opens the demo video: emulator
+footage in simulated rooms, first a feature tour narrated by a synthetic voice, then part of a real system design round
+and a meeting rehearsal, where the candidate is a synthetic voice reading a script (labelled on screen).</sub>
 
 <details>
 <summary><b>Contents</b></summary>
@@ -271,7 +273,7 @@ quiet sound.
 - **Frame rate and foveation:** 72 Hz, raised to 90 Hz only with headroom; fixed foveation.
 - **Microphone and WebRTC voice:** the microphone is asked for once on the 2D page, before the headset view.
 - **Compressed assets:** KTX2 textures and meshopt geometry.
-- **Immersive Web Emulator (IWER):** the scripted round tests and every frame of the demo video were produced in it.
+- **Immersive Web Emulator (IWER):** the scripted round tests and the demo video's room footage were made in it.
 - No plane or mesh detection, so the only permission prompt is the microphone.
 
 ## How it is built
@@ -366,7 +368,7 @@ The models by role (defaults in `server/src/config.rs` and `server/src/scoring/m
   A real voice session adds about half a second.
 - **Greeting:** the interviewer's opening line is written while you enter the room, so in a headless run against the hosted app
   its first words were ready 0.16 s after **Enter** (test voice; the real voice adds its own start-up).
-- **Reply time:** in the round filmed for the demo, with the real voices, the interviewer started speaking 2.6 to
+- **Reply time:** in the round filmed for the demo, with the real voice agent, the interviewer started speaking 2.6 to
   3.9 s after the candidate stopped. The voice service decides your turn is over, our server streams the model's
   first words, and speech starts as they arrive; the interviewer shows a thinking look while you wait.
 - **Scorecard:** scoring starts while the goodbye plays. The short card comes first in the headset, and the full
