@@ -12,6 +12,8 @@ import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js
 /** Controller profiles that get the Touch Plus model (the id IWSDK resolves from the input source's profiles). */
 export const HOSTED_PROFILES = ['meta-quest-touch-plus', 'meta-quest-touch-pro', 'oculus-touch-v3', 'oculus-touch-v2', 'oculus-touch', 'generic-trigger-squeeze-thumbstick'] as const;
 export const HOSTED_MODEL_DIR = 'vendor/input-profiles/meta-quest-touch-plus';
+/** The tracked hand's model (the outline drawn over the user's own hand), served from this origin too. */
+export const HOSTED_HAND_DIR = 'vendor/input-profiles/generic-hand';
 
 /** Where the platform would fetch a profile's model, and where this origin serves it. */
 export function hostedModelUrls(base = '/'): { from: string; to: string }[] {
@@ -20,9 +22,10 @@ export function hostedModelUrls(base = '/'): { from: string; to: string }[] {
   return out;
 }
 
-/** Points the platform's controller model loads at this origin. Call once, before a session starts. */
+/** Points the platform's controller and hand model loads at this origin. Call once, before a session starts. */
 export function hostControllerModels(base = '/'): void {
   for (const { from, to } of hostedModelUrls(base)) CacheManager.setKeyToUrl(from, to);
+  for (const side of ['left', 'right'] as const) CacheManager.setKeyToUrl(`${DEFAULT_PROFILES_PATH}/generic-hand/${side}.glb`, `${base}${HOSTED_HAND_DIR}/${side}.glb`);
 }
 
 export const TIP_DOT_R = 0.003;
