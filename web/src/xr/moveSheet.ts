@@ -24,7 +24,7 @@ export const MOVE_BAR = { x: -SHEET_W / 2 + 0.085, z: 0.03, w: 0.13, d: 0.03 } a
 /** A press counts this far outside the bar (Meta: targets of at least 22 mm, with room around). */
 const BAR_MARGIN = 0.012;
 /** A hand or a controller tip grabs the bar from at most this far above it, or a little below. */
-const BAR_ABOVE = 0.06;
+const BAR_ABOVE = 0.1;
 const BAR_BELOW = 0.035;
 
 /** True when a point in the sheet frame (m; y is the height above the sheet's plane) is on the grab bar. */
