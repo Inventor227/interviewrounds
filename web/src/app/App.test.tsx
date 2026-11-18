@@ -11,7 +11,7 @@ describe('App shell', () => {
     ['/start/sde', 'page-pick-round'],
     ['/round/sde.system_design.short', 'page-start'],
     ['/meeting/new', 'page-meeting'],
-    ['/session/s1', 'page-session'],
+    ['/session/abandoned', 'page-session'], // a round with no report (a finished one goes on to its report)
     ['/report/s1', 'page-report'],
     ['/history', 'page-history'],
     ['/settings', 'page-settings'],
