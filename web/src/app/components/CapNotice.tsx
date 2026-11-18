@@ -11,11 +11,11 @@ const COPY: Record<LimitReason, { title: string; body: string }> = {
   },
   guest_full_used: {
     title: 'Your full round is used',
-    body: 'Quick rounds are still open. Another full round opens',
+    body: 'Quick rounds are still open.',
   },
   judge_budget_reached: {
     title: 'Guest practice is full for today',
-    body: 'Every guest round for today is taken. It opens again',
+    body: 'Guest rounds are paused for now. Reports and history still work.',
   },
   build_budget_reached: {
     title: 'Live rounds are paused',
@@ -41,7 +41,8 @@ export function CapNotice(props: {
 }) {
   const used = props.reason === 'guest_daily_limit' && !props.resetsAt;
   const c = used ? GUEST_PASS_USED : COPY[props.reason];
-  const withTime = props.reason !== 'free_rounds_used' && !used;
+  // Only limits that really reset name a time: the full round is one per device, the guest budget does not refill.
+  const withTime = props.reason !== 'free_rounds_used' && props.reason !== 'guest_full_used' && props.reason !== 'judge_budget_reached' && !used;
   return (
     <div class="cap" role="status" data-test="cap-notice" data-reason={props.reason}>
       <svg class="cap-icon" viewBox="0 0 24 24" aria-hidden="true">
