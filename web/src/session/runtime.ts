@@ -28,6 +28,7 @@ import type { RoundControllerDeps } from './controller';
 import { wireCues, type Cues } from './cues';
 import { createHeadPort } from './headPort';
 import { needsOnboarding, Onboarding, watchPresence, type PresenceWatch } from './onboarding';
+import { givesTips, loadSeenTips, saveSeenTips, TIP_SHOW_MS, Tips } from './tips';
 import { People, type AvatarLike } from './people';
 import type { HeadSamplerPort, SocketPort, UiAction, XRPort, XRVisibilityLike } from './ports';
 import { clearLiveRoom, setLiveRoom, type LiveRoom } from './room';
@@ -306,6 +307,21 @@ export function createRoundRuntime({ preview }: RuntimeOptions): RoundController
     };
     sheetToWorld = (x, y, h) => toWorld(a.sheetAnchor, x, y, h);
     wireSocket();
+    // After the first gesture: one short line when it is useful (name a card, keep a faint card, link two cards),
+    // each once per device. Checked once a second, never over another hint or the first-round step.
+    if (givesTips({ kit: kitName, preview })) {
+      const tips = new Tips(loadSeenTips(), saveSeenTips);
+      let checkedAt = 0;
+      cleanups.push(
+        a.onFrame((_dt, nowMs) => {
+          if (nowMs - checkedAt < 1000) return;
+          checkedAt = nowMs;
+          const cards = s.board.items.filter((i) => i.kind !== 'ink' && i.kind !== 'interviewer_card').length;
+          const tip = tips.next(nowMs, { cards, edges: s.board.edges.length, ghosts: s.board.ghosts.length }, paused || a.ui.hint.visible || !!onboarding?.showing);
+          if (tip) a.ui.showHint(tip.line, nowMs, TIP_SHOW_MS);
+        }),
+      );
+    }
     if (import.meta.env.DEV) {
       const { ghostRect } = await import('../board/ghosts');
       room.debug = {
