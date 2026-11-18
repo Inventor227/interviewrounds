@@ -462,7 +462,8 @@ export function ReadyPanel(props: {
     if (!input || props.busy) return;
     const stream = await mic.ask();
     if (!stream) return;
-    void prepareLaunch(input, { mic: mic.take(), preview, title: props.title });
+    // A prepare that rejects (the round's code did not load) has already put the tap button back.
+    void prepareLaunch(input, { mic: mic.take(), preview, title: props.title }).catch(() => undefined);
   };
   // Phase B: synchronous, so the XR request runs inside this tap.
   const phaseB = () => {
