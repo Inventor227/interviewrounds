@@ -418,7 +418,9 @@ export class HandAdapter implements PointerAdapter {
       this.settle(t, hand);
     }
     if (phase === 'start') {
-      if (t.active || !t.visible || !t.raw) return;
+      // A start while a gesture is still held: its end was missed. The old gesture is lost and this one begins.
+      if (t.active) this.lose(t, hand, now);
+      if (!t.visible || !t.raw) return;
       // Start where the hand is now: the filter may still be catching up with a fast
       // arrival, and a pinch on a card's edge must not land in its middle. Smoothing goes
       // on from this point.

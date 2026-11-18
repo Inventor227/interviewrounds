@@ -86,6 +86,24 @@ describe('HandAdapter', () => {
     expect(ev.filter((e) => e[0] === 'down')).toEqual([]);
   });
 
+  it('a second pinch start whose end was missed drops the old gesture and begins a new one', () => {
+    const port = new FakePort();
+    const proj = new SheetProjector(port.sheetAnchor);
+    const hands = new HandAdapter(port, (q) => proj.project(q), { zone: HLD_KIT.view });
+    port.handAt('right', 10, 10, 1);
+    port.frame();
+    const ev = collect(hands);
+    port.select('right', 'start');
+    // No end arrives; the hand moves on and pinches again.
+    port.handAt('right', 30, 20, 1);
+    port.frame();
+    port.select('right', 'start');
+    port.frame();
+    port.select('right', 'end');
+    expect(ev.map((e) => e[0])).toEqual(['down', 'move', 'cancel', 'down', 'move', 'up']);
+    expect(Math.abs(ev[3]![1].x_cm - 30)).toBeLessThanOrEqual(0.5);
+  });
+
   it('hovers inside the zone and moves while pinched even when lifted', () => {
     const port = new FakePort();
     const proj = new SheetProjector(port.sheetAnchor);
