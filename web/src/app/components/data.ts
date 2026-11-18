@@ -98,6 +98,8 @@ export function capFromMe(me: Me | undefined, length: 'short' | 'full' = 'short'
   if (limits.reason) {
     // A guest who used the full round can still take quick rounds.
     if (limits.reason === 'guest_full_used' && length === 'short') return null;
+    // A guest out of quick rounds for today can still take the full round, while it is left.
+    if (limits.reason === 'guest_daily_limit' && length === 'full' && limits.full_left !== 0) return null;
     return { reason: limits.reason, resetsAt: limits.resets_at };
   }
   if (length === 'full' && limits.full_left === 0) return { reason: 'guest_full_used', resetsAt: limits.resets_at };
