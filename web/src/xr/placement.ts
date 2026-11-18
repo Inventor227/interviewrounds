@@ -317,8 +317,12 @@ export class DeskPlacement {
     }
     for (const side of ['left', 'right'] as const) {
       if (!seen[side]) {
-        this.hist[side].length = 0;
-        this.histKind[side] = null;
+        // A frame or two without the hand (tracking noise) keeps its rest; a longer gap starts it again.
+        const h = this.hist[side];
+        if (!h.length || t_ms - h[h.length - 1]!.t_ms > 150) {
+          h.length = 0;
+          this.histKind[side] = null;
+        }
       }
       if (!controllers.some((c) => c.tracked && c.hand === side)) this.trigger[side] = null;
     }
