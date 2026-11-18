@@ -233,8 +233,8 @@ describe('panels with a controller', () => {
     expect(hits).toEqual([]);
     // And the hint itself only ever shows what it is given: the one line the room has is the no-desk line.
     const ui = new RoundUI();
-    ui.showHint('No desk? We set one up for you.', 0);
-    expect(ui.hint.history.map((h) => h.line)).toEqual(['No desk? We set one up for you.']);
+    ui.showHint('No desk? We set one up. Hold the bar to move it.', 0);
+    expect(ui.hint.history.map((h) => h.line)).toEqual(['No desk? We set one up. Hold the bar to move it.']);
   });
 });
 

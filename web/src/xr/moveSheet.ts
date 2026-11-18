@@ -1,7 +1,7 @@
 // Moving the sheet after it is placed: pinch (or pull the trigger) on the grab bar below the sheet's near-left
 // corner and hold still for half a second; the bar's ring fills, then the sheet and the room follow the hand until
 // it lets go. A quick pinch or one that slides away does nothing, so a hand passing by never moves the desk. This
-// is how a desk that was set up without a real one ("No desk? We set one up for you.") gets to where the user
+// is how a desk that was set up without a real one (the no-desk hint points at the bar) gets to where the user
 // wants it, and it works the same with a hand, a controller's tip or a controller's ray.
 //
 // Pure logic and the bar's mesh; the world feeds pointers and applies the move.

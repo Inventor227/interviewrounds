@@ -531,7 +531,7 @@ export async function createXRApp(root: HTMLElement, opts: XRAppOptions): Promis
     ui.restoreNotice();
     if (desk.source === 'fallback') {
       ui.layoutHint(headPose());
-      ui.showHint('No desk? We set one up for you.', now, 6000);
+      ui.showHint('No desk? We set one up. Hold the bar to move it.', now, 6000);
     }
     sounds.flap();
     desk$.value = desk;
