@@ -559,7 +559,7 @@ export function createRoundRuntime({ preview }: RuntimeOptions): RoundController
         seats: n,
         offer: devFlag('offer') === '1',
         standins: false,
-        placementFallbackMs: fallbackS > 0 ? fallbackS * 1000 : undefined,
+        placementFallbackMs: fallbackS > 0 ? fallbackS * 1000 : 12000,
         isUserSpeaking: () => userSpeaking,
       });
       if (disposed) return a.destroy();
