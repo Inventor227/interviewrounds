@@ -145,7 +145,7 @@ on what you say and pass the floor between them.
   (Setting up your round, Building the room, Bringing in Daniel, Almost ready), and the interviewer's opening line is
   written while you walk in.
 - **One touch to place.** A ring follows your fingertip; rest it on the desk and the sheet lands there. With no desk,
-  the app sets one up after 6 seconds and says "No desk? We set one up for you."
+  the app sets one up after 12 seconds and says "No desk? We set one up. Hold the bar to move it."
 - **Learn by doing.** On the first round a looping hand shows the one gesture, "Pinch and draw a box". Your first box
   starts the round; **Skip** is always there.
 - **A live question in about a minute** from opening the link, and a scorecard within ten minutes from a quick round.
@@ -241,7 +241,7 @@ quiet sound.
 
 - **Placing:** a fingertip that rests nearly still (under 2 cm a second) for 0.6 s, 25 to 75 cm below the eyes, places
   the sheet; a hand in the lap does not count. A controller must point down and rest for 0.3 s before the trigger
-  places. With no touch in 6 s, a desk is set up at a seated height.
+  places. With no touch in 12 s, a desk is set up at a seated height.
 - **Pinch:** from the system's select event. The pinch point is smoothed with a One Euro filter; for the first 0.1 s
   the slide of the closing fingers (up to 2.5 cm) is held so a tap stays a tap, and the last 80 ms of a release is
   trimmed. A pinch that drops for under 150 ms within 6 cm of the hand carries on as one stroke or drag.
@@ -348,7 +348,7 @@ The models by role (defaults in `server/src/config.rs` and `server/src/scoring/m
 - **Server:** Rust unit and integration tests, the database tests on Postgres (`cd server && cargo test`).
 - **Web:** Vitest unit tests for the board rules, the input filters, the round controller, the room UI and the pages
   (`cd web && npm test`), including replays of noisy hand input through the whole board path.
-- **Together:** over 1,400 automated tests on the released build: 392 Rust tests and 1,022 web tests.
+- **Together:** over 1,400 automated tests on the released build: 393 Rust tests and 1,037 web tests.
 - **Shared fixtures:** the board rules run the same fixtures in TypeScript and Rust (`content/fixtures/`).
 - **Emulator runs:** `web/e2e/` drives whole rounds in Meta's IWER emulator against a running server: every round
   type, hands and controllers, onboarding, pause and resume, switching input, two rounds in a row, and a meeting.
@@ -386,7 +386,7 @@ The models by role (defaults in `server/src/config.rs` and `server/src/scoring/m
   round carries on; progress is saved on the server. A lost voice comes back on Resume.
 - **Model overload:** a turn retries on a second model within its deadline. If both fail, the round holds and the card
   says "Your interviewer is reconnecting…", then the round carries on.
-- **No desk:** after 6 seconds the app sets up a desk at a seated height; the sheet's "Hold to move" bar moves it.
+- **No desk:** after 12 seconds the app sets up a desk at a seated height; the sheet's "Hold to move" bar moves it.
 - **Hands lost:** a hand that leaves tracking keeps its gesture for 0.3 s, then lets go cleanly; a short pinch drop
   mid stroke carries on.
 - **Hands or controllers, any time:** pick up a controller and the cards switch to controller wording; put it down
