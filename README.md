@@ -137,6 +137,8 @@ on what you say and pass the floor between them.
 
 ## The first five minutes
 
+![From the link to your scorecard in eight steps: open the link, start a quick round, enter the room, touch your desk, pinch and draw a box, talk it through, the scorecard, report and retry](docs/images/round-flow.jpg)
+
 - **One button.** The home page has one main button, **Start a quick round**. It asks for the microphone on the page,
   so the headset view never stops for a prompt.
 - **Two taps to the room.** Allow the microphone, then **Enter the room**. A thin progress bar names each step
