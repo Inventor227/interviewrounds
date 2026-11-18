@@ -1897,7 +1897,7 @@ a.drill:hover {
   align-items: baseline;
 }
 .transcript .stamp.play {
-  min-height: 36px;
+  min-height: var(--tap);
   padding: 0 var(--space-2);
 }
 .who-said {
@@ -1955,6 +1955,12 @@ a.drill:hover {
   background: var(--line-strong);
   cursor: pointer;
   margin-top: 4px;
+}
+/* The tap area is --tap high; the track stays 34px. */
+.switch::before {
+  content: '';
+  position: absolute;
+  inset: -7px 0;
 }
 .switch[aria-checked='true'] {
   background: var(--accent);
